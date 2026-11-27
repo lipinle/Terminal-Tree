@@ -8,6 +8,8 @@ output=$(realpath -m "$2")
 here=$(cd -- "$(dirname -- "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 root=$(mktemp -d)
+# The guest root itself must be traversable by the unprivileged native probe.
+chmod 755 "$root"
 trap 'rm -rf -- "$root"' EXIT
 mkdir -p "$root"/{tt/bin,tt/modules,dev,proc,sys,mnt/data,tmp,usr/bin,usr/lib,etc}
 install -m 755 "$(command -v busybox)" "$root/tt/busybox"
