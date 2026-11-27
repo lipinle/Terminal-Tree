@@ -16,7 +16,7 @@ jobs:
       - name: Syntax and safety tests
         run: |
           python3 -m py_compile src/tree.py install.py
-          for script in install.sh uninstall.sh shell/integration.sh archive/patches/*.sh; do
+          for script in install.sh uninstall.sh shell/integration.sh archive/patches/installers/*.sh archive/patches/fixes/*.sh; do
             bash -n "$script"
           done
           python3 -m unittest discover -s tests -v
