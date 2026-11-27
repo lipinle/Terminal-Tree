@@ -19,6 +19,7 @@ mod workspace;
 #[cfg(feature="native-ops")]
 mod worker;
 mod places;
+mod help;
 #[cfg(feature="native-ops")]
 mod recovery;
 #[cfg(feature="native-ops")]
@@ -351,18 +352,7 @@ fn browse(path: PathBuf, return_on_enter: bool, #[cfg(feature = "native-ops")] m
                             }
                         }
                         KeyCode::F(1) | KeyCode::Char('?') => {
-                            let lines=["Arrows / mouse: navigate; Enter: enter folder / open file",
-                                "q / Esc: exit; [ ] history; h hidden; s sort",
-                                "/ filter; g go to path; F5 refresh; i properties; p/F3 preview",
-                                "Workspace only: c/x/v copy/cut/paste; r rename; n/t create",
-                                "d trash; R restore; D purge; u undo; j recovery journal",
-                                "m / F4: My Computer (Home, Trash, File System, mounted devices)",
-                                "F6 actions; F7 entry type; S save Rust view settings (workspace/personal)",
-                                "Ctrl+left click marks; Shift+right click opens actions; right click selects",
-                                "Space mark; a mark visible (max 1000); A clear; marks reset on directory change",
-                                "Batch operations stop on first failure; earlier items remain committed.",
-                                "All writes require explicit review. Default browse is read-only."].map(str::to_owned);
-                            page("Terminal Tree help",&lines)
+                            help::show(writable, personal, return_on_enter)
                         }
                         KeyCode::Char('x' | 'v' | 'c' | 'd' | 'D' | 'r' | 'n' | 't' | 'R' | 'u' | 'j' | ' ' | 'a' | 'A' | 'S')
                         | KeyCode::Delete | KeyCode::F(2) => {
