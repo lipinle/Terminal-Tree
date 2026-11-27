@@ -38,11 +38,18 @@ pub fn choose()->io::Result<Option<PathBuf>>{
         if trash.is_absolute() && trash.is_dir(){entries.push((format!("Trash | {}",display_name(trash.as_os_str())),trash));}
     }
     entries.push(("File System | /".into(),PathBuf::from("/")));
-    for p in media_mounts(&fs::read("/proc/self/mountinfo")?)?{
-        entries.push((format!("Mounted device | {}",display_name(p.as_os_str())),p));
-    }
+    // Missing procfs (minimal containers/chroots) must not prevent basic
+    // browsing. The safety policy still requires mount information for writes.
+    let detected=fs::read("/proc/self/mountinfo").and_then(|bytes|media_mounts(&bytes));
+    let title=match detected{
+        Ok(paths)=>{
+            for p in paths{entries.push((format!("Mounted device | {}",display_name(p.as_os_str())),p));}
+            "My Computer - browsing does not approve writes"
+        },
+        Err(_)=>"My Computer - mount discovery unavailable",
+    };
     let labels:Vec<_>=entries.iter().map(|(s,_)|s.clone()).collect();
-    Ok(super::choose("My Computer - browsing does not approve writes",&labels)?.map(|i|entries[i].1.clone()))
+    Ok(super::choose(title,&labels)?.map(|i|entries[i].1.clone()))
 }
 #[cfg(test)]
 mod tests{

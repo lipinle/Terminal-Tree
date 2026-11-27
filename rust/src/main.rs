@@ -19,6 +19,7 @@ mod workspace;
 #[cfg(feature="native-ops")]
 mod worker;
 mod places;
+mod platform;
 mod help;
 #[cfg(feature="native-ops")]
 mod recovery;
@@ -286,9 +287,7 @@ fn browse(path: PathBuf, return_on_enter: bool, #[cfg(feature = "native-ops")] m
                                 if e.directory { model.enter() }
                                 else if e.path.is_file() {
                                     // Explicit external open; the chosen application may edit a file.
-                                    match std::process::Command::new("xdg-open").arg(&e.path)
-                                        .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null())
-                                        .stderr(std::process::Stdio::null()).spawn() {
+                                    match platform::open_file(&e.path) {
                                         Ok(mut child)=> {
                                             std::thread::spawn(move || {let _=child.wait();});
                                             message=format!("Opening: {}",e.name); Ok(())
