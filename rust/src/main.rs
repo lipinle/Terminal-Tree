@@ -125,8 +125,8 @@ fn browse(path: PathBuf) -> io::Result<()> {
                         KeyCode::Esc | KeyCode::Char('q') => break,
                         KeyCode::Up => { model.shift(-1); Ok(()) }
                         KeyCode::Down => { model.shift(1); Ok(()) }
-                        KeyCode::PageUp => { model.shift(-isize::from(terminal::size()?.1.saturating_sub(4))); Ok(()) }
-                        KeyCode::PageDown => { model.shift(isize::from(terminal::size()?.1.saturating_sub(4))); Ok(()) }
+                        KeyCode::PageUp => { model.shift(-(terminal::size()?.1.saturating_sub(4) as isize)); Ok(()) }
+                        KeyCode::PageDown => { model.shift((terminal::size()?.1.saturating_sub(4) as isize)); Ok(()) }
                         KeyCode::Home => { model.selected = 0; Ok(()) }
                         KeyCode::End => { model.selected = model.entries.len().saturating_sub(1); Ok(()) }
                         KeyCode::Right | KeyCode::Enter => {
