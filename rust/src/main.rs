@@ -187,7 +187,7 @@ fn browse(path: PathBuf, return_on_enter: bool, #[cfg(feature = "native-ops")] m
     #[cfg(feature = "native-ops")]
     if let Some(w) = &mut workspace { w.observe(&model); }
     let _terminal = Terminal::enter()?;
-    let mut message = String::from(if personal {"Personal preview: approved roots only. Trash disabled."} else if writable {"Experimental scoped workspace. Review all operations."} else {"Experimental read-only build. File mutations disabled."});
+    let mut message = String::from(if personal {"Personal preview: approved roots; same-filesystem home Trash only."} else if writable {"Experimental scoped workspace. Review all operations."} else {"Experimental read-only build. File mutations disabled."});
     let mut searching = false;
     let mut previous_query = String::new();
     loop {

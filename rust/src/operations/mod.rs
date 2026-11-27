@@ -152,7 +152,7 @@ impl Engine {
         Ok(Self { root_identity: dir_id(&open_dir(&root)?)?, root, journal, journal_path:j, personal:None })
     }
     /// Explicit personal-file preview; the home and listed external mounts
-    /// are the only permitted roots. Normal Trash is intentionally disabled.
+    /// are the only permitted roots. Home Trash uses a separate narrow adapter.
     pub fn new_personal(home:&Path, journal:&Path, extra:&[PathBuf], protected:&[PathBuf])->io::Result<Self>{
         let j=policy::normal_absolute(journal)?;
         let file=policy::open_absolute_dir(&j)?;
@@ -167,6 +167,7 @@ impl Engine {
         Ok(Self{root,root_identity,journal:file,journal_path:j,personal:Some(personal)})
     }
     pub fn is_personal(&self)->bool{self.personal.is_some()}
+    pub fn personal_data_home(&self)->Option<&Path>{self.personal.as_ref().map(|p|p.data_home())}
     pub fn validate_personal_path(&self,path:&Path)->io::Result<()> {
         require(self.is_personal(),"personal mode required")?;
         self.path(path).map(|_| ())

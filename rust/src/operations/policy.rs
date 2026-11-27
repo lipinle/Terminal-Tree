@@ -84,7 +84,7 @@ impl Root{
         require(dir_id(&actual)?==dir_id(&self.dir)? && mount_id(&actual)?==self.mount,"approved root replaced or remounted")
     }
 }
-pub(super) struct PersonalPolicy{roots:Vec<Root>,protected:Vec<PathBuf>}
+pub(super) struct PersonalPolicy{roots:Vec<Root>,protected:Vec<PathBuf>,data_home:PathBuf}
 impl PersonalPolicy{
     pub(super) fn new(home:&Path,extra:&[PathBuf],protected:&[PathBuf])->io::Result<Self>{
         require(!rustix::process::geteuid().is_root() && rustix::process::geteuid()==rustix::process::getuid(),"normal unprivileged user required")?;
@@ -105,6 +105,7 @@ impl PersonalPolicy{
             require(m.target==path && m.root==Path::new("/") && !roots.iter().any(|r0|r0.dir.metadata().map_or(true,|a|r.dir.metadata().map_or(true,|b|a.dev()==b.dev()))),"external root must be a distinct whole-filesystem mount")?;
             roots.push(r);
         }
+        let data_home=normal_absolute(&std::env::var_os("XDG_DATA_HOME").filter(|v|!v.is_empty()).map(PathBuf::from).unwrap_or_else(||home.join(".local/share")))?;
         let mut protected:Vec<PathBuf>=protected.iter().map(|p|normal_absolute(p)).collect::<io::Result<_>>()?;
         for suffix in [".bashrc",".profile",".bash_profile",".ssh",".gnupg",".local/share/Trash",".local/share/terminal-tree",".local/state/terminal-tree",".config/terminal-tree"]{
             protected.push(home.join(suffix));
@@ -133,7 +134,26 @@ impl PersonalPolicy{
             }
         }).collect::<io::Result<_>>()?;
         protected.extend(aliases);
-        Ok(Self{roots,protected})
+        Ok(Self{roots,protected,data_home})
+    }
+    pub(super) fn data_home(&self)->&Path{&self.data_home}
+    // Only the Trash adapter can use this narrow bypass. Ordinary review,
+    // destination, move, copy and create continue to reject the entire Trash.
+    pub(super) fn trash_dir(&self,dir:&Path)->io::Result<File>{
+        let root=&self.roots[0];
+        root.check()?;
+        let trash=self.data_home.join("Trash");
+        require(self.data_home.starts_with(&root.path) && self.data_home!=root.path,"home Trash must be inside approved home")?;
+        require(dir==trash || dir==trash.join("files") || dir==trash.join("info"),"not an approved Trash directory")?;
+        require(!self.protected.iter().any(|p|p!=&trash && overlap(p,&trash)),"Trash overlaps other protected state")?;
+        let table=mounts()?;
+        require(!table.iter().any(|m|m.target!=root.path && m.target.starts_with(&root.path) &&
+            (trash.starts_with(&m.target)||m.target.starts_with(&trash))),"nested or separate Trash mount refused")?;
+        let f=open_absolute_dir(dir)?;
+        let m=f.metadata()?;
+        require(mount_id(&f)?==root.mount && m.uid()==rustix::process::getuid().as_raw() && m.mode()&0o077==0,
+            "private owned same-filesystem Trash required")?;
+        Ok(f)
     }
     pub(super) fn path(&self,p:&Path)->io::Result<PathBuf>{
         let p=normal_absolute(p)?;

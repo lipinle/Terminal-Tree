@@ -122,7 +122,8 @@ impl Workspace {
     pub fn personal(home:&Path,journal:&Path,extra:&[PathBuf])->io::Result<Self>{
         let root=home.to_path_buf();
         let engine=Engine::new_personal(&root,journal,extra,&[])?;
-        Ok(Self{engine,root,data:PathBuf::new(),observed:BTreeMap::new(),clipboard:None,undo:Vec::new()})
+        let data=engine.personal_data_home().ok_or_else(||error("personal data home unavailable"))?.to_path_buf();
+        Ok(Self{engine,root,data,observed:BTreeMap::new(),clipboard:None,undo:Vec::new()})
     }
     pub fn root(&self) -> &Path { &self.root }
     pub fn is_personal(&self)->bool{self.engine.is_personal()}
@@ -152,7 +153,6 @@ impl Workspace {
         Ok(review)
     }
     pub fn operate(&mut self, key: char, model: &mut Model) -> io::Result<String> {
-        if self.engine.is_personal() && matches!(key,'d'|'D'|'R') {return Err(error("Personal Trash not enabled; use Python for Trash"));}
         let result = match key {
             'c'|'x' => {
                 let review = self.review(model)?;
@@ -198,8 +198,9 @@ impl Workspace {
             }
             'd' => {
                 let review=self.review(model)?;
+                let trash=Trash::new(&self.engine,&self.data)?;
                 if !confirm("Move to Trash",&[review.path()],"yes")? {return Ok("Cancelled".into());}
-                Trash::new(&self.engine,&self.data)?.send(&review)?;
+                trash.send(&review)?;
                 "Trashed"
             }
             'R' => {
