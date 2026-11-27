@@ -1,4 +1,4 @@
-import os, sys, shutil, subprocess, tempfile, time, re, difflib
+import os, sys, shutil, subprocess, tempfile, time, re, difflib, stat
 from pathlib import Path
 ROOT=Path(__file__).resolve().parent
 HOME=Path.home(); RC=HOME/'.bashrc'; DATA=Path(os.environ.get('XDG_DATA_HOME',str(HOME/'.local/share')))/'terminal-tree'
@@ -12,8 +12,15 @@ def sync_directory(p):
     try: os.fsync(fd)
     finally: os.close(fd)
 
+def regular_or_missing(p):
+    try: st=p.lstat()
+    except FileNotFoundError: return
+    if not stat.S_ISREG(st.st_mode):
+        raise SystemExit('Refusing nonregular or symbolic-link managed file: '+str(p))
+
 def atomic(p,b):
-    p=p.resolve(); p.parent.mkdir(parents=True,exist_ok=True)
+    regular_or_missing(p)
+    p.parent.mkdir(parents=True,exist_ok=True)
     fd,t=tempfile.mkstemp(prefix='.'+p.name+'.',dir=p.parent)
     try:
         with os.fdopen(fd,'wb') as f:
@@ -32,9 +39,12 @@ def validate(s):
 
 def backup_file(source,dest):
     # Exclusive backup, never overwrite an earlier backup or follow a destination link.
-    fd=os.open(dest,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
-    with os.fdopen(fd,'wb') as out, open(source,'rb') as inp:
-        shutil.copyfileobj(inp,out); out.flush(); os.fsync(out.fileno())
+    sfd=os.open(source,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+    with os.fdopen(sfd,'rb') as inp:
+        if not stat.S_ISREG(os.fstat(inp.fileno()).st_mode): raise SystemExit('Refusing nonregular backup source')
+        fd=os.open(dest,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+        with os.fdopen(fd,'wb') as out:
+            shutil.copyfileobj(inp,out); out.flush(); os.fsync(out.fileno())
     sync_directory(dest.parent)
 
 def backup():
@@ -47,6 +57,11 @@ def main():
     if action not in ('install','--uninstall','--help'): raise SystemExit('Usage: bash install.sh [--uninstall|--help]')
     if action=='--help': print('Install: bash install.sh\nUninstall: bash install.sh --uninstall'); return
     if os.geteuid()==0: raise SystemExit('Run as your normal desktop user, not root / sudo.')
+    regular_or_missing(RC)
+    if DATA.is_symlink() or (DATA.exists() and not DATA.is_dir()):
+        raise SystemExit('Refusing non-directory or symbolic-link runtime directory')
+    for name in ('tree.py','integration.sh','previous-block.txt'):
+        regular_or_missing(DATA/name)
     old=RC.read_bytes().decode('utf-8','surrogateescape') if RC.exists() else ''
     pat=re.compile(r'(?m)^'+re.escape(BEGIN)+r'\n[\s\S]*?^'+re.escape(END)+r'(?=\n|$)')
     matches=list(pat.finditer(old)); marker=bool(matches)

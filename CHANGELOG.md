@@ -7,6 +7,7 @@
 - Report unresolved operations with `terminal_tree_recovery` (read-only; no automatic deletion or rollback).
 - Expand regression tests for corrupt copies, concurrent collisions, SIGKILL before/after publication, Trash restoration and journal failures.
 - Retain reviewed destination identities through mutations, check every entry before recursive Trash deletion, and sync exclusive installer backups.
+- Refuse Undo on changed nested files; prevent unintended writes through predictable settings temporary files, navigation result files and symlinked installer targets.
 
 ## 2.1.0 — consolidated baseline
 

@@ -257,6 +257,58 @@ with tree.operation_log('move',src,dst):
         self.assertEqual(self.src.read_text(),'original')
         self.assertEqual(list(info.iterdir()),[])
 
+    def test_sync_failure_after_rename_retains_data_and_journal(self):
+        original=os.fsync
+        def fail_after_publish(fd):
+            if self.dst.exists(): raise OSError('simulated sync error')
+            return original(fd)
+        with patch.object(tree.os,'fsync',side_effect=fail_after_publish):
+            with self.assertRaises(OSError):
+                tree.move_item(str(self.src),str(self.dst),tree.identity(self.src))
+        self.assertEqual(self.dst.read_text(),'original')
+        self.assertFalse(self.src.exists())
+        self.assertEqual(tree.recovery_records()[0]['operation'],'move')
+
+    def test_undo_refuses_nested_change(self):
+        source=self.root/'folder'; source.mkdir()
+        item=source/'item'; item.write_text('old')
+        sig=tree.identity(source); snapshot=tree.tree_signature(str(source))
+        item.write_text('changed')
+        self.assertEqual(tree.identity(source),sig)
+        with self.assertRaises(ValueError):
+            tree.verify_undo(str(source),sig,snapshot)
+
+    def test_settings_save_does_not_follow_predictable_temp_link(self):
+        config=self.root/'settings.json'
+        fake=Path(str(config)+'.tmp.'+str(os.getpid()))
+        fake.symlink_to(self.src)
+        with patch.object(tree,'CONF',str(config)):
+            tree.save_settings(True,'name')
+        self.assertEqual(self.src.read_text(),'original')
+        self.assertTrue(fake.is_symlink())
+        self.assertTrue(config.is_file())
+
+    def test_result_refuses_existing_data_and_symlink(self):
+        link=self.root/'result-link'; link.symlink_to(self.src)
+        with self.assertRaises(OSError): tree.open_result(str(link))
+        with self.assertRaises(ValueError): tree.open_result(str(self.src))
+        self.assertEqual(self.src.read_text(),'original')
+        empty=self.root/'result'; empty.touch(mode=0o600)
+        fd=tree.open_result(str(empty)); os.close(fd)
+        self.assertEqual(empty.stat().st_size,0)
+
+    @unittest.skipIf(os.geteuid()==0,'Installer intentionally refuses root')
+    def test_installer_refuses_symbolic_link_bashrc(self):
+        home=self.root/'home'; home.mkdir()
+        (home/'.bashrc').symlink_to(self.src)
+        env=dict(os.environ,HOME=str(home),XDG_DATA_HOME=str(home/'data'))
+        result=subprocess.run([sys.executable,str(Path(tree.__file__).parents[1]/'install.py')],
+                              env=env,capture_output=True,text=True)
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn('symbolic-link',result.stderr)
+        self.assertEqual(self.src.read_text(),'original')
+        self.assertTrue((home/'.bashrc').is_symlink())
+
 
 if __name__ == '__main__':
     unittest.main()

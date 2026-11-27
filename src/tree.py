@@ -173,9 +173,15 @@ def settings():
 
 def save_settings(hidden,order):
     os.makedirs(os.path.dirname(CONF),exist_ok=True)
-    tmp=CONF+'.tmp.'+str(os.getpid())
-    with open(tmp,'w') as f: json.dump({'hidden':hidden,'order':order},f)
-    os.replace(tmp,CONF)
+    parent=os.path.dirname(CONF)
+    fd,tmp=tempfile.mkstemp(prefix='.settings-',dir=parent)
+    try:
+        with os.fdopen(fd,'w',encoding='utf-8') as f:
+            json.dump({'hidden':hidden,'order':order},f)
+            f.flush(); os.fsync(f.fileno())
+        os.replace(tmp,CONF); sync_directory(parent)
+    finally:
+        if os.path.lexists(tmp): os.unlink(tmp)
 
 def tree(p,hidden,order='name',query='',preview=None,devices=None,cached=None):
     devices=mounts() if devices is None else devices
@@ -418,6 +424,10 @@ def content_manifest(root,flush=False):
         if flush: sync_directory(path)
     topology=tuple(sorted(tuple(sorted(group)) for group in links.values() if len(group)>1))
     return out,topology
+
+def verify_undo(path,expected,snapshot):
+    unchanged(path,expected)
+    if tree_signature(path)!=snapshot: raise ValueError('Contents changed after move; Undo refused')
 
 def copy_item(src,dst,expected=None,dest_expected=None):
     guard_source(src,False); parent=os.path.dirname(dst); guard_destination(parent); nonconflict(dst)
@@ -833,6 +843,10 @@ class Nav:
         for p in selected:
             unchanged(p,self._safety_seen.get(p))
         return selected
+    def record_undo(self,src,dst):
+        try: self.undo.append((dst,src,identity(dst),tree_signature(dst)))
+        except (OSError,ValueError): return False
+        return True
     def operation(self,k):
         p=self.path(); targets=[]
         if k in ('c','x','\x03','\x18','r',curses.KEY_F2,'d',curses.KEY_DC,'D','R'):
@@ -860,7 +874,7 @@ class Nav:
                 try:
                     check_dir(self.p,dest_identity)
                     if self.cut:
-                        move_item(a,b,self._safety_clip[a],dest_identity); self.undo.append((b,a,identity(b))); self.clipboard.remove(a); self._safety_clip.pop(a,None)
+                        move_item(a,b,self._safety_clip[a],dest_identity); self.record_undo(a,b); self.clipboard.remove(a); self._safety_clip.pop(a,None)
                     else: copy_item(a,b,self._safety_clip[a],dest_identity)
                     done+=1
                 except (OSError,ValueError,RuntimeError,subprocess.SubprocessError) as e: error=str(e); break
@@ -870,7 +884,7 @@ class Nav:
             n=self.name('New name: ')
             if n and n!=os.path.basename(p):
                 dst=os.path.join(os.path.dirname(p),n)
-                move_item(p,dst,self._safety_seen[p],self._safety_seen[p][-2:]); self.undo.append((dst,p,identity(dst))); self.mark.clear(); p=dst; self.msg='Renamed'
+                move_item(p,dst,self._safety_seen[p],self._safety_seen[p][-2:]); self.record_undo(p,dst); self.mark.clear(); p=dst; self.msg='Renamed'
         elif k in ('n','t'):
             guard_destination(self.p); dest_identity=dir_identity(self.p); n=self.name('New folder: ' if k=='n' else 'New file: ')
             if n:
@@ -907,9 +921,9 @@ class Nav:
             self.msg=f'{done}/{len(targets)} restored'+('; stopped: '+error if error else ('; '+note if 'metadata' in note else ''))
         elif k in ('u','\x1a'):
             if not self.undo: raise ValueError('Nothing to undo (rename/move only)')
-            a,b,sig=self.undo[-1]; unchanged(a,sig); nonconflict(b); dest_identity=dir_identity(os.path.dirname(b))
+            a,b,sig,snapshot=self.undo[-1]; verify_undo(a,sig,snapshot); nonconflict(b); dest_identity=dir_identity(os.path.dirname(b))
             if self.safety_review('Undo last move/rename',[a+' -> '+b]):
-                check_dir(os.path.dirname(b),dest_identity); move_item(a,b,sig,dest_identity); self.undo.pop(); self.msg='Undone'
+                verify_undo(a,sig,snapshot); check_dir(os.path.dirname(b),dest_identity); move_item(a,b,sig,dest_identity); self.undo.pop(); self.msg='Undone'
         self.rebuild(p,True)
 
     def name(self,label):
@@ -977,6 +991,17 @@ class Nav:
 
 HELP=['Terminal Tree — keys','↑ ↓ select; ← parent; → enter folder; Enter open file / cd and exit on folder','q / Esc exit at current folder; Home/End; Page Up/Down','h hidden; / filter current directory; g go to path; [ ] history','Space mark; a mark visible children; A clear marks; c copy; x cut; v paste','r/F2 rename; n new folder; t new file; d/Delete trash; D permanent delete from home Trash only (type DELETE)','R restore home Trash item; u undo last rename/move (session only)','i properties; p/F3 text preview; f/F5 refresh; s/F9 sort; S save settings','? / F1 help. Search is nonrecursive. Mounts are listed, not modified.']
 
+def open_result(path):
+    # The shell creates a private empty mktemp file. Do not truncate arbitrary paths.
+    fd=os.open(path,os.O_WRONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+    try:
+        st=os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_uid!=os.getuid() or st.st_nlink!=1 or st.st_size!=0 or stat.S_IMODE(st.st_mode)&0o077:
+            raise ValueError('Result must be a private, empty regular file')
+        return fd
+    except BaseException:
+        os.close(fd); raise
+
 def main():
     ap=argparse.ArgumentParser(); ap.add_argument('--list',action='store_true'); ap.add_argument('-a','--all',action='store_true'); ap.add_argument('--result'); ap.add_argument('--recovery',action='store_true'); args=ap.parse_args();
     if args.recovery:
@@ -993,7 +1018,13 @@ def main():
         print(); return
     if not args.result: ap.error('--result is required in navigation mode')
     if not sys.stdin.isatty() or not sys.stdout.isatty(): ap.error('Interactive terminal required')
-    try: dest=curses.wrapper(lambda s: Nav(s,p,hidden,order).run())
-    except KeyboardInterrupt: return
-    with open(args.result,'wb') as f: f.write(os.fsencode(dest)+b'\0')
+    try: fd=open_result(args.result)
+    except (OSError,ValueError) as e: ap.error(str(e))
+    with os.fdopen(fd,'wb') as f:
+        try: dest=curses.wrapper(lambda s: Nav(s,p,hidden,order).run())
+        except KeyboardInterrupt: return
+        current=os.lstat(args.result); original=os.fstat(f.fileno())
+        if (current.st_dev,current.st_ino)!=(original.st_dev,original.st_ino) or original.st_size!=0:
+            ap.error('Result file changed during navigation')
+        f.write(os.fsencode(dest)+b'\0')
 if __name__=='__main__': main()
