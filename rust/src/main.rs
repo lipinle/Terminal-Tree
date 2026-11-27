@@ -18,6 +18,9 @@ use unicode_width::UnicodeWidthChar;
 mod workspace;
 #[cfg(feature="native-ops")]
 mod worker;
+mod places;
+#[cfg(feature="native-ops")]
+mod recovery;
 
 fn clip(text: &str, limit: usize) -> String {
     let mut width = 0;
@@ -142,6 +145,39 @@ fn page(title: &str, lines: &[String]) -> io::Result<()> {
         }
     }
 }
+fn choose(title:&str,lines:&[String])->io::Result<Option<usize>>{
+    if lines.is_empty(){return Ok(None);}
+    let mut selected=0usize;let mut top=0usize;
+    loop{
+        let(w,h)=terminal::size()?;let width=usize::from(w).saturating_sub(1);
+        let cap=usize::from(h).saturating_sub(2).max(1);
+        if selected<top{top=selected;}else if selected>=top+cap{top=selected+1-cap;}
+        let mut out=io::stdout().lock();
+        queue!(out,MoveTo(0,0),Clear(ClearType::All),Print(clip(title,width)))?;
+        if h>=3{
+            for(i,line)in lines.iter().enumerate().skip(top).take(cap){
+                queue!(out,MoveTo(0,(i-top+1) as u16))?;
+                if i==selected{queue!(out,SetBackgroundColor(Color::DarkGrey))?;}
+                queue!(out,Print(clip(line,width)),ResetColor)?;
+            }
+            queue!(out,MoveTo(0,h-1),Print(clip("Up/Down | Enter select | Esc cancel",width)))?;
+        }
+        out.flush()?;drop(out);
+        if let Event::Key(k)=event::read()?{
+            if !matches!(k.kind,KeyEventKind::Press|KeyEventKind::Repeat){continue;}
+            match k.code{
+                KeyCode::Esc|KeyCode::Char('q')=>return Ok(None),
+                KeyCode::Enter=>return Ok(Some(selected)),
+                KeyCode::Up=>selected=selected.saturating_sub(1),
+                KeyCode::Down=>selected=(selected+1).min(lines.len()-1),
+                KeyCode::PageUp=>selected=selected.saturating_sub(cap),
+                KeyCode::PageDown=>selected=(selected+cap).min(lines.len()-1),
+                KeyCode::Home=>selected=0,KeyCode::End=>selected=lines.len()-1,
+                _=>(),
+            }
+        }
+    }
+}
 fn properties(path:&Path)->io::Result<()> {
     use std::os::unix::fs::MetadataExt;
     let m=std::fs::symlink_metadata(path)?;
@@ -206,7 +242,7 @@ fn browse(path: PathBuf, return_on_enter: bool, #[cfg(feature = "native-ops")] m
         #[cfg(feature = "native-ops")]
         let reload_event = match &event {
             Event::Key(k) => searching || matches!(k.code, KeyCode::Right | KeyCode::Left | KeyCode::Enter
-                | KeyCode::Char('h'|'s'|'f'|'g'|'['|']') | KeyCode::F(5)),
+                | KeyCode::Char('h'|'s'|'f'|'g'|'['|']'|'m') | KeyCode::F(5) | KeyCode::F(4)),
             Event::Mouse(m) => matches!(m.kind, MouseEventKind::Down(MouseButton::Left)),
             _ => false,
         };
@@ -276,6 +312,9 @@ fn browse(path: PathBuf, return_on_enter: bool, #[cfg(feature = "native-ops")] m
                                 }
                             }
                         }
+                        KeyCode::Char('m') | KeyCode::F(4) => {
+                            match places::choose()? {Some(p)=>model.go(p),None=>Ok(())}
+                        }
                         KeyCode::Char('i') => {
                             match model.entries.get(model.selected) {
                                 Some(e)=>properties(&e.path),
@@ -294,7 +333,8 @@ fn browse(path: PathBuf, return_on_enter: bool, #[cfg(feature = "native-ops")] m
                                 "q / Esc: exit; [ ] history; h hidden; s sort",
                                 "/ filter; g go to path; F5 refresh; i properties; p/F3 preview",
                                 "Workspace only: c/x/v copy/cut/paste; r rename; n/t create",
-                                "d trash; R restore; D purge; u undo; j pending journal",
+                                "d trash; R restore; D purge; u undo; j recovery journal",
+                                "m / F4: My Computer (Home, Trash, File System, mounted devices)",
                                 "Space mark; a mark visible (max 1000); A clear; marks reset on directory change",
                                 "Batch operations stop on first failure; earlier items remain committed.",
                                 "All writes require explicit review. Default browse is read-only."].map(str::to_owned);

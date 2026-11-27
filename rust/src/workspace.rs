@@ -310,8 +310,9 @@ impl Workspace {
                 return self.refresh(model,format!("{outcome:?}"));
             }
             'j' => {
-                let count=self.engine.pending()?.len();
-                return Ok(format!("Pending records: {count}; inspect journal before retrying"));
+                let records=self.engine.pending()?;
+                super::recovery::show(&records)?;
+                return Ok(format!("Pending records: {}; inspect journal before retrying",records.len()));
             }
             _ => return Err(error("unsupported operation")),
         };
