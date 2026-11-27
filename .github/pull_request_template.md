@@ -1,6 +1,6 @@
 ## Summary
 
-## Related issue / milestone
+## Related issue
 
 ## Changes and scope
 

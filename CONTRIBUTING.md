@@ -1,6 +1,6 @@
 # Contributing
 
-Terminal Tree is in development. Contributions that improve daily-driver usability, correctness, performance and maintainability are welcome. Keep advanced Paranoid work separate from Standard release blockers.
+Terminal Tree is in development. Contributions that improve daily-driver usability, correctness, performance and maintainability are welcome.
 
 ## Development
 
@@ -14,7 +14,7 @@ cargo clippy --locked --manifest-path rust/Cargo.toml --all-targets --all-featur
 cargo clippy --locked --manifest-path rust/Cargo.toml --all-targets --no-default-features -- -D warnings
 ```
 
-The strict formatting and Clippy CI gate is being developed in PR #3. Some existing lints may still fail until that PR is verified and merged. Use four-space indentation, readable names, rustfmt and narrowly justified lint exceptions. Preserve the declared minimum Rust version unless explicitly changed.
+Some existing lint checks may fail on the current development baseline. Use four-space indentation, readable names, rustfmt and narrowly justified lint exceptions. Preserve the declared minimum Rust version unless explicitly changed.
 
 ## Safety requirements
 

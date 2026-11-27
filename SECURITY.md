@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-The Rust native implementation is a development preview (0.1.0); no stable Rust version is currently supported. Python 2.1.1 is archived and not actively maintained. Standard 3.0.0 and Paranoid are future releases. No security response time or long-term support commitment is implied.
+The Rust native implementation is a development preview (0.1.0); no stable Rust version is currently supported. Python 2.1.1 is archived and not actively maintained. No security response time or long-term support commitment is implied.
 
 ## Reporting vulnerabilities
 

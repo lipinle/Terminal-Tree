@@ -10,7 +10,7 @@ assignees: ''
 
 **Proposed behavior:**
 
-**Why this is useful for Standard or Paranoid:**
+**Why this is useful:**
 
 **Alternatives considered:**
 

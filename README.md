@@ -2,7 +2,7 @@
 
 A keyboard-first terminal file manager for Linux, written in Rust, with optional Bash integration.
 
-**Development preview — not a stable release.** The native implementation is currently version 0.1.0. The original Python 2.1.1 implementation is preserved in [legacy/python](legacy/python/). The goal for the next stable product release is Standard 3.0.0.
+**Development preview — not a stable release.** The native implementation is currently version 0.1.0. The original Python 2.1.1 implementation is preserved in [legacy/python](legacy/python/).
 
 ## Features
 
@@ -12,7 +12,7 @@ A keyboard-first terminal file manager for Linux, written in Rust, with optional
 - Reviewed write operations, no-overwrite safeguards, independent content verification for copies, and a local transaction journal with a read-only recovery inspector.
 - Optional Bash integration and eza listing. The native engine does not depend on eza output for file operations.
 
-These are capabilities of the current main branch, not a list of planned features. The tree-style listing currently displays the selected directory; expandable multi-level trees, recursive search, bookmarks, tabs, dual panes and archive tools are planned.
+These are capabilities of the current main branch. The tree-style listing currently displays the selected directory.
 
 ## Requirements
 
@@ -79,10 +79,6 @@ The destination must not already exist. This installer does not modify .bashrc o
 
 Write commands require workspace or personal mode and explicit review. Cross-filesystem moves, overwriting existing destinations and automatic recovery are not implemented on main.
 
-## Project direction
-
-Standard is intended to become a complete daily-driver file manager first. Advanced organizational security is deferred to a separately built Paranoid edition, sharing the same core. Neither a stable Standard release nor a separate Paranoid binary is available yet. See [Roadmap](ROADMAP.md).
-
 ## Compatibility and limitations
 
 Linux is the primary target. Existing CI exercises Ubuntu 22.04/24.04 and disposable ext4, XFS and Btrfs filesystems; exFAT coverage currently verifies strict metadata refusal rather than general write compatibility. Windows has a read-only portability test; native write support is not implemented. macOS has no verified CI result. Cross-filesystem moves are refused, strict metadata checks may reject external drives, and recovery is currently inspection-only.
@@ -91,7 +87,7 @@ Testing reduces risk but does not certify safety on every filesystem or hardware
 
 ## Development
 
-See [Contributing](CONTRIBUTING.md) for build and test commands, and [Roadmap](ROADMAP.md) for priorities. Check [Actions](https://github.com/lipinle/Terminal-Tree/actions) for the exact commit you intend to use. Pending pull requests are not shipped features.
+See [Contributing](CONTRIBUTING.md) for build and test commands. Check [Actions](https://github.com/lipinle/Terminal-Tree/actions) for the exact commit you intend to use. Pending pull requests are not shipped features.
 
 ## License
 
