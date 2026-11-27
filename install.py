@@ -7,13 +7,22 @@ BLOCK=BEGIN+'\n'+'''if [[ -f "${XDG_DATA_HOME:-$HOME/.local/share}/terminal-tree
     source "${XDG_DATA_HOME:-$HOME/.local/share}/terminal-tree/integration.sh"
 fi'''+ '\n'+END
 
+def sync_directory(p):
+    fd=os.open(p,os.O_RDONLY|os.O_DIRECTORY)
+    try: os.fsync(fd)
+    finally: os.close(fd)
+
 def atomic(p,b):
     p=p.resolve(); p.parent.mkdir(parents=True,exist_ok=True)
     fd,t=tempfile.mkstemp(prefix='.'+p.name+'.',dir=p.parent)
     try:
-        with os.fdopen(fd,'wb') as f: f.write(b)
-        if p.exists(): os.chmod(t,p.stat().st_mode & 0o777)
+        with os.fdopen(fd,'wb') as f:
+            f.write(b)
+            if p.exists(): os.fchmod(f.fileno(),p.stat().st_mode & 0o777)
+            f.flush(); os.fsync(f.fileno())
+        sync_directory(p.parent)
         os.replace(t,p)
+        sync_directory(p.parent)
     finally:
         if os.path.exists(t): os.unlink(t)
 
@@ -21,9 +30,17 @@ def validate(s):
     r=subprocess.run(['bash','-n'],input=s.encode('utf-8','surrogateescape'),stderr=subprocess.PIPE)
     if r.returncode: raise SystemExit('Bash syntax check failed; .bashrc unchanged:\n'+r.stderr.decode(errors='replace'))
 
+def backup_file(source,dest):
+    # Exclusive backup, never overwrite an earlier backup or follow a destination link.
+    fd=os.open(dest,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+    with os.fdopen(fd,'wb') as out, open(source,'rb') as inp:
+        shutil.copyfileobj(inp,out); out.flush(); os.fsync(out.fileno())
+    sync_directory(dest.parent)
+
 def backup():
     if RC.exists():
-        b=RC.with_name('.bashrc.terminal-tree-backup.'+time.strftime('%Y%m%d-%H%M%S')+'.'+str(os.getpid())); shutil.copy2(RC,b); print('Backup:',b)
+        b=RC.with_name('.bashrc.terminal-tree-backup.'+time.strftime('%Y%m%d-%H%M%S')+'.'+str(os.getpid()))
+        backup_file(RC,b); print('Backup:',b)
 
 def main():
     action=sys.argv[1] if len(sys.argv)>1 else 'install'
@@ -134,7 +151,7 @@ def main():
             path=DATA/name
             if path.is_file():
                 b=DATA/(name+'.upgrade-backup.'+time.strftime('%Y%m%d-%H%M%S')+'.'+str(os.getpid()))
-                shutil.copy2(path,b); print('Runtime backup:',b)
+                backup_file(path,b); print('Runtime backup:',b)
     if not marker: atomic(saved,prior.encode('utf-8','surrogateescape'))
     atomic(DATA/'tree.py',program); atomic(DATA/'integration.sh',integration); atomic(RC,new.encode('utf-8','surrogateescape'))
     print('Installed Terminal Tree v2.1.1. Close and reopen Terminal. Ctrl+Down opens navigator; F1 for help.')

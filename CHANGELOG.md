@@ -5,7 +5,8 @@
 - Verify staged copies using SHA-256, metadata, symlink targets and hardlink topology before publication; refuse mismatches.
 - Sync staged data and directory entries, pin rename parent directories, protect runtime/state, and journal file mutations before they happen.
 - Report unresolved operations with `terminal_tree_recovery` (read-only; no automatic deletion or rollback).
-- Expand regression tests for corrupt copies, concurrent collisions, interrupted operations and journal failures.
+- Expand regression tests for corrupt copies, concurrent collisions, SIGKILL before/after publication, Trash restoration and journal failures.
+- Retain reviewed destination identities through mutations, check every entry before recursive Trash deletion, and sync exclusive installer backups.
 
 ## 2.1.0 — consolidated baseline
 

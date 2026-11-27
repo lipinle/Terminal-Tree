@@ -419,10 +419,11 @@ def content_manifest(root,flush=False):
     topology=tuple(sorted(tuple(sorted(group)) for group in links.values() if len(group)>1))
     return out,topology
 
-def copy_item(src,dst,expected=None):
+def copy_item(src,dst,expected=None,dest_expected=None):
     guard_source(src,False); parent=os.path.dirname(dst); guard_destination(parent); nonconflict(dst)
     expected=identity(src) if expected is None else expected
-    unchanged(src,expected); dest_id=dir_identity(parent)
+    unchanged(src,expected); dest_id=dir_identity(parent) if dest_expected is None else dest_expected
+    check_dir(parent,dest_id)
     if not os.path.islink(src) and isdir(src) and inside(os.path.realpath(dst),os.path.realpath(src)):
         raise ValueError('Cannot copy directory into itself')
     before=tree_signature(src); manifest=content_manifest(src)
@@ -447,13 +448,16 @@ def copy_item(src,dst,expected=None):
                 st=os.stat(stage_name,dir_fd=fd,follow_symlinks=False)
                 if not stat.S_ISDIR(st.st_mode) or (st.st_dev,st.st_ino)!=stage_id:
                     raise ValueError('Staging directory changed; manual recovery required')
+                if any(inside(m,os.path.realpath(stage)) for m in all_mounts()):
+                    raise ValueError('Mount inside staging directory; manual recovery required')
                 shutil.rmtree(stage)
                 os.fsync(fd)
 
-def move_item(src,dst,expected=None):
+def move_item(src,dst,expected=None,dest_expected=None):
     guard_source(src); parent=os.path.dirname(dst); guard_destination(parent); nonconflict(dst)
     expected=identity(src) if expected is None else expected
-    unchanged(src,expected); dest_id=dir_identity(parent)
+    unchanged(src,expected); dest_id=dir_identity(parent) if dest_expected is None else dest_expected
+    check_dir(parent,dest_id)
     if not os.path.islink(src) and isdir(src) and inside(os.path.realpath(dst),os.path.realpath(src)):
         raise ValueError('Cannot move directory into itself')
     with operation_log('move',src,dst):
@@ -470,8 +474,10 @@ def gio_trash(p,expected=None):
         subprocess.run(['gio','trash','--',p],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
         sync_directory(os.path.dirname(p))
 
-def create_item(p,directory):
-    parent=os.path.dirname(p); guard_destination(parent); dest_id=dir_identity(parent)
+def create_item(p,directory,dest_expected=None):
+    parent=os.path.dirname(p); guard_destination(parent)
+    dest_id=dir_identity(parent) if dest_expected is None else dest_expected
+    check_dir(parent,dest_id)
     nonconflict(p)
     with operation_log('mkdir' if directory else 'create-file',dst=p):
         with pinned_directory(parent,dest_id) as fd:
@@ -483,11 +489,40 @@ def create_item(p,directory):
                 finally: os.close(out)
             os.fsync(fd)
 
+def erase_verified_tree(parentfd,name,snapshot,children,rel='.'):
+    # Refuse unexpected entries instead of recursively deleting whatever is present.
+    expected=snapshot[rel]
+    if identity_at(parentfd,name)!=expected:
+        raise ValueError('Trash entry changed; stopped permanent deletion')
+    if not stat.S_ISDIR(expected[2]):
+        os.unlink(name,dir_fd=parentfd)
+        return
+    fd=os.open(name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=parentfd)
+    try:
+        st=os.fstat(fd)
+        if (st.st_dev,st.st_ino,st.st_mode,st.st_size,st.st_mtime_ns,st.st_ctime_ns)!=expected[:6]:
+            raise ValueError('Trash directory changed; stopped permanent deletion')
+        os.fsync(fd)
+        expected_children=children.get(rel,{})
+        if set(os.listdir(fd))!=set(expected_children):
+            raise ValueError('Unexpected entries in Trash; stopped permanent deletion')
+        for child,child_rel in sorted(expected_children.items()):
+            erase_verified_tree(fd,child,snapshot,children,child_rel)
+        if os.listdir(fd): raise ValueError('New entries in Trash; stopped permanent deletion')
+        os.fsync(fd)
+        current=os.stat(name,dir_fd=parentfd,follow_symlinks=False)
+        if (current.st_dev,current.st_ino)!=(st.st_dev,st.st_ino):
+            raise ValueError('Trash directory replaced; stopped permanent deletion')
+        os.rmdir(name,dir_fd=parentfd)
+    finally: os.close(fd)
+
 def purge_item(p,expected,snapshot):
     if os.path.dirname(p)!=TF: raise ValueError('Permanent delete is only allowed directly inside home Trash')
     guard_source(p); unchanged(p,expected)
     if tree_signature(p)!=snapshot: raise ValueError('Contents changed during review; deletion cancelled')
-    if not shutil.rmtree.avoids_symlink_attacks: raise RuntimeError('Safe recursive removal unavailable')
+    children={}
+    for rel in snapshot:
+        if rel!='.': children.setdefault(os.path.dirname(rel) or '.',{})[os.path.basename(rel)]=rel
     info=os.path.join(TRASH,'info',os.path.basename(p)+'.trashinfo')
     info_sig=identity(info) if exists(info) else None
     with operation_log('permanent-delete',p):
@@ -495,8 +530,7 @@ def purge_item(p,expected,snapshot):
             guard_source(p)
             if tree_signature(p)!=snapshot or identity_at(fd,os.path.basename(p))!=expected:
                 raise ValueError('Contents changed during review; deletion cancelled')
-            if stat.S_ISDIR(expected[2]): shutil.rmtree('/proc/self/fd/'+str(fd)+'/'+os.path.basename(p))
-            else: os.unlink(os.path.basename(p),dir_fd=fd)
+            erase_verified_tree(fd,os.path.basename(p),snapshot,children)
             os.fsync(fd)
         if info_sig is not None:
             if not stat.S_ISREG(info_sig[2]): raise ValueError('Deleted item; nonregular Trash metadata retained')
@@ -528,7 +562,7 @@ def restore(p,expected=None,record=None):
     try:
         with operation_log('restore',p,dst):
             check_dir(os.path.dirname(dst),parent); unchanged(info,sig)
-            move_item(p,dst,expected); moved=True
+            move_item(p,dst,expected,parent); moved=True
             with pinned_directory(os.path.dirname(info),sig[-2:]) as fd:
                 if identity_at(fd,os.path.basename(info))!=sig:
                     raise ValueError('Trash metadata changed')
@@ -826,8 +860,8 @@ class Nav:
                 try:
                     check_dir(self.p,dest_identity)
                     if self.cut:
-                        move_item(a,b,self._safety_clip[a]); self.undo.append((b,a,identity(b))); self.clipboard.remove(a); self._safety_clip.pop(a,None)
-                    else: copy_item(a,b,self._safety_clip[a])
+                        move_item(a,b,self._safety_clip[a],dest_identity); self.undo.append((b,a,identity(b))); self.clipboard.remove(a); self._safety_clip.pop(a,None)
+                    else: copy_item(a,b,self._safety_clip[a],dest_identity)
                     done+=1
                 except (OSError,ValueError,RuntimeError,subprocess.SubprocessError) as e: error=str(e); break
             self.mark.clear(); self.msg=f'{done}/{len(pairs)} completed'+('; stopped: '+error if error else '')
@@ -836,12 +870,12 @@ class Nav:
             n=self.name('New name: ')
             if n and n!=os.path.basename(p):
                 dst=os.path.join(os.path.dirname(p),n)
-                move_item(p,dst,self._safety_seen[p]); self.undo.append((dst,p,identity(dst))); self.mark.clear(); p=dst; self.msg='Renamed'
+                move_item(p,dst,self._safety_seen[p],self._safety_seen[p][-2:]); self.undo.append((dst,p,identity(dst))); self.mark.clear(); p=dst; self.msg='Renamed'
         elif k in ('n','t'):
-            guard_destination(self.p); n=self.name('New folder: ' if k=='n' else 'New file: ')
+            guard_destination(self.p); dest_identity=dir_identity(self.p); n=self.name('New folder: ' if k=='n' else 'New file: ')
             if n:
                 p=os.path.join(self.p,n); guard_destination(self.p)
-                create_item(p,k=='n')
+                create_item(p,k=='n',dest_identity)
                 self.msg='Created'
         elif k in ('d',curses.KEY_DC,'D'):
             for a in targets:
@@ -875,7 +909,7 @@ class Nav:
             if not self.undo: raise ValueError('Nothing to undo (rename/move only)')
             a,b,sig=self.undo[-1]; unchanged(a,sig); nonconflict(b); dest_identity=dir_identity(os.path.dirname(b))
             if self.safety_review('Undo last move/rename',[a+' -> '+b]):
-                check_dir(os.path.dirname(b),dest_identity); move_item(a,b,sig); self.undo.pop(); self.msg='Undone'
+                check_dir(os.path.dirname(b),dest_identity); move_item(a,b,sig,dest_identity); self.undo.pop(); self.msg='Undone'
         self.rebuild(p,True)
 
     def name(self,label):
