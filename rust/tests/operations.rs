@@ -317,3 +317,83 @@ fn personal_policy_refuses_invalid_external_root() {
     assert!(Engine::new_personal(&f.root,&f.journal,&[f.base.clone()],&[]).is_err());
     assert!(Engine::new_personal(std::path::Path::new("/"),&f.journal,&[],&[]).is_err());
 }
+
+fn personal_trash_fixture(f:&Fixture)->(Engine,PathBuf,PathBuf){
+    let engine=Engine::new_personal(&f.root,&f.journal,&[],&[]).unwrap();
+    let data=engine.personal_data_home().unwrap().to_path_buf();
+    assert!(data.starts_with(&f.root),"test must not touch real XDG data home");
+    let root=data.join("Trash");
+    for d in [&root,&root.join("files"),&root.join("info")]{
+        fs::create_dir_all(d).unwrap();
+        fs::set_permissions(d,fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    (engine,data,root)
+}
+#[test]
+fn personal_native_trash_roundtrip_and_purge(){
+    if rustix::process::geteuid().is_root(){return;}
+    use terminal_tree::operations::{Trash,RestoreOutcome,PurgeOutcome};
+    use std::os::unix::ffi::OsStringExt;
+    let f=Fixture::new();
+    let (e,data,root)=personal_trash_fixture(&f);
+    let trash=Trash::new(&e,&data).unwrap();
+    let source=f.root.join(std::ffi::OsString::from_vec(b"a %\xff".to_vec()));
+    fs::create_dir(&source).unwrap();
+    fs::write(source.join("data"),b"original").unwrap();
+    symlink("missing",source.join("link")).unwrap();
+    xattr::set(source.join("data"),"user.tt",b"attr").unwrap();
+    trash.send(&e.review(&source).unwrap()).unwrap();
+    assert!(!source.exists());
+    let item=fs::read_dir(root.join("files")).unwrap().next().unwrap().unwrap().path();
+    assert_eq!(fs::read(item.join("data")).unwrap(),b"original");
+    assert!(e.review(&item).is_err());
+    assert!(e.destination(&root.join("files/ordinary")).is_err());
+    assert!(trash.review_purge(&item.join("data")).is_err());
+    let mut n=item.file_name().unwrap().to_os_string();n.push(".trashinfo");
+    let meta=root.join("info").join(n);
+    let original=fs::read(&meta).unwrap();
+    assert!(String::from_utf8_lossy(&original).contains("a%20%25%FF"));
+    assert_eq!(trash.review_restore(&item).unwrap().destination(),source);
+    // Restore review invalidated by metadata change and by destination collision.
+    let r=trash.review_restore(&item).unwrap();
+    fs::write(&meta,b"[Trash Info]\nPath=/etc/passwd\n").unwrap();
+    assert!(trash.restore(&r).is_err());
+    assert!(trash.review_restore(&item).is_err());
+    fs::write(&meta,&original).unwrap();
+    let r=trash.review_restore(&item).unwrap();
+    fs::write(&source,b"sentinel").unwrap();
+    assert!(trash.restore(&r).is_err());
+    assert_eq!(fs::read(&source).unwrap(),b"sentinel");
+    fs::remove_file(&source).unwrap();
+    assert_eq!(trash.restore(&trash.review_restore(&item).unwrap()).unwrap(),RestoreOutcome::Restored);
+    assert_eq!(fs::read(source.join("data")).unwrap(),b"original");
+    assert_eq!(xattr::get(source.join("data"),"user.tt").unwrap().unwrap(),b"attr");
+    assert_eq!(fs::read_link(source.join("link")).unwrap(),PathBuf::from("missing"));
+    assert!(!meta.exists());
+    trash.send(&e.review(&source).unwrap()).unwrap();
+    let item=fs::read_dir(root.join("files")).unwrap().next().unwrap().unwrap().path();
+    let r=trash.review_purge(&item).unwrap();
+    assert!(trash.purge(&r,"yes").is_err());
+    assert!(item.exists());
+    assert_eq!(trash.purge(&r,"DELETE").unwrap(),PurgeOutcome::Deleted);
+    assert!(!item.exists());
+    assert_eq!(fs::read_dir(root.join("info")).unwrap().count(),0);
+}
+#[test]
+fn personal_trash_refuses_swapped_dirs_and_protected_state(){
+    if rustix::process::geteuid().is_root(){return;}
+    use terminal_tree::operations::Trash;
+    let f=Fixture::new();
+    let (e,data,root)=personal_trash_fixture(&f);
+    let trash=Trash::new(&e,&data).unwrap();
+    let src=f.root.join("source");fs::write(&src,b"keep").unwrap();
+    let review=e.review(&src).unwrap();
+    fs::rename(root.join("files"),root.join("old-files")).unwrap();
+    fs::create_dir(root.join("files")).unwrap();
+    fs::set_permissions(root.join("files"),fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(trash.send(&review).is_err());
+    assert_eq!(fs::read(&src).unwrap(),b"keep");
+    fs::remove_dir(root.join("files")).unwrap();
+    symlink(&f.base,root.join("files")).unwrap();
+    assert!(Trash::new(&e,&data).is_err());
+}

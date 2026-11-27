@@ -79,7 +79,7 @@ fn info_file(parent: &File, name: &std::ffi::OsStr) -> io::Result<(Identity, Vec
         OFlags::NOFOLLOW | OFlags::CLOEXEC, Mode::empty())?.into();
     let m = file.metadata()?;
     require(m.is_file() && m.uid() == rustix::process::getuid().as_raw()
-        && m.len() <= 65536, "invalid Trash info file")?;
+        && m.nlink()==1 && m.len() <= 65536, "invalid Trash info file")?;
     let expected = identity(&m);
     let mut bytes = Vec::new();
     (&file).take(65537).read_to_end(&mut bytes)?;
@@ -301,6 +301,12 @@ impl<'a> Trash<'a> {
     }
     pub fn restore(&self, review: &RestoreReview) -> io::Result<RestoreOutcome> {
         self.check_info(review)?;
+        if self.pinned.is_some(){
+            self.check_item(&review.item)?;
+            let dst=self.engine.parent_for(review.destination.path())?;
+            require(dir_id(&dst)?==review.destination.parent,"restore destination replaced")?;
+            no_conflict(&fd_path(&dst).join(review.destination.path().file_name().unwrap()))?;
+        }
         let id = unique()?;
         self.engine.log(&id, "restore", Some(&review.item.path), Some(&review.destination.path), None)?;
         self.check_info(review)?;
@@ -377,6 +383,7 @@ impl<'a> Trash<'a> {
         self.check_item(&review.item)?;
         self.check_purge_info(review)?;
         self.engine.check_journal()?;
+        require(dir_id(&self.private_dir("files")?)?==dir_id(&parent)?,"Trash files replaced")?;
         erase(&parent, name, &review.item.snapshot, Path::new("."), &review.item.path)?;
         let cleanup = (|| -> io::Result<()> {
             let info_parent = self.check_purge_info(review)?;
