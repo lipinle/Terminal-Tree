@@ -14,11 +14,16 @@ import termios
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, os.environ.get("TT_PYTHON_REFERENCE", str(ROOT / "legacy/python/src")))
-import tree
 
 
 def scan_parity(binary, root):
+    # Only cross-language comparisons require the archived Python runtime.
+    reference = Path(os.environ.get("TT_PYTHON_REFERENCE", str(ROOT / "legacy/python/src")))
+    if not (reference / "tree.py").is_file():
+        raise FileNotFoundError(f"Python compatibility reference not found: {reference}")
+    sys.path.insert(0, str(reference))
+    import tree
+
     root.mkdir()
     names = ("Alpha.txt", "beta.rs", "ข้อมูล.txt", ".hidden", "z space",
              "line\nbreak", "a.tar.gz", "École.txt")
