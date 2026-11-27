@@ -25,3 +25,24 @@ tt_rust_nav() {
 tt_rust_workspace() {
     "$_tt_rust_program" --workspace "$@"
 }
+
+tt_rust_personal() {
+    "$_tt_rust_program" --personal "$@"
+}
+
+# Optional external listing. eza owns its formatting/configuration; the
+# native file engine does not consume or trust its output.
+tt_rust_ls() {
+    if (( $# > 1 )); then
+        printf 'Usage: tt_rust_ls [PATH]\n' >&2
+        return 2
+    fi
+    local path="${1:-.}"
+    if command -v eza >/dev/null 2>&1; then
+        command eza -- "$path"
+    else
+        # Absolute pathname prevents an argument from becoming a list option.
+        [[ "$path" == /* ]] || path="$PWD/$path"
+        "$_tt_rust_program" --list "$path"
+    fi
+}

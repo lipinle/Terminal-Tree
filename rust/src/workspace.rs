@@ -1,5 +1,5 @@
 //! Explicitly scoped experimental write UI. The default navigator stays read-only.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap,BTreeSet};
 use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, Write};
@@ -10,6 +10,7 @@ use crossterm::{cursor::MoveTo, event::{self, Event, KeyCode, KeyEventKind, KeyM
 use terminal_tree::{display_name, Model};
 use terminal_tree::operations::{Engine, Review, Transfer, Trash, Undo};
 use unicode_width::UnicodeWidthChar;
+use super::worker;
 
 type Stamp = (u64,u64,u32,u64,i64,i64,i64,i64);
 fn stamp(path: &Path) -> io::Result<Stamp> {
@@ -99,8 +100,11 @@ pub struct Workspace {
     engine: Engine,
     root: PathBuf,
     data: PathBuf,
+    settings: super::settings::Store,
     observed: BTreeMap<PathBuf, Stamp>,
-    clipboard: Option<(Review,Transfer)>,
+    marks: BTreeMap<PathBuf,Stamp>,
+    mark_directory: PathBuf,
+    clipboard: Option<(Vec<Review>,Transfer)>,
     undo: Vec<Undo>,
 }
 impl Workspace {
@@ -117,13 +121,27 @@ impl Workspace {
         let m = fs::metadata(&data)?;
         if !m.is_dir() || m.uid() != meta.uid() || m.mode() & 0o077 != 0 { return Err(error("private data directory required")); }
         Trash::new(&engine,&data)?;
-        Ok(Self { engine, root, data, observed:BTreeMap::new(), clipboard:None, undo:Vec::new() })
+        let settings=super::settings::Store::new(journal)?;
+        Ok(Self { engine, root, data,settings, observed:BTreeMap::new(), marks:BTreeMap::new(),mark_directory:PathBuf::new(),clipboard:None, undo:Vec::new() })
     }
+    pub fn personal(home:&Path,journal:&Path,extra:&[PathBuf])->io::Result<Self>{
+        let root=home.to_path_buf();
+        let engine=Engine::new_personal(&root,journal,extra,&[])?;
+        let data=engine.personal_data_home().ok_or_else(||error("personal data home unavailable"))?.to_path_buf();
+        let settings=super::settings::Store::new(journal)?;
+        Ok(Self{engine,root,data,settings,observed:BTreeMap::new(),marks:BTreeMap::new(),mark_directory:PathBuf::new(),clipboard:None,undo:Vec::new()})
+    }
+    pub fn load_settings(&self,model:&mut Model)->io::Result<()>{self.settings.load(model)}
     pub fn root(&self) -> &Path { &self.root }
+    pub fn is_personal(&self)->bool{self.engine.is_personal()}
+    pub fn marked(&self,p:&Path)->bool{self.marks.contains_key(p)}
+    pub fn marked_count(&self)->usize{self.marks.len()}
     pub fn observe(&mut self, model: &Model) {
+        if self.mark_directory!=model.directory {self.marks.clear();self.mark_directory=model.directory.clone();}
         self.observed = model.entries.iter().filter_map(|e| stamp(&e.path).ok().map(|s|(e.path.clone(),s))).collect();
     }
     fn ordinary(&self,p:&Path) -> io::Result<()> {
+        if self.engine.is_personal(){return self.engine.validate_personal_path(p);}
         let parent = p.parent().ok_or_else(||error("missing parent"))?.canonicalize()?;
         let p = parent.join(p.file_name().ok_or_else(||error("missing name"))?);
         if !p.starts_with(&self.root) || p == self.root || p.starts_with(&self.data) || self.data.starts_with(&p)
@@ -140,26 +158,107 @@ impl Workspace {
     fn review(&self,model:&Model) -> io::Result<Review> {
         let p = self.selected(model)?;
         self.ordinary(&p)?;
-        let review = self.engine.review(&p)?;
+        let review = worker::run(1,|progress|{progress.item(path_text(&p),0)?;self.engine.review_with(&p,&mut |s|progress.checkpoint(s))})?;
         self.selected(model)?;
         Ok(review)
     }
+    fn selected_paths(&self,model:&Model)->io::Result<Vec<PathBuf>>{
+        if self.marks.is_empty(){return Ok(vec![self.selected(model)?]);}
+        let visible:BTreeSet<_>=model.entries.iter().map(|e|&e.path).collect();
+        for (p,s) in &self.marks{
+            if !visible.contains(p) || stamp(p)?!=*s || self.observed.get(p)!=Some(s){
+                return Err(error("marked item hidden, missing or changed; clear marks and select again"));
+            }
+        }
+        Ok(self.marks.keys().cloned().collect())
+    }
+    fn reviews(&self,model:&Model)->io::Result<Vec<Review>>{
+        let paths=self.selected_paths(model)?;
+        let out=worker::run(paths.len(),|progress|{
+            let mut out=Vec::with_capacity(paths.len());
+            for (i,p) in paths.iter().enumerate(){progress.item(path_text(p),i)?;self.ordinary(p)?;out.push(self.engine.review_with(p,&mut |s|progress.checkpoint(s))?);}
+            Ok(out)
+        })?;
+        self.selected_paths(model)?;
+        Ok(out)
+    }
+    fn clear_marks(&mut self){self.marks.clear();}
+    fn finish_batch(&mut self,model:&mut Model,done:usize,total:usize,operation:&str,failure:Option<(PathBuf,io::Error)>)->io::Result<String>{
+        self.clear_marks();
+        let message=if let Some((path,e))=failure{
+            format!("{operation}: {done}/{total} confirmed complete; stopped at {}: {e}. Inspect journal and paths; do not blindly retry.",path_text(&path))
+        }else{format!("{operation}: {done}/{total} complete")};
+        // The complete failure path is shown in a scrollable modal, not just
+        // the clipped status bar. No automatic rollback of durable items.
+        if done!=total {let (width,_)=terminal::size()?;super::page("Batch stopped",&wrap(&message,usize::from(width).saturating_sub(1).max(1)))?;}
+        self.refresh(model,message)
+    }
     pub fn operate(&mut self, key: char, model: &mut Model) -> io::Result<String> {
+        if key==' '{
+            let p=self.selected(model)?;
+            if self.marks.remove(&p).is_none(){
+                if self.marks.len()>=1000{return Err(error("mark limit: 1000"));}
+                self.marks.insert(p.clone(),stamp(&p)?);
+            }
+            return Ok(format!("{} marked",self.marks.len()));
+        }
+        if key=='a'{
+            if model.entries.len()>1000{return Err(error("mark limit: 1000; use a filter"));}
+            let mut marks=BTreeMap::new();
+            for entry in &model.entries{
+                let s=stamp(&entry.path)?;
+                if self.observed.get(&entry.path)!=Some(&s){return Err(error("selection changed; refresh first"));}
+                marks.insert(entry.path.clone(),s);
+            }
+            self.marks=marks;
+            return Ok(format!("{} marked",self.marks.len()));
+        }
+        if key=='A'{self.clear_marks();return Ok("Marks cleared".into());}
+        if key=='r' && !self.marks.is_empty(){return Err(error("clear marks before single-item rename"));}
+        if matches!(key,'d'|'R'|'D') && !self.marks.is_empty(){
+            return self.batch_trash(key,model);
+        }
         let result = match key {
             'c'|'x' => {
-                let review = self.review(model)?;
-                self.clipboard = Some((review, if key=='c' {Transfer::Copy} else {Transfer::Move}));
+                self.clipboard=None;
+                let reviews = self.reviews(model)?;
+                self.clipboard = Some((reviews, if key=='c' {Transfer::Copy} else {Transfer::Move}));
+                self.clear_marks();
                 return Ok("Clipboard ready; v to review and paste".into());
             }
             'v' => {
-                let (review,kind) = self.clipboard.as_ref().ok_or_else(||error("clipboard empty"))?;
-                let dst = model.directory.join(review.path().file_name().unwrap());
-                self.ordinary(review.path())?; self.ordinary(&dst)?;
-                let target = self.engine.destination(&dst)?;
-                if !confirm(if matches!(kind,Transfer::Copy) {"Copy item"} else {"Move item"}, &[review.path(),target.path()], "yes")? { return Ok("Cancelled".into()); }
-                if let Some(undo) = self.engine.transfer_reviewed(review,&target,*kind)? { self.undo.push(undo); }
-                if matches!(kind,Transfer::Move) { self.clipboard=None; }
-                "Transfer completed"
+                let (reviews,kind) = self.clipboard.as_ref().ok_or_else(||error("clipboard empty"))?;
+                let kind=*kind;
+                let mut items=Vec::with_capacity(reviews.len());
+                for review in reviews{
+                    let dst=model.directory.join(review.path().file_name().unwrap());
+                    self.ordinary(review.path())?; self.ordinary(&dst)?;
+                    items.push((review.clone(),self.engine.destination(&dst)?));
+                }
+                let total=items.len();
+                if total>1{self.engine.validate_batch(&items,kind)?;}
+                let paths:Vec<_>=items.iter().flat_map(|(r,d)|[r.path(),d.path()]).collect();
+                let title=if total==1 {if matches!(kind,Transfer::Copy){"Copy item".into()}else{"Move item".into()}}
+                    else{format!("{} {total} items - each committed separately",if matches!(kind,Transfer::Copy){"Copy"}else{"Move"})};
+                if !confirm(&title,&paths,"yes")?{return Ok("Cancelled".into());}
+                if total>1{self.engine.validate_batch(&items,kind)?;}
+                let (done,failure,undos)=worker::run(total,|progress|{
+                    let mut done=0;
+                    let mut failure=None;
+                    let mut undos=Vec::new();
+                    for (review,target) in &items{
+                        let result=progress.item(path_text(review.path()),done).and_then(|_|self.engine.transfer_reviewed_with(review,target,kind,&mut |point|progress.checkpoint(point)));
+                        match result{
+                            Ok(undo)=>{if let Some(u)=undo{undos.push(u);}done+=1;progress.finished(done);},
+                            Err(e)=>{failure=Some((review.path().to_path_buf(),e));break;}
+                        }
+                    }
+                    Ok((done,failure,undos))
+                })?;
+                self.undo.extend(undos);
+                if matches!(kind,Transfer::Move)||failure.is_some(){self.clipboard=None;}
+                if total==1 && failure.is_none(){"Transfer completed"}
+                else{return self.finish_batch(model,done,total,"Transfer",failure);}
             }
             'r' => {
                 let review=self.review(model)?;
@@ -168,7 +267,7 @@ impl Workspace {
                 self.ordinary(&dst)?;
                 let target=self.engine.destination(&dst)?;
                 if !confirm("Rename item",&[review.path(),target.path()],"yes")? {return Ok("Cancelled".into());}
-                if let Some(undo)=self.engine.transfer_reviewed(&review,&target,Transfer::Move)? {self.undo.push(undo);}
+                if let Some(undo)=worker::run(1,|p|{p.item(path_text(review.path()),0)?;self.engine.transfer_reviewed_with(&review,&target,Transfer::Move,&mut |s|p.checkpoint(s))})? {self.undo.push(undo);}
                 "Renamed"
             }
             'n'|'t' => {
@@ -190,8 +289,9 @@ impl Workspace {
             }
             'd' => {
                 let review=self.review(model)?;
+                let trash=Trash::new(&self.engine,&self.data)?;
                 if !confirm("Move to Trash",&[review.path()],"yes")? {return Ok("Cancelled".into());}
-                Trash::new(&self.engine,&self.data)?.send(&review)?;
+                worker::run(1,|p|{p.item(path_text(review.path()),0)?;trash.send_with(&review,&mut |s|p.checkpoint(s))})?;
                 "Trashed"
             }
             'R' => {
@@ -201,7 +301,7 @@ impl Workspace {
                 self.ordinary(review.destination())?;
                 self.selected(model)?;
                 if !confirm("Restore item",&[review.source(),review.destination()],"yes")? {return Ok("Cancelled".into());}
-                let outcome=trash.restore(&review)?;
+                let outcome=worker::run(1,|p|{p.item(path_text(review.source()),0)?;trash.restore_with(&review,&mut |s|p.checkpoint(s))})?;
                 return self.refresh(model,format!("{outcome:?}"));
             }
             'D' => {
@@ -210,16 +310,92 @@ impl Workspace {
                 let review=trash.review_purge(&p)?;
                 self.selected(model)?;
                 if !confirm("PERMANENT DELETE - cannot undo",&[review.source()],"DELETE")? {return Ok("Cancelled".into());}
-                let outcome=trash.purge(&review,"DELETE")?;
+                let outcome=worker::run(1,|p|{p.item(path_text(review.source()),0)?;trash.purge_with(&review,"DELETE",&mut |s|p.checkpoint(s))})?;
                 return self.refresh(model,format!("{outcome:?}"));
             }
+            'S' => {
+                self.settings.save(model)?;
+                return Ok("Rust view settings saved".into());
+            }
             'j' => {
-                let count=self.engine.pending()?.len();
-                return Ok(format!("Pending records: {count}; inspect journal before retrying"));
+                let (records,truncated)=self.engine.recovery_report()?;
+                super::recovery::show(&records,truncated)?;
+                return Ok(format!("Pending records: {}{}; inspect journal before retrying",records.len(),if truncated{"+"}else{""}));
             }
             _ => return Err(error("unsupported operation")),
         };
         self.refresh(model,result.into())
+    }
+    fn batch_trash(&mut self,key:char,model:&mut Model)->io::Result<String>{
+        let paths=self.selected_paths(model)?;
+        let total=paths.len();
+        let mut done=0usize;
+        let mut failure=None;
+        {
+            let trash=Trash::new(&self.engine,&self.data)?;
+            match key{
+                'd'=>{
+                    let reviews=self.reviews(model)?;
+                    for r in &reviews{trash.validate_send(r)?;}
+                    let display:Vec<_>=reviews.iter().map(|r|r.path()).collect();
+                    if !confirm(&format!("Trash {total} items - each committed separately"),&display,"yes")?{return Ok("Cancelled".into());}
+                    for r in &reviews{trash.validate_send(r)?;}
+                    worker::run(total,|p|{
+                        for r in &reviews{
+                            match p.item(path_text(r.path()),done).and_then(|_|trash.send_with(r,&mut |s|p.checkpoint(s))){
+                                Ok(())=>{done+=1;p.finished(done);},
+                                Err(e)=>{failure=Some((r.path().to_path_buf(),e));break;}
+                            }
+                        }Ok(())
+                    })?;
+                }
+                'R'=>{
+                    let mut reviews=Vec::new();
+                    let mut targets=BTreeSet::new();
+                    for p in &paths{
+                        let r=trash.review_restore(p)?;
+                        self.ordinary(r.destination())?;
+                        if targets.iter().any(|d:&PathBuf|d.starts_with(r.destination())||r.destination().starts_with(d)){
+                            return Err(error("overlapping restore destinations"));
+                        }
+                        targets.insert(r.destination().to_path_buf());
+                        trash.validate_restore(&r)?;reviews.push(r);
+                    }
+                    self.selected_paths(model)?;
+                    let display:Vec<_>=reviews.iter().flat_map(|r|[r.source(),r.destination()]).collect();
+                    if !confirm(&format!("Restore {total} items - each committed separately"),&display,"yes")?{return Ok("Cancelled".into());}
+                    for r in &reviews{trash.validate_restore(r)?;}
+                    worker::run(total,|p|{
+                    for r in &reviews{
+                        match p.item(path_text(r.source()),done).and_then(|_|trash.restore_with(r,&mut |s|p.checkpoint(s))){
+                            Ok(terminal_tree::operations::RestoreOutcome::Restored)=>{done+=1;p.finished(done);},
+                            Ok(_)=>{failure=Some((r.source().to_path_buf(),error("data restored; metadata pending")));break;},
+                            Err(e)=>{failure=Some((r.source().to_path_buf(),e));break;}
+                        }
+                    }Ok(())
+                    })?;
+                }
+                'D'=>{
+                    let mut reviews=Vec::new();
+                    for p in &paths{let r=trash.review_purge(p)?;trash.validate_purge(&r)?;reviews.push(r);}
+                    self.selected_paths(model)?;
+                    let display:Vec<_>=reviews.iter().map(|r|r.source()).collect();
+                    if !confirm(&format!("PERMANENT DELETE {total} items - cannot undo; may partially complete"),&display,"DELETE")?{return Ok("Cancelled".into());}
+                    for r in &reviews{trash.validate_purge(r)?;}
+                    worker::run(total,|p|{
+                    for r in &reviews{
+                        match p.item(path_text(r.source()),done).and_then(|_|trash.purge_with(r,"DELETE",&mut |s|p.checkpoint(s))){
+                            Ok(terminal_tree::operations::PurgeOutcome::Deleted)=>{done+=1;p.finished(done);},
+                            Ok(_)=>{failure=Some((r.source().to_path_buf(),error("data deleted; metadata pending")));break;},
+                            Err(e)=>{failure=Some((r.source().to_path_buf(),e));break;}
+                        }
+                    }Ok(())
+                    })?;
+                }
+                _=>return Err(error("unsupported batch action")),
+            }
+        }
+        self.finish_batch(model,done,total,match key{'d'=>"Trash",'R'=>"Restore",_=>"Purge"},failure)
     }
     fn refresh(&mut self,model:&mut Model,msg:String)->io::Result<String> {
         model.reload().map_err(|e|io::Error::other(format!("operation completed; refresh failed: {e}")))?;

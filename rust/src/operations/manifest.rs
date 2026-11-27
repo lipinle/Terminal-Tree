@@ -60,7 +60,8 @@ fn check(path: &Path, original: &Metadata) -> io::Result<()> {
 }
 fn collect(path: &Path, relative: &Path, device: u64, flush: bool,
            items: &mut BTreeMap<PathBuf, Item>, snapshots: &mut Snapshot,
-           links: &mut Links, buffer: &mut [u8], hashes: &mut HashCache) -> io::Result<()> {
+           links: &mut Links, buffer: &mut [u8], hashes: &mut HashCache,checkpoint:&mut dyn FnMut(&str)->io::Result<()>) -> io::Result<()> {
+    checkpoint("manifest-entry")?;
     let m = fs::symlink_metadata(path)?;
     require(m.dev() == device, "cross-device entry refused")?;
     let (body, attrs) = if m.is_dir() {
@@ -68,7 +69,7 @@ fn collect(path: &Path, relative: &Path, device: u64, flush: bool,
         let attrs = attributes(&dir)?;
         for name in names(&dir)? {
             collect(&fd_path(&dir).join(&name), &relative.join(&name), device,
-                    flush, items, snapshots, links, buffer, hashes)?;
+                    flush, items, snapshots, links, buffer, hashes,checkpoint)?;
         }
         require(identity(&dir.metadata()?) == identity(&m), "directory changed during traversal")?;
         if flush { dir.sync_all()?; }
@@ -83,13 +84,15 @@ fn collect(path: &Path, relative: &Path, device: u64, flush: bool,
             require(*id == identity(&m), "hard-linked inode changed during traversal")?;
             *hash
         } else {
-            let hash = digest(&file, buffer)?;
+            let hash = digest(&file, buffer,checkpoint)?;
             if flush { file.sync_all()?; }
             if m.nlink() > 1 { hashes.insert(key,(identity(&m),hash)); }
             hash
         };
         require(identity(&file.metadata()?) == identity(&m), "file changed during traversal")?;
-        links.entry((m.dev(), m.ino())).or_default().push(relative.to_path_buf());
+        // Single-link files cannot contribute to a multi-name group.
+        // Still hash and verify every file and its identity independently.
+        if m.nlink()>1 {links.entry((m.dev(), m.ino())).or_default().push(relative.to_path_buf());}
         (Body::File(m.size(), hash), attrs)
     } else if m.file_type().is_symlink() {
         (Body::Link(fs::read_link(path)?), path_attrs(path)?)
@@ -101,12 +104,18 @@ fn collect(path: &Path, relative: &Path, device: u64, flush: bool,
     Ok(())
 }
 pub(crate) fn manifest(path: &Path, flush: bool) -> io::Result<(Manifest, Snapshot)> {
+    manifest_with(path,flush,&mut |_|Ok(()))
+}
+pub(crate) fn manifest_with(path:&Path,flush:bool,checkpoint:&mut dyn FnMut(&str)->io::Result<()>)->io::Result<(Manifest,Snapshot)>{
+    let mut buffer=vec![0;1024*1024];
+    manifest_buffered(path,flush,checkpoint,&mut buffer)
+}
+fn manifest_buffered(path:&Path,flush:bool,checkpoint:&mut dyn FnMut(&str)->io::Result<()>,buffer:&mut [u8])->io::Result<(Manifest,Snapshot)>{
     let device = fs::symlink_metadata(path)?.dev();
     let mut items = BTreeMap::new();
     let mut snapshots = BTreeMap::new();
     let mut links = Links::new();
-    let mut buffer = vec![0; 1024 * 1024];
-    collect(path, Path::new("."), device, flush, &mut items, &mut snapshots, &mut links, &mut buffer, &mut HashCache::new())?;
+    collect(path, Path::new("."), device, flush, &mut items, &mut snapshots, &mut links, buffer, &mut HashCache::new(),checkpoint)?;
     let mut groups: Vec<_> = links.into_values().filter(|g| g.len() > 1).collect();
     for g in &mut groups { g.sort(); }
     groups.sort();
@@ -135,6 +144,7 @@ fn copy_bytes(input: &mut File, output: &mut File, size: u64, buffer: &mut [u8],
         Ok(()) => {
             require(output.metadata()?.len() == size, "reflink length mismatch")?;
             checkpoint("copy-reflink")?;
+            checkpoint(&format!("copy-bytes:{size}"))?;
             if size != 0 { checkpoint("copy-partial")?; }
             return Ok(());
         }
@@ -151,6 +161,7 @@ fn copy_bytes(input: &mut File, output: &mut File, size: u64, buffer: &mut [u8],
             Ok(0) => break,
             Ok(n) => {
                 copied += n as u64;
+                checkpoint(&format!("copy-bytes:{n}"))?;
                 checkpoint("copy-partial")?;
             }
             Err(e) if e == rustix::io::Errno::INTR => continue,
@@ -168,12 +179,14 @@ fn copy_bytes(input: &mut File, output: &mut File, size: u64, buffer: &mut [u8],
         require(n > 0, "source shortened during copy")?;
         output.write_all(&buffer[..n])?;
         copied += n as u64;
+        checkpoint(&format!("copy-bytes:{n}"))?;
         checkpoint("copy-partial")?;
     }
     require(output.metadata()?.len() == size, "copied length mismatch")
 }
 fn copy_entry(src: &Path, dst: &Path, device: u64, checkpoint: &mut dyn FnMut(&str) -> io::Result<()>,
               hardlinks: &mut BTreeMap<(u64, u64), PathBuf>, buffer: &mut [u8]) -> io::Result<()> {
+    checkpoint("copy-entry")?;
     let m = fs::symlink_metadata(src)?;
     require(m.dev() == device, "cross-device source refused")?;
     if m.is_dir() {
@@ -238,9 +251,11 @@ pub(crate) fn copy_tree(src: &Path, payload: &Path, expected: &Manifest, reviewe
     let mut buffer = vec![0; 1024 * 1024];
     copy_entry(src, payload, original.dev(), checkpoint, &mut BTreeMap::new(), &mut buffer)?;
     // Independently read and sync every staged file and directory before publish.
-    let (actual, staged) = manifest(payload, true)?;
+    checkpoint("copy-verify-stage")?;
+    let (actual, staged) = manifest_buffered(payload, true,checkpoint,&mut buffer)?;
     require(&actual == expected, "staged tree differs from reviewed source")?;
-    let (source_after, ids_after) = manifest(src, false)?;
+    checkpoint("copy-verify-source")?;
+    let (source_after, ids_after) = manifest_buffered(src, false,checkpoint,&mut buffer)?;
     require(&source_after == expected && &ids_after == reviewed, "source tree changed")?;
     Ok(staged)
 }

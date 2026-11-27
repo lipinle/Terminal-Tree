@@ -13,6 +13,26 @@ CASES = (
     "copy-after-sync", "copy-done",
     "move-before-sync", "move-after-sync", "move-done",
 )
+PERSONAL_CASES = (
+    "trash-journal",
+    "trash-info-synced",
+    "trash-before-sync",
+    "trash-after-sync",
+    "trash-done",
+    "restore-journal",
+    "restore-before-sync",
+    "restore-after-sync",
+    "restore-info-before-sync",
+    "restore-info-after-sync",
+    "restore-done",
+    "purge-journal",
+    "purge-entry-before-sync",
+    "purge-entry-after-sync",
+    "purge-data-synced",
+    "purge-info-before-sync",
+    "purge-info-after-sync",
+    "purge-done",
+)
 
 
 def boot(kernel, initrd, disk, case, phase, log, timeout, engine="python", fixture="file"):
@@ -68,10 +88,12 @@ def main():
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--engine", choices=("python", "rust"), default="python")
     parser.add_argument("--fixture", choices=("file", "tree"), action="append")
-    parser.add_argument("--case", choices=CASES, action="append")
+    parser.add_argument("--case", choices=CASES + PERSONAL_CASES, action="append")
     args = parser.parse_args()
     args.logs.mkdir(parents=True, exist_ok=True)
-    cases = args.case or CASES
+    cases = args.case or (CASES + PERSONAL_CASES if args.engine == "rust" else CASES)
+    if args.engine == "python" and any(case in PERSONAL_CASES for case in cases):
+        parser.error("personal Trash cases are Rust-only")
     fixtures = args.fixture or (("file", "tree") if args.engine == "rust" else ("file",))
     if args.engine == "python" and fixtures != ("file",) and fixtures != ["file"]:
         parser.error("tree fixture is Rust-only")

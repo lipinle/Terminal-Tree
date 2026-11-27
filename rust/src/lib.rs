@@ -1,11 +1,14 @@
 #![forbid(unsafe_code)]
 //! Native read-only filesystem model. No file mutation API is exposed.
-#[cfg(feature = "native-ops")]
+#[cfg(all(feature = "native-ops", not(target_os = "linux")))]
+compile_error!("native-ops requires the Linux safety backend; use the default read-only build on other platforms");
+#[cfg(all(feature = "native-ops", target_os = "linux"))]
 pub mod operations;
 
 use std::ffi::OsStr;
 use std::fs;
 use std::io;
+#[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -42,6 +45,7 @@ pub struct Entry {
 
 // The display text is never used as a filesystem path. Preserve raw path bytes.
 // Escape controls, format characters, invalid UTF-8 and literal backslashes.
+#[cfg(unix)]
 pub fn display_name(name: &OsStr) -> String {
     let mut result = String::new();
     let mut bytes = name.as_bytes();
@@ -69,6 +73,18 @@ pub fn display_name(name: &OsStr) -> String {
     result
 }
 
+#[cfg(windows)]
+pub fn display_name(name:&OsStr)->String{
+    use std::os::windows::ffi::OsStrExt;
+    let mut result=String::new();
+    for unit in char::decode_utf16(name.encode_wide()){
+        match unit{
+            Ok(c)=>append_safe(&mut result,c.encode_utf8(&mut [0;4])),
+            Err(e)=>result.push_str(&format!("\\u{{{:04x}}}",e.unpaired_surrogate())),
+        }
+    }
+    result
+}
 fn append_safe(out: &mut String, s: &str) {
     for c in s.chars() {
         if c == '\\' {
@@ -93,7 +109,7 @@ pub fn scan(path: &Path, hidden: bool, order: Order, query: &str) -> io::Result<
     for item in fs::read_dir(path)? {
         let item = item?;
         let raw = item.file_name();
-        if !hidden && raw.as_bytes().starts_with(b".") {
+        if !hidden && raw.as_encoded_bytes().starts_with(b".") {
             continue;
         }
         let name = display_name(&raw);
@@ -125,11 +141,19 @@ pub fn scan(path: &Path, hidden: bool, order: Order, query: &str) -> io::Result<
                 Order::Type => a.extension.cmp(&b.extension),
             })
             .then_with(|| a.sort_name.cmp(&b.sort_name))
-            .then_with(|| a.path.as_os_str().as_bytes().cmp(b.path.as_os_str().as_bytes()))
+            .then_with(|| a.path.as_os_str().as_encoded_bytes().cmp(b.path.as_os_str().as_encoded_bytes()))
     });
     Ok(entries)
 }
 
+#[derive(Debug,Clone,Copy,PartialEq,Eq)]
+pub enum KindFilter { All, Directories, Files, Links }
+impl KindFilter{
+    fn accepts(self,e:&Entry)->bool{
+        match self{Self::All=>true,Self::Directories=>e.directory&&!e.symlink,
+            Self::Files=>!e.directory&&!e.symlink,Self::Links=>e.symlink}
+    }
+}
 #[derive(Debug)]
 pub struct Model {
     pub directory: PathBuf,
@@ -139,6 +163,7 @@ pub struct Model {
     pub hidden: bool,
     pub order: Order,
     pub query: String,
+    pub kind_filter: KindFilter,
     history: Vec<PathBuf>,
     history_index: usize,
 }
@@ -147,13 +172,14 @@ impl Model {
     pub fn new(directory: PathBuf) -> io::Result<Self> {
         let entries = scan(&directory, false, Order::Name, "")?;
         Ok(Self { directory: directory.clone(), entries, selected: 0, top: 0,
-            hidden: false, order: Order::Name, query: String::new(),
+            hidden: false, order: Order::Name, query: String::new(), kind_filter:KindFilter::All,
             history: vec![directory], history_index: 0 })
     }
 
     pub fn reload(&mut self) -> io::Result<()> {
         let selected_path = self.entries.get(self.selected).map(|e| e.path.clone());
-        let entries = scan(&self.directory, self.hidden, self.order, &self.query)?;
+        let mut entries = scan(&self.directory, self.hidden, self.order, &self.query)?;
+        entries.retain(|e|self.kind_filter.accepts(e));
         self.entries = entries;
         self.selected = selected_path.and_then(|p| self.entries.iter().position(|e| e.path == p))
             .unwrap_or_else(|| self.selected.min(self.entries.len().saturating_sub(1)));
@@ -162,7 +188,8 @@ impl Model {
     }
 
     fn load_directory(&mut self, directory: PathBuf) -> io::Result<()> {
-        let entries = scan(&directory, self.hidden, self.order, "")?;
+        let mut entries = scan(&directory, self.hidden, self.order, "")?;
+        entries.retain(|e|self.kind_filter.accepts(e));
         self.directory = directory;
         self.entries = entries;
         self.query.clear();
@@ -234,7 +261,9 @@ impl Model {
 mod tests {
     use super::*;
     use std::ffi::OsString;
+    #[cfg(unix)]
     use std::os::unix::ffi::OsStringExt;
+    #[cfg(unix)]
     use std::os::unix::fs::symlink;
     use std::sync::atomic::{AtomicUsize, Ordering};
     static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -264,6 +293,7 @@ mod tests {
         assert_eq!(scan(&f.0, false, Order::Name, "APPLE").unwrap().len(), 1);
     }
 
+    #[cfg(unix)]
     #[test]
     fn preserves_invalid_path_bytes_and_escapes_control_text() {
         let f = Fixture::new();
@@ -278,6 +308,7 @@ mod tests {
         assert_ne!(display_name(OsStr::new("\\xFF")), display_name(OsStr::new("\u{00ff}")));
     }
 
+    #[cfg(unix)]
     #[test]
     fn directory_symlink_and_dangling_link() {
         let f = Fixture::new();
@@ -289,6 +320,14 @@ mod tests {
         assert!(e.iter().any(|e| e.name == "dangling" && !e.directory && e.symlink));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_display_escapes_unpaired_surrogates(){
+        use std::os::windows::ffi::OsStringExt;
+        let name=OsString::from_wide(&[b'a' as u16,0xd800,0x1b]);
+        let text=display_name(&name);
+        assert_eq!(text,"a\\u{d800}\\u{1b}");
+    }
     #[test]
     fn sort_size_descending_and_type() {
         let f = Fixture::new();

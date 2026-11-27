@@ -254,3 +254,242 @@ fn kernel_copy_preserves_sparse_bytes_and_empty_file() {
     fs::write(dst.join("sparse"),b"changed").unwrap();
     assert_eq!(fs::metadata(src.join("sparse")).unwrap().len(),4*1024*1024+3);
 }
+
+#[test]
+fn journal_replacement_stops_before_publish() {
+    let f=Fixture::new(); let e=f.engine();
+    let source=f.root.join("source"); let dest=f.root.join("dest");
+    fs::write(&source,b"original").unwrap();
+    let reviewed=e.review(&source).unwrap();
+    let moved=f.base.join("journal-old");
+    let result=e.transfer_with(&reviewed,&dest,Transfer::Copy,&mut |p|{
+        if p=="copy-before-publish"{
+            fs::rename(&f.journal,&moved)?;
+            fs::create_dir(&f.journal)?;
+            fs::set_permissions(&f.journal,fs::Permissions::from_mode(0o700))?;
+        }
+        Ok(())
+    });
+    assert!(result.is_err() && !dest.exists());
+    assert_eq!(fs::read(source).unwrap(),b"original");
+    assert_eq!(fs::read_dir(&f.journal).unwrap().count(),0);
+    assert_eq!(fs::read_dir(moved).unwrap().count(),1);
+}
+#[test]
+fn personal_policy_guards_real_files_and_managed_state() {
+    if rustix::process::geteuid().is_root(){return;}
+    let f=Fixture::new();
+    let home=&f.root;
+    let managed=home.join(".local/state/terminal-tree");
+    fs::create_dir_all(&managed).unwrap();
+    let journal=managed.join("operations");
+    fs::create_dir(&journal).unwrap();
+    fs::set_permissions(&journal,fs::Permissions::from_mode(0o700)).unwrap();
+    let ordinary=home.join("documents");fs::create_dir(&ordinary).unwrap();
+    let src=ordinary.join("source");fs::write(&src,b"original").unwrap();
+    let outside=f.base.join("outside");fs::create_dir(&outside).unwrap();
+    let sentinel=outside.join("sentinel");fs::write(&sentinel,b"outside").unwrap();
+    symlink(&outside,home.join("escape")).unwrap();
+    symlink(&ordinary,home.join("alias")).unwrap();
+    fs::write(home.join(".bashrc"),b"protected").unwrap();
+    let e=Engine::new_personal(home,&journal,&[],&[]).unwrap();
+    for p in [home.clone(),home.join(".bashrc"),home.join(".local"),managed.clone(),journal.clone(),outside.clone(),
+        home.join("escape/sentinel"),home.join("alias/source"),home.join("documents/../.bashrc"),
+        home.join(".terminal-tree-copy-test"),PathBuf::from("/etc/passwd")]{
+        assert!(e.review(&p).is_err(),"unexpected review: {p:?}");
+        assert!(e.destination(&p).is_err(),"unexpected destination: {p:?}");
+    }
+    let dest=ordinary.join("copy");
+    e.transfer(&e.review(&src).unwrap(),&dest,Transfer::Copy).unwrap();
+    assert_eq!(fs::read(&dest).unwrap(),b"original");
+    let moved=ordinary.join("moved");
+    let undo=e.transfer(&e.review(&dest).unwrap(),&moved,Transfer::Move).unwrap().unwrap();
+    e.undo(&undo).unwrap();
+    assert_eq!(fs::read(&dest).unwrap(),b"original");
+    assert_eq!(fs::read(sentinel).unwrap(),b"outside");
+    assert!(e.pending().unwrap().is_empty());
+    assert!(terminal_tree::operations::Trash::new(&e,home).is_err());
+}
+#[test]
+fn personal_policy_refuses_invalid_external_root() {
+    if rustix::process::geteuid().is_root(){return;}
+    let f=Fixture::new();
+    assert!(Engine::new_personal(&f.root,&f.journal,&[f.base.clone()],&[]).is_err());
+    assert!(Engine::new_personal(std::path::Path::new("/"),&f.journal,&[],&[]).is_err());
+}
+
+fn personal_trash_fixture(f:&Fixture)->(Engine,PathBuf,PathBuf){
+    let engine=Engine::new_personal(&f.root,&f.journal,&[],&[]).unwrap();
+    let data=engine.personal_data_home().unwrap().to_path_buf();
+    assert!(data.starts_with(&f.root),"test must not touch real XDG data home");
+    let root=data.join("Trash");
+    for d in [&root,&root.join("files"),&root.join("info")]{
+        fs::create_dir_all(d).unwrap();
+        fs::set_permissions(d,fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    (engine,data,root)
+}
+#[test]
+fn personal_native_trash_roundtrip_and_purge(){
+    if rustix::process::geteuid().is_root(){return;}
+    use terminal_tree::operations::{Trash,RestoreOutcome,PurgeOutcome};
+    use std::os::unix::ffi::OsStringExt;
+    let f=Fixture::new();
+    let (e,data,root)=personal_trash_fixture(&f);
+    let trash=Trash::new(&e,&data).unwrap();
+    let source=f.root.join(std::ffi::OsString::from_vec(b"a %\xff".to_vec()));
+    fs::create_dir(&source).unwrap();
+    fs::write(source.join("data"),b"original").unwrap();
+    symlink("missing",source.join("link")).unwrap();
+    xattr::set(source.join("data"),"user.tt",b"attr").unwrap();
+    trash.send(&e.review(&source).unwrap()).unwrap();
+    assert!(!source.exists());
+    let item=fs::read_dir(root.join("files")).unwrap().next().unwrap().unwrap().path();
+    assert_eq!(fs::read(item.join("data")).unwrap(),b"original");
+    assert!(e.review(&item).is_err());
+    assert!(e.destination(&root.join("files/ordinary")).is_err());
+    assert!(trash.review_purge(&item.join("data")).is_err());
+    let mut n=item.file_name().unwrap().to_os_string();n.push(".trashinfo");
+    let meta=root.join("info").join(n);
+    let original=fs::read(&meta).unwrap();
+    assert!(String::from_utf8_lossy(&original).contains("a%20%25%FF"));
+    assert_eq!(trash.review_restore(&item).unwrap().destination(),source);
+    // Restore review invalidated by metadata change and by destination collision.
+    let r=trash.review_restore(&item).unwrap();
+    fs::write(&meta,b"[Trash Info]\nPath=/etc/passwd\n").unwrap();
+    assert!(trash.restore(&r).is_err());
+    assert!(trash.review_restore(&item).is_err());
+    fs::write(&meta,&original).unwrap();
+    let r=trash.review_restore(&item).unwrap();
+    fs::write(&source,b"sentinel").unwrap();
+    assert!(trash.restore(&r).is_err());
+    assert_eq!(fs::read(&source).unwrap(),b"sentinel");
+    fs::remove_file(&source).unwrap();
+    assert_eq!(trash.restore(&trash.review_restore(&item).unwrap()).unwrap(),RestoreOutcome::Restored);
+    assert_eq!(fs::read(source.join("data")).unwrap(),b"original");
+    assert_eq!(xattr::get(source.join("data"),"user.tt").unwrap().unwrap(),b"attr");
+    assert_eq!(fs::read_link(source.join("link")).unwrap(),PathBuf::from("missing"));
+    assert!(!meta.exists());
+    trash.send(&e.review(&source).unwrap()).unwrap();
+    let item=fs::read_dir(root.join("files")).unwrap().next().unwrap().unwrap().path();
+    let r=trash.review_purge(&item).unwrap();
+    assert!(trash.purge(&r,"yes").is_err());
+    assert!(item.exists());
+    assert_eq!(trash.purge(&r,"DELETE").unwrap(),PurgeOutcome::Deleted);
+    assert!(!item.exists());
+    assert_eq!(fs::read_dir(root.join("info")).unwrap().count(),0);
+}
+#[test]
+fn personal_trash_refuses_swapped_dirs_and_protected_state(){
+    if rustix::process::geteuid().is_root(){return;}
+    use terminal_tree::operations::Trash;
+    let f=Fixture::new();
+    let (e,data,root)=personal_trash_fixture(&f);
+    let trash=Trash::new(&e,&data).unwrap();
+    let src=f.root.join("source");fs::write(&src,b"keep").unwrap();
+    let review=e.review(&src).unwrap();
+    fs::rename(root.join("files"),root.join("old-files")).unwrap();
+    fs::create_dir(root.join("files")).unwrap();
+    fs::set_permissions(root.join("files"),fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(trash.send(&review).is_err());
+    assert_eq!(fs::read(&src).unwrap(),b"keep");
+    fs::remove_dir(root.join("files")).unwrap();
+    symlink(&f.base,root.join("files")).unwrap();
+    assert!(Trash::new(&e,&data).is_err());
+}
+
+#[test]
+fn batch_preflight_refuses_late_conflicts_and_stale_source(){
+    let f=Fixture::new();let e=f.engine();
+    let src=f.root.join("source");let dst=f.root.join("destination");
+    fs::create_dir(&src).unwrap();fs::create_dir(&dst).unwrap();
+    for n in ["a","b"]{fs::write(src.join(n),n).unwrap();}
+    let items:Vec<_>=["a","b"].iter().map(|n|(e.review(&src.join(n)).unwrap(),e.destination(&dst.join(n)).unwrap())).collect();
+    e.validate_batch(&items,Transfer::Copy).unwrap();
+    fs::write(dst.join("b"),b"sentinel").unwrap();
+    assert!(e.validate_batch(&items,Transfer::Copy).is_err());
+    assert!(!dst.join("a").exists());
+    assert_eq!(fs::read(dst.join("b")).unwrap(),b"sentinel");
+    fs::remove_file(dst.join("b")).unwrap();
+    fs::write(src.join("b"),b"changed").unwrap();
+    assert!(e.validate_batch(&items,Transfer::Move).is_err());
+    assert!(!dst.join("a").exists());
+    assert_eq!(fs::read(src.join("a")).unwrap(),b"a");
+    assert!(e.pending().unwrap().is_empty());
+}
+#[test]
+fn batch_refuses_overlapping_sources_and_targets(){
+    let f=Fixture::new();let e=f.engine();
+    let src=f.root.join("source");fs::create_dir(&src).unwrap();
+    fs::write(src.join("child"),b"keep").unwrap();
+    let a=e.review(&src).unwrap();
+    let b=e.review(&src.join("child")).unwrap();
+    let d1=e.destination(&f.root.join("a")).unwrap();
+    let d2=e.destination(&f.root.join("b")).unwrap();
+    assert!(e.validate_batch(&[(a.clone(),d1.clone()),(b.clone(),d2)],Transfer::Copy).is_err());
+    assert!(e.validate_batch(&[(a,d1.clone()),(b,d1)],Transfer::Copy).is_err());
+    assert!(!f.root.join("a").exists());
+}
+
+#[test]
+fn cooperative_cancel_during_copy_preserves_source_and_pending_stage(){
+    let f=Fixture::new();let e=f.engine();
+    let src=f.root.join("large");let dst=f.root.join("destination");
+    fs::write(&src,vec![0x5a;4*1024*1024]).unwrap();
+    let r=e.review(&src).unwrap();let d=e.destination(&dst).unwrap();
+    let err=e.transfer_reviewed_with(&r,&d,Transfer::Copy,&mut |point|{
+        if point=="copy-partial"{Err(std::io::Error::new(std::io::ErrorKind::Interrupted,"cancelled"))}else{Ok(())}
+    }).unwrap_err();
+    assert_eq!(err.kind(),std::io::ErrorKind::Interrupted);
+    assert!(!dst.exists());
+    assert_eq!(fs::read(&src).unwrap(),vec![0x5a;4*1024*1024]);
+    assert_eq!(e.pending().unwrap().len(),1);
+}
+#[test]
+fn cancel_hash_review_and_move_before_commit(){
+    let f=Fixture::new();let e=f.engine();
+    let src=f.root.join("source");let dst=f.root.join("destination");
+    fs::write(&src,vec![0x33;2*1024*1024]).unwrap();
+    assert!(e.review_with(&src,&mut |point|if point=="hash-chunk"{Err(std::io::Error::new(std::io::ErrorKind::Interrupted,"cancelled"))}else{Ok(())}).is_err());
+    assert!(e.pending().unwrap().is_empty());
+    let r=e.review(&src).unwrap();let d=e.destination(&dst).unwrap();
+    let err=e.transfer_reviewed_with(&r,&d,Transfer::Move,&mut |point|{
+        if point=="transfer-commit"{Err(std::io::Error::new(std::io::ErrorKind::Interrupted,"cancelled"))}else{Ok(())}
+    }).unwrap_err();
+    assert_eq!(err.kind(),std::io::ErrorKind::Interrupted);
+    assert!(!dst.exists());assert_eq!(fs::read(&src).unwrap(),vec![0x33;2*1024*1024]);
+    assert_eq!(e.pending().unwrap().len(),1);
+}
+
+#[test]
+fn batch_path_index_rejects_nonadjacent_ancestors_and_duplicate_targets(){
+    let f=Fixture::new();let e=f.engine();
+    let parent=f.root.join("parent");fs::create_dir(&parent).unwrap();
+    let child=parent.join("child");fs::write(&child,b"child").unwrap();
+    let sibling=f.root.join("parent-other");fs::write(&sibling,b"sibling").unwrap();
+    let first=e.destination(&f.root.join("one")).unwrap();
+    let second=e.destination(&f.root.join("two")).unwrap();
+    let third=e.destination(&f.root.join("three")).unwrap();
+    let p=e.review(&parent).unwrap();let c=e.review(&child).unwrap();let s=e.review(&sibling).unwrap();
+    assert!(e.validate_batch(&[(p,first.clone()),(s.clone(),second.clone()),(c.clone(),third)],Transfer::Copy).is_err());
+    assert!(e.validate_batch(&[(c,first.clone()),(s,first)],Transfer::Copy).is_err());
+    assert!(e.pending().unwrap().is_empty());
+}
+
+#[test]
+fn recovery_report_preserves_bad_records_and_shows_valid_ones(){
+    let f=Fixture::new();let e=f.engine();
+    let good=f.journal.join("good.pending.json");
+    let bad=f.journal.join("bad.pending.json");
+    let link=f.journal.join("link.pending.json");
+    fs::write(&good,b"{\"operation\":\"copy\"}").unwrap();
+    fs::write(&bad,b"{broken").unwrap();
+    for p in [&good,&bad]{fs::set_permissions(p,fs::Permissions::from_mode(0o600)).unwrap();}
+    symlink(&good,&link).unwrap();
+    let (rows,truncated)=e.recovery_report().unwrap();
+    assert!(!truncated);assert_eq!(rows.len(),3);
+    assert_eq!(rows.iter().filter(|(_,r)|r.is_ok()).count(),1);
+    assert_eq!(fs::read(&bad).unwrap(),b"{broken");
+    assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+    assert_eq!(fs::read_dir(&f.journal).unwrap().count(),3);
+}

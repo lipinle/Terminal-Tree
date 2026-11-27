@@ -8,6 +8,7 @@ import stat
 import subprocess
 import sys
 import traceback
+import urllib.parse
 
 sys.path.insert(0, "/tt")
 import tree
@@ -24,6 +25,28 @@ CASES = (
     "copy-after-sync", "copy-done",
     "move-before-sync", "move-after-sync", "move-done",
 )
+PERSONAL_CASES = (
+    "trash-journal",
+    "trash-info-synced",
+    "trash-before-sync",
+    "trash-after-sync",
+    "trash-done",
+    "restore-journal",
+    "restore-before-sync",
+    "restore-after-sync",
+    "restore-info-before-sync",
+    "restore-info-after-sync",
+    "restore-done",
+    "purge-journal",
+    "purge-entry-before-sync",
+    "purge-entry-after-sync",
+    "purge-data-synced",
+    "purge-info-before-sync",
+    "purge-info-after-sync",
+    "purge-done",
+)
+TRASH = WORK / ".local/share/Trash"
+JOURNAL = ROOT / "state/terminal-tree/operations"
 
 
 def require(condition, message):
@@ -180,15 +203,161 @@ def verify(case, engine="python", fixture="file"):
           + " pending=" + str(len(records)), flush=True)
 
 
+
+def personal_entries(path):
+    """Exact surviving non-directory data and metadata, without following links."""
+    result = {}
+    for p in [path, *path.rglob("*")]:
+        s = p.lstat()
+        record = {
+            "mode": s.st_mode, "uid": s.st_uid, "gid": s.st_gid,
+            "attrs": {k: os.getxattr(p, k, follow_symlinks=False).hex()
+                      for k in os.listxattr(p, follow_symlinks=False)},
+        }
+        if not stat.S_ISDIR(s.st_mode):
+            record["mtime"] = s.st_mtime_ns
+            if stat.S_ISLNK(s.st_mode):
+                record["target"] = os.readlink(p)
+            else:
+                require(stat.S_ISREG(s.st_mode), "unexpected special file")
+                record["hash"] = digest(p)
+        result[str(p.relative_to(path))] = record
+    return result
+
+
+def prepare_personal(case, fixture):
+    prepare("rust", fixture)
+    # Purge intentionally refuses hard-linked payloads. Use independent files
+    # for its recursive fixture, keeping the rest of the tree unchanged.
+    if fixture == "tree" and case.startswith("purge-"):
+        link = SOURCE / "nested/hard-link"
+        link.unlink()
+        link.write_bytes(DATA)
+        os.chmod(link, 0o640)
+    for p in (TRASH, TRASH / "files", TRASH / "info", JOURNAL):
+        p.mkdir(parents=True, exist_ok=True)
+        p.chmod(0o700)
+    # The actual production personal policy must run as a normal user.
+    for p in [*WORK.rglob("*"), WORK, JOURNAL, JOURNAL.parent, JOURNAL.parent.parent]:
+        os.chown(p, 1000, 1000, follow_symlinks=False)
+    if fixture == "tree":
+        for p in [*SOURCE.rglob("*"), SOURCE]:
+            os.utime(p, ns=(1700000000123456789, 1700000000123456789), follow_symlinks=False)
+        (ROOT / "baseline.json").write_text(tree_manifest(SOURCE), encoding="ascii")
+    (ROOT / "personal-baseline.json").write_text(
+        json.dumps(personal_entries(SOURCE), ensure_ascii=True), encoding="ascii")
+    if not case.startswith("trash-"):
+        SOURCE.rename(TRASH / "files/source.bin")
+        info = TRASH / "info/source.bin.trashinfo"
+        info.write_text("[Trash Info]\nPath=" + urllib.parse.quote(str(SOURCE), safe="/")
+                        + "\nDeletionDate=2026-01-01T00:00:00\n", encoding="ascii")
+        info.chmod(0o600)
+        os.chown(info, 1000, 1000)
+    # Additional Trash sentinel: purge must not touch other Trash entries.
+    (TRASH / "files/unrelated").write_text("trash sentinel", encoding="ascii")
+    (TRASH / "info/unrelated.trashinfo").write_text("sentinel metadata", encoding="ascii")
+    os.sync()
+
+
+def verify_personal(case, fixture):
+    require(SENTINEL.read_text() == "do not modify", "unrelated home data changed")
+    require((TRASH / "files/unrelated").read_text() == "trash sentinel", "unrelated Trash data changed")
+    require((TRASH / "info/unrelated.trashinfo").read_text() == "sentinel metadata", "unrelated Trash metadata changed")
+    op = ("native-trash" if case.startswith("trash-") else
+          "restore" if case.startswith("restore-") else "permanent-delete")
+    pending = list(JOURNAL.glob("*.pending.json"))
+    done = list(JOURNAL.glob("*.done.json"))
+    completed = case.endswith("-done")
+    require(len(pending) == (0 if completed else 1) and len(done) == (1 if completed else 0),
+            "incorrect durable journal state")
+    record = json.loads((done if completed else pending)[0].read_text())
+    require(record["operation"] == op, "incorrect journal operation")
+    item = Path(record["destination"]) if op == "native-trash" else TRASH / "files/source.bin"
+    info = Path(record["stage"])
+    require(item.parent == TRASH / "files" and info == TRASH / "info" / (item.name + ".trashinfo"),
+            "journal paths outside expected Trash")
+    require(record["source"] == str(SOURCE if op == "native-trash" else item), "wrong source")
+    require(record["destination"] == (str(item) if op == "native-trash" else str(SOURCE) if op == "restore" else None), "wrong destination")
+    src, dst, meta = SOURCE.exists(), item.exists(), info.exists()
+    require(set((TRASH / "files").iterdir()) <= {item, TRASH / "files/unrelated"}, "unexpected Trash entries")
+    require(set((TRASH / "info").iterdir()) <= {info, TRASH / "info/unrelated.trashinfo"}, "unexpected Trash metadata")
+    if meta:
+        raw = info.read_text(encoding="ascii").splitlines()
+        paths = [x[5:] for x in raw if x.startswith("Path=")]
+        require(raw[0] == "[Trash Info]" and len(paths) == 1 and
+                urllib.parse.unquote_to_bytes(paths[0]) == os.fsencode(SOURCE), "invalid surviving Trash metadata")
+    baseline = json.loads((ROOT / "personal-baseline.json").read_text(encoding="ascii"))
+    if op != "permanent-delete":
+        require(src != dst, "exactly one intact payload required")
+        payload = SOURCE if src else item
+        require(personal_entries(payload) == baseline, "payload or metadata changed")
+        if fixture == "tree":
+            require(tree_manifest(payload) == (ROOT / "baseline.json").read_text(encoding="ascii"),
+                    "full tree or hard-link topology changed")
+        if op == "native-trash":
+            require(not dst or meta, "trashed payload has no restore metadata")
+            if case == "trash-journal":
+                require(src and not meta, "mutation before metadata publication")
+            if case == "trash-info-synced":
+                require(src and meta, "synced metadata missing")
+            if case in ("trash-after-sync", "trash-done"):
+                require(dst and meta, "synced Trash data missing")
+        else:
+            require(not dst or meta, "unrestored payload has no restore metadata")
+            if case == "restore-journal":
+                require(dst and meta, "restore changed before rename")
+            if case in ("restore-after-sync", "restore-info-before-sync",
+                        "restore-info-after-sync", "restore-done"):
+                require(src, "synced restored data missing")
+            if case in ("restore-journal", "restore-before-sync", "restore-after-sync"):
+                require(meta, "metadata removed before data sync")
+            if case in ("restore-info-after-sync", "restore-done"):
+                require(not meta, "synced metadata removal lost")
+    else:
+        require(not src, "purge recreated original")
+        if dst:
+            survivors = personal_entries(item)
+            require(all(k in baseline and v == baseline[k] for k, v in survivors.items()),
+                    "unexpected or corrupted surviving purge entries")
+            require(meta, "partial purge lost metadata")
+            if case == "purge-journal":
+                require(survivors == baseline, "purge changed before journal checkpoint")
+            if case == "purge-entry-after-sync":
+                require(len(survivors) < len(baseline), "synced entry removal lost")
+        if case == "purge-journal":
+            require(dst and meta, "purge changed before deletion")
+        if case in ("purge-data-synced", "purge-info-before-sync",
+                    "purge-info-after-sync", "purge-done"):
+            require(not dst, "synced purge resurrected data")
+        if case in ("purge-info-after-sync", "purge-done"):
+            require(not meta, "synced metadata removal lost")
+        if case in ("purge-journal", "purge-entry-before-sync",
+                    "purge-entry-after-sync", "purge-data-synced"):
+            require(meta, "purge metadata removed before data sync")
+    print(f"TT_PASS {case} source={src} trash={dst} info={meta} pending={len(pending)}", flush=True)
+
+
 def main():
     args = dict(token.split("=", 1) for token in Path("/proc/cmdline").read_text().split()
                 if "=" in token)
     case = args.get("tt_case")
-    require(case in CASES, "invalid case")
+    require(case in CASES + PERSONAL_CASES, "invalid case")
     engine = args.get("tt_engine", "python")
     require(engine in ("python", "rust"), "invalid engine")
     fixture = args.get("tt_fixture", "file")
     require(fixture == "file" or (engine == "rust" and fixture == "tree"), "invalid fixture")
+    if case in PERSONAL_CASES:
+        require(engine == "rust", "personal cases require native engine")
+        if args.get("tt_phase") == "execute":
+            prepare_personal(case, fixture)
+            env = dict(os.environ, HOME=str(WORK), XDG_DATA_HOME=str(TRASH.parent))
+            subprocess.run(["/tt/tt-crash-probe", case, fixture], env=env,
+                           user=1000, group=1000, extra_groups=[], check=True)
+            raise RuntimeError("native personal probe unexpectedly returned")
+        if args.get("tt_phase") == "verify":
+            verify_personal(case, fixture)
+            return
+        raise ValueError("invalid phase")
     if args.get("tt_phase") == "execute":
         if engine == "rust":
             prepare(engine, fixture)

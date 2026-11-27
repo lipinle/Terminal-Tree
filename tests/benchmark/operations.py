@@ -56,26 +56,47 @@ def once(binary,base,shape,kind,lang,number):
     source=work/"source"; destination=work/"destination"
     make(source,shape)
     before=snapshot(source)
-    cmd=([binary,str(work),str(journal),kind] if lang=="rust" else
+    cmd=([binary,str(work),str(journal),kind] if lang in ("rust","baseline") else
          [sys.executable,"-c",PYTHON,str(ROOT/"legacy/python/src"),str(work),str(state),kind])
     result=subprocess.run(cmd,check=True,capture_output=True,text=True)
     assert snapshot(destination)==before
     if kind=="copy": assert snapshot(source)==before
     else: assert not source.exists()
-    return float(result.stdout.strip())
+    phases={}
+    for line in result.stderr.splitlines():
+        if line.startswith("TT_PHASES "):
+            phases=json.loads(line.removeprefix("TT_PHASES "))
+    return float(result.stdout.strip()), phases
 
-def main(binary):
+def main(binary,baseline=None):
     result={}
+    profile={}
+    comparison={}
     with tempfile.TemporaryDirectory(prefix="tt-ops-benchmark-") as tmp:
         base=Path(tmp)
         for shape in ("file32MiB","tree500"):
             for kind in ("copy","move"):
                 samples={"python":[],"rust":[]}
+                phase_samples={}
+                if baseline: samples["baseline"]=[]
                 for i in range(3):
-                    for lang in (("python","rust") if i%2==0 else ("rust","python")):
-                        samples[lang].append(once(binary,base,shape,kind,lang,i))
+                    order=list(samples)
+                    order=order[i%len(order):]+order[:i%len(order)]
+                    for lang in order:
+                        # Baseline uses the old Rust binary but distinct fixtures.
+                        elapsed,phases=once(baseline if lang=="baseline" else binary,base,shape,kind,lang,i)
+                        samples[lang].append(elapsed)
+                        if lang=="rust":
+                            for k,v in phases.items():phase_samples.setdefault(k,[]).append(v)
                 p,r=[statistics.median(samples[l]) for l in ("python","rust")]
-                result[f"{shape}_{kind}"]={"python_ms":round(p,3),"rust_ms":round(r,3),"python_over_rust":round(p/r,2)}
+                key=f"{shape}_{kind}"
+                result[key]={"python_ms":round(p,3),"rust_ms":round(r,3),"python_over_rust":round(p/r,2)}
+                profile[key]={k:round(statistics.median(v),3) for k,v in phase_samples.items()}
+                if baseline:
+                    old=statistics.median(samples["baseline"])
+                    comparison[key]={"baseline_ms":round(old,3),"current_ms":round(r,3),"baseline_over_current":round(old/r,3)}
     print("TT_OPS_BENCHMARK "+json.dumps(result,sort_keys=True))
+    print("TT_PHASE_BENCHMARK "+json.dumps(profile,sort_keys=True))
+    if baseline: print("TT_SAME_RUN_BENCHMARK "+json.dumps(comparison,sort_keys=True))
 
-if __name__=="__main__": main(str(Path(sys.argv[1]).resolve()))
+if __name__=="__main__": main(str(Path(sys.argv[1]).resolve()),str(Path(sys.argv[2]).resolve()) if len(sys.argv)>2 else None)

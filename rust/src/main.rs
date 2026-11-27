@@ -11,11 +11,21 @@ use std::env;
 use std::ffi::OsString;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
-use terminal_tree::{display_name, scan, Model, Order};
+use terminal_tree::{display_name, scan, Model, Order, KindFilter};
 use unicode_width::UnicodeWidthChar;
 #[cfg(feature = "native-ops")]
 mod workspace;
+#[cfg(feature="native-ops")]
+mod worker;
+mod places;
+mod platform;
+mod help;
+#[cfg(feature="native-ops")]
+mod recovery;
+#[cfg(feature="native-ops")]
+mod settings;
 
 fn clip(text: &str, limit: usize) -> String {
     let mut width = 0;
@@ -64,7 +74,7 @@ impl Drop for Terminal {
     }
 }
 
-fn draw(model: &mut Model, message: &str, searching: bool, writable: bool) -> io::Result<()> {
+fn draw(model: &mut Model, message: &str, searching: bool, writable: bool, #[cfg(feature="native-ops")] workspace:Option<&workspace::Workspace>) -> io::Result<()> {
     let (w, h) = terminal::size()?;
     let width = usize::from(w).saturating_sub(1);
     let mut out = io::stdout().lock();
@@ -77,23 +87,31 @@ fn draw(model: &mut Model, message: &str, searching: bool, writable: bool) -> io
     for (row, index) in (start..end).enumerate() {
         let e = &model.entries[index];
         let (glyph, color) = icon(e.directory, e.symlink);
+        #[cfg(feature="native-ops")]
+        let marked=workspace.is_some_and(|w|w.marked(&e.path));
+        #[cfg(not(feature="native-ops"))]
+        let marked=false;
         queue!(out, MoveTo(0, (row + 1) as u16))?;
         if index == model.selected {
             queue!(out, SetBackgroundColor(Color::DarkGrey))?;
         }
         queue!(out, SetForegroundColor(color), Print(clip(
-            &format!("{} {} {}", if index + 1 == model.entries.len() { "└──" } else { "├──" }, glyph, e.name),
+            &format!("{} {} {} {}", if index + 1 == model.entries.len() { "└──" } else { "├──" }, if marked {"[x]"}else{"   "}, glyph, e.name),
             width)), ResetColor)?;
     }
+    #[cfg(feature="native-ops")]
+    let marked_count=workspace.map_or(0,|w|w.marked_count());
+    #[cfg(not(feature="native-ops"))]
+    let marked_count=0;
     queue!(out, MoveTo(0, h - 3), Print(clip(&format!(
-        "{}/{} | sort {:?} | hidden {} | filter: {}", if model.entries.is_empty() { 0 } else { model.selected + 1 },
-        model.entries.len(), model.order, model.hidden,
+        "{}/{} | marked {} | sort {:?} | hidden {} | kind {:?} | filter: {}", if model.entries.is_empty() { 0 } else { model.selected + 1 },
+        model.entries.len(), marked_count, model.order, model.hidden, model.kind_filter,
         display_name(std::ffi::OsStr::new(&model.query))), width)),
         MoveTo(0, h - 2), Print(clip(message, width)),
         MoveTo(0, h - 1), Print(clip(if searching {
             "Filter: type text | Enter accept | Esc cancel"
         } else if writable {
-            "c/x/v copy/cut/paste | r rename | n/t create | d trash | R restore | D purge | u undo | q exit"
+            "Space mark | a all | A clear | c/x/v transfer | d/R/D trash/restore/purge | F1 help | q exit"
         } else {
             "↑↓ select | ← parent | →/Enter folder | / filter | h hidden | s sort | F5 refresh | q exit"
         }, width)))?;
@@ -132,20 +150,47 @@ fn page(title: &str, lines: &[String]) -> io::Result<()> {
         }
     }
 }
+fn choose(title:&str,lines:&[String])->io::Result<Option<usize>>{
+    if lines.is_empty(){return Ok(None);}
+    let mut selected=0usize;let mut top=0usize;
+    loop{
+        let(w,h)=terminal::size()?;let width=usize::from(w).saturating_sub(1);
+        let cap=usize::from(h).saturating_sub(2).max(1);
+        if selected<top{top=selected;}else if selected>=top+cap{top=selected+1-cap;}
+        let mut out=io::stdout().lock();
+        queue!(out,MoveTo(0,0),Clear(ClearType::All),Print(clip(title,width)))?;
+        if h>=3{
+            for(i,line)in lines.iter().enumerate().skip(top).take(cap){
+                queue!(out,MoveTo(0,(i-top+1) as u16))?;
+                if i==selected{queue!(out,SetBackgroundColor(Color::DarkGrey))?;}
+                queue!(out,Print(clip(line,width)),ResetColor)?;
+            }
+            queue!(out,MoveTo(0,h-1),Print(clip("Up/Down | Enter select | Esc cancel",width)))?;
+        }
+        out.flush()?;drop(out);
+        if let Event::Key(k)=event::read()?{
+            if !matches!(k.kind,KeyEventKind::Press|KeyEventKind::Repeat){continue;}
+            match k.code{
+                KeyCode::Esc|KeyCode::Char('q')=>return Ok(None),
+                KeyCode::Enter=>return Ok(Some(selected)),
+                KeyCode::Up=>selected=selected.saturating_sub(1),
+                KeyCode::Down=>selected=(selected+1).min(lines.len()-1),
+                KeyCode::PageUp=>selected=selected.saturating_sub(cap),
+                KeyCode::PageDown=>selected=(selected+cap).min(lines.len()-1),
+                KeyCode::Home=>selected=0,KeyCode::End=>selected=lines.len()-1,
+                _=>(),
+            }
+        }
+    }
+}
+#[cfg(feature="native-ops")]
+fn actions_menu(w:&mut workspace::Workspace,model:&mut Model)->io::Result<Option<String>>{
+    let actions=[('c',"Copy"),('x',"Cut"),('v',"Paste"),('r',"Rename"),('n',"New directory"),('t',"New file"),('d',"Move to Trash"),('R',"Restore"),('D',"Permanent Delete"),('u',"Undo move"),('j',"Recovery"),('S',"Save Rust view settings")];
+    let labels:Vec<_>=actions.iter().map(|(_,label)|label.to_string()).collect();
+    if let Some(i)=choose("Actions - writes require review",&labels)?{w.operate(actions[i].0,model).map(Some)}else{Ok(None)}
+}
 fn properties(path:&Path)->io::Result<()> {
-    use std::os::unix::fs::MetadataExt;
-    let m=std::fs::symlink_metadata(path)?;
-    let mut lines=vec![
-        display_name(path.as_os_str()),
-        format!("Mode: {:o}",m.mode()),
-        format!("Size: {} bytes",m.len()),
-        format!("UID/GID: {}/{}",m.uid(),m.gid()),
-        format!("Modified (Unix): {}.{:09}",m.mtime(),m.mtime_nsec()),
-        format!("Device/inode: {}/{}",m.dev(),m.ino()),
-        format!("Hard links: {}",m.nlink()),
-    ];
-    if m.file_type().is_symlink() {lines.push(format!("Link: {}",display_name(std::fs::read_link(path)?.as_os_str())));}
-    page("Properties",&lines)
+    page("Properties",&platform::properties(path)?)
 }
 #[cfg(feature="native-ops")]
 fn preview(path:&Path)->io::Result<()> {
@@ -174,25 +219,29 @@ fn preview(path:&Path)->io::Result<()> {
 fn browse(path: PathBuf, return_on_enter: bool, #[cfg(feature = "native-ops")] mut workspace: Option<workspace::Workspace>) -> io::Result<PathBuf> {
     #[cfg(feature = "native-ops")]
     let writable = workspace.is_some();
+    #[cfg(feature = "native-ops")]
+    let personal = workspace.as_ref().is_some_and(|w|w.is_personal());
     #[cfg(not(feature = "native-ops"))]
     let writable = false;
+    #[cfg(not(feature = "native-ops"))]
+    let personal = false;
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "Interactive terminal required"));
     }
     let mut model = Model::new(path)?;
     #[cfg(feature = "native-ops")]
-    if let Some(w) = &mut workspace { w.observe(&model); }
+    if let Some(w) = &mut workspace { w.load_settings(&mut model)?;w.observe(&model); }
     let _terminal = Terminal::enter()?;
-    let mut message = String::from(if writable {"Experimental scoped workspace. Review all operations."} else {"Experimental read-only build. File mutations disabled."});
+    let mut message = String::from(if personal {"Personal preview: approved roots; same-filesystem home Trash only."} else if writable {"Experimental scoped workspace. Review all operations."} else {"Experimental read-only build. File mutations disabled."});
     let mut searching = false;
     let mut previous_query = String::new();
     loop {
-        draw(&mut model, &message, searching, writable)?;
+        draw(&mut model, &message, searching, writable, #[cfg(feature="native-ops")] workspace.as_ref())?;
         let event = event::read()?;
         #[cfg(feature = "native-ops")]
         let reload_event = match &event {
             Event::Key(k) => searching || matches!(k.code, KeyCode::Right | KeyCode::Left | KeyCode::Enter
-                | KeyCode::Char('h'|'s'|'f'|'g'|'['|']') | KeyCode::F(5)),
+                | KeyCode::Char('h'|'s'|'f'|'g'|'['|']'|'m') | KeyCode::F(5) | KeyCode::F(4) | KeyCode::F(7) | KeyCode::F(6)),
             Event::Mouse(m) => matches!(m.kind, MouseEventKind::Down(MouseButton::Left)),
             _ => false,
         };
@@ -227,9 +276,7 @@ fn browse(path: PathBuf, return_on_enter: bool, #[cfg(feature = "native-ops")] m
                                 if e.directory { model.enter() }
                                 else if e.path.is_file() {
                                     // Explicit external open; the chosen application may edit a file.
-                                    match std::process::Command::new("xdg-open").arg(&e.path)
-                                        .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null())
-                                        .stderr(std::process::Stdio::null()).spawn() {
+                                    match platform::open_file(&e.path) {
                                         Ok(mut child)=> {
                                             std::thread::spawn(move || {let _=child.wait();});
                                             message=format!("Opening: {}",e.name); Ok(())
@@ -262,6 +309,23 @@ fn browse(path: PathBuf, return_on_enter: bool, #[cfg(feature = "native-ops")] m
                                 }
                             }
                         }
+                        KeyCode::Char('m') | KeyCode::F(4) => {
+                            match places::choose()? {Some(p)=>model.go(p),None=>Ok(())}
+                        }
+                        KeyCode::F(7) => {
+                            let labels=["All entries","Directories (not links)","Non-directory entries (not links)","Symbolic links"].map(str::to_owned);
+                            if let Some(i)=choose("Filter entry type",&labels)?{
+                                let old=model.kind_filter;
+                                model.kind_filter=[KindFilter::All,KindFilter::Directories,KindFilter::Files,KindFilter::Links][i];
+                                if let Err(e)=model.reload(){model.kind_filter=old;Err(e)}else{Ok(())}
+                            }else{Ok(())}
+                        }
+                        #[cfg(feature="native-ops")]
+                        KeyCode::F(6) => {
+                            if let Some(w)=&mut workspace{
+                                match actions_menu(w,&mut model)?{Some(msg)=>{message=msg;Ok(())},None=>Ok(())}
+                            }else{Ok(())}
+                        }
                         KeyCode::Char('i') => {
                             match model.entries.get(model.selected) {
                                 Some(e)=>properties(&e.path),
@@ -276,15 +340,9 @@ fn browse(path: PathBuf, return_on_enter: bool, #[cfg(feature = "native-ops")] m
                             }
                         }
                         KeyCode::F(1) | KeyCode::Char('?') => {
-                            let lines=["Arrows / mouse: navigate; Enter: enter folder / open file",
-                                "q / Esc: exit; [ ] history; h hidden; s sort",
-                                "/ filter; g go to path; F5 refresh; i properties; p/F3 preview",
-                                "Workspace only: c/x/v copy/cut/paste; r rename; n/t create",
-                                "d trash; R restore; D purge; u undo; j pending journal",
-                                "All writes require explicit review. Default browse is read-only."].map(str::to_owned);
-                            page("Terminal Tree help",&lines)
+                            help::show(writable, personal, return_on_enter)
                         }
-                        KeyCode::Char('x' | 'v' | 'c' | 'd' | 'D' | 'r' | 'n' | 't' | 'R' | 'u' | 'j')
+                        KeyCode::Char('x' | 'v' | 'c' | 'd' | 'D' | 'r' | 'n' | 't' | 'R' | 'u' | 'j' | ' ' | 'a' | 'A' | 'S')
                         | KeyCode::Delete | KeyCode::F(2) => {
                             #[cfg(feature = "native-ops")]
                             if let Some(w) = &mut workspace {
@@ -311,6 +369,17 @@ fn browse(path: PathBuf, return_on_enter: bool, #[cfg(feature = "native-ops")] m
                             let i = model.top + usize::from(mouse.row - 1);
                             if i < model.entries.len() {
                                 model.selected = i;
+                                #[cfg(feature="native-ops")]
+                                if let Some(w)=&mut workspace{
+                                    if mouse.kind==MouseEventKind::Down(MouseButton::Left)&&mouse.modifiers.contains(KeyModifiers::CONTROL){
+                                        match w.operate(' ',&mut model){Ok(msg)=>message=msg,Err(e)=>message=display_name(std::ffi::OsStr::new(&e.to_string()))}
+                                        continue;
+                                    }
+                                    if mouse.kind==MouseEventKind::Down(MouseButton::Right)&&mouse.modifiers.contains(KeyModifiers::SHIFT){
+                                        match actions_menu(w,&mut model){Ok(Some(msg))=>message=msg,Ok(None)=>(),Err(e)=>message=display_name(std::ffi::OsStr::new(&e.to_string()))}
+                                        continue;
+                                    }
+                                }
                                 if mouse.kind == MouseEventKind::Down(MouseButton::Left) { model.enter() }
                                 else { Ok(()) }
                             } else { Ok(()) }
@@ -388,6 +457,28 @@ fn run() -> io::Result<()> {
             { browse(p,false).map(|_| ()) }
         },
         #[cfg(feature = "native-ops")]
+        Some("--personal") => {
+            // Never infer a broader scope from an arbitrary HOME override.
+            // Resolve the real account's home from NSS via getent, then require
+            // the environment HOME to agree. This mode is explicitly opt-in.
+            let uid=rustix::process::getuid().as_raw();
+            let output=std::process::Command::new("getent").args(["passwd",&uid.to_string()]).output()?;
+            if !output.status.success(){return Err(io::Error::other("account home unavailable"));}
+            let raw=output.stdout.strip_suffix(b"\n").unwrap_or(&output.stdout);
+            let fields:Vec<_>=raw.split(|b|*b==b':').collect();
+            if fields.len()!=7 || fields[2]!=uid.to_string().as_bytes() || raw.contains(&b'\n'){
+                return Err(io::Error::other("ambiguous account record"));
+            }
+            let home=PathBuf::from(std::ffi::OsStr::from_bytes(fields[5]));
+            if env::var_os("HOME").as_deref()!=Some(home.as_os_str()){
+                return Err(io::Error::other("HOME differs from account home"));
+            }
+            let journal=path_arg(Some(args.next().ok_or_else(||io::Error::other("private existing journal path required"))?))?;
+            let extras=args.map(|p|path_arg(Some(p))).collect::<io::Result<Vec<_>>>()?;
+            let w=workspace::Workspace::personal(&home,&journal,&extras)?;
+            browse(home,false,Some(w)).map(|_| ())
+        },
+        #[cfg(feature = "native-ops")]
         Some("--workspace") => {
             let root=path_arg(args.next())?;
             let journal=path_arg(Some(args.next().ok_or_else(||io::Error::other("journal path required"))?))?;
@@ -402,6 +493,7 @@ fn run() -> io::Result<()> {
             if args.next().is_some() { return Err(io::Error::other("unexpected argument")); }
             result_channel(result)
         },
+        #[cfg(unix)]
         Some("--scan-paths0") => {
             let p = path_arg(args.next())?;
             let order = match args.next().as_deref().and_then(|s| s.to_str()) {

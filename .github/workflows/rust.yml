@@ -30,6 +30,8 @@ jobs:
           rustc --version
           cargo test --locked --manifest-path rust/Cargo.toml --features native-ops
           cargo build --locked --release --manifest-path rust/Cargo.toml --features native-ops --bin terminal-tree
+      - name: Test actual limited filesystem, mount isolation and permissions
+        run: bash tests/benchmark/mounted.sh
       - name: Cross-language scan parity and terminal smoke test
         run: |
           python3 tests/benchmark/parity.py --binary rust/target/release/terminal-tree
@@ -37,6 +39,12 @@ jobs:
         run: python3 tests/benchmark/workspace.py rust/target/release/terminal-tree
       - name: Exercise copy, move, preview and Trash through PTY
         run: python3 tests/benchmark/ui_transfer.py rust/target/release/terminal-tree
+      - name: Exercise batch operations through PTY
+        run: python3 tests/benchmark/batch.py rust/target/release/terminal-tree
+      - name: Exercise recovery and view controls through PTY
+        run: python3 tests/benchmark/ui_tools.py rust/target/release/terminal-tree
+      - name: Exercise categorized help in small terminal
+        run: python3 tests/benchmark/help.py rust/target/release/terminal-tree
       - name: Test secure result channel and preview shell syntax
         run: |
           python3 tests/benchmark/result.py rust/target/release/terminal-tree
@@ -50,7 +58,12 @@ jobs:
       - name: Benchmark verified copy and move
         run: |
           cargo build --locked --release --manifest-path rust/Cargo.toml --features native-ops --example operation_benchmark
-          python3 tests/benchmark/operations.py rust/target/release/examples/operation_benchmark
+          # Compare against the last verified worker revision on the same runner.
+          git fetch --no-tags --depth=1 origin 4e9baa9807401367d6571c537be0c199b2fa117f
+          git worktree add --detach "$RUNNER_TEMP/tt-baseline" FETCH_HEAD
+          cargo build --locked --release --manifest-path "$RUNNER_TEMP/tt-baseline/rust/Cargo.toml" --features native-ops --example operation_benchmark
+          python3 tests/benchmark/operations.py rust/target/release/examples/operation_benchmark "$RUNNER_TEMP/tt-baseline/rust/target/release/examples/operation_benchmark"
+          git worktree remove --force "$RUNNER_TEMP/tt-baseline"
       - name: Verify experimental write commands are unavailable
         run: |
           if rust/target/release/terminal-tree --delete /tmp; then
