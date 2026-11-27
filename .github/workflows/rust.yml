@@ -35,6 +35,8 @@ jobs:
           python3 tests/benchmark/parity.py --binary rust/target/release/terminal-tree
       - name: Exercise scoped write UI through PTY
         run: python3 tests/benchmark/workspace.py rust/target/release/terminal-tree
+      - name: Exercise copy, move, preview and Trash through PTY
+        run: python3 tests/benchmark/ui_transfer.py rust/target/release/terminal-tree
       - name: Test secure result channel and preview shell syntax
         run: |
           python3 tests/benchmark/result.py rust/target/release/terminal-tree

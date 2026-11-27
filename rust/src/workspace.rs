@@ -40,7 +40,7 @@ fn wrap(s: &str, width: usize) -> Vec<String> {
     }
     lines
 }
-fn prompt(label: &str) -> io::Result<Option<String>> {
+pub(crate) fn prompt(label: &str) -> io::Result<Option<String>> {
     let mut input = String::new();
     loop {
         let (w,h) = terminal::size()?;

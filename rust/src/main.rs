@@ -192,7 +192,7 @@ fn browse(path: PathBuf, return_on_enter: bool, #[cfg(feature = "native-ops")] m
         #[cfg(feature = "native-ops")]
         let reload_event = match &event {
             Event::Key(k) => searching || matches!(k.code, KeyCode::Right | KeyCode::Left | KeyCode::Enter
-                | KeyCode::Char('h'|'s'|'f'|'['|']') | KeyCode::F(5)),
+                | KeyCode::Char('h'|'s'|'f'|'g'|'['|']') | KeyCode::F(5)),
             Event::Mouse(m) => matches!(m.kind, MouseEventKind::Down(MouseButton::Left)),
             _ => false,
         };
@@ -221,11 +221,23 @@ fn browse(path: PathBuf, return_on_enter: bool, #[cfg(feature = "native-ops")] m
                         KeyCode::Enter if return_on_enter && model.entries.get(model.selected).is_some_and(|e| e.directory) => {
                             match model.enter() { Ok(()) => break, Err(e) => Err(e) }
                         }
-                        KeyCode::Right | KeyCode::Enter => {
-                            if model.entries.get(model.selected).is_some_and(|e| !e.directory) {
-                                message = "File opening is not implemented in this read-only port.".into();
-                                Ok(())
-                            } else { model.enter() }
+                        KeyCode::Right => model.enter(),
+                        KeyCode::Enter => {
+                            if let Some(e) = model.entries.get(model.selected) {
+                                if e.directory { model.enter() }
+                                else if e.path.is_file() {
+                                    // Explicit external open; the chosen application may edit a file.
+                                    match std::process::Command::new("xdg-open").arg(&e.path)
+                                        .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null())
+                                        .stderr(std::process::Stdio::null()).spawn() {
+                                        Ok(mut child)=> {
+                                            std::thread::spawn(move || {let _=child.wait();});
+                                            message=format!("Opening: {}",e.name); Ok(())
+                                        }
+                                        Err(err)=>Err(err),
+                                    }
+                                } else {Err(io::Error::other("select a regular file or folder"))}
+                            } else {Ok(())}
                         }
                         KeyCode::Left => model.parent(),
                         KeyCode::Char('[') => model.history(false),
@@ -234,6 +246,22 @@ fn browse(path: PathBuf, return_on_enter: bool, #[cfg(feature = "native-ops")] m
                         KeyCode::Char('s') => { model.order = model.order.next(); model.reload() }
                         KeyCode::F(5) | KeyCode::Char('f') => model.reload(),
                         KeyCode::Char('/') => { previous_query = model.query.clone(); searching = true; Ok(()) }
+                        #[cfg(feature="native-ops")]
+                        KeyCode::Char('g') => {
+                            match workspace::prompt("Go to path:")? {
+                                None=>Ok(()),
+                                Some(s) if s.is_empty()=>Ok(()),
+                                Some(s)=>{
+                                    let path=if s=="~" || s.starts_with("~/") {
+                                        match env::var_os("HOME") {
+                                            Some(home)=>PathBuf::from(home).join(s.strip_prefix("~/").unwrap_or("")),
+                                            None=>return Err(io::Error::other("HOME unavailable")),
+                                        }
+                                    } else {model.directory.join(s)};
+                                    path.canonicalize().and_then(|p|model.go(p))
+                                }
+                            }
+                        }
                         KeyCode::Char('i') => {
                             match model.entries.get(model.selected) {
                                 Some(e)=>properties(&e.path),
@@ -248,9 +276,9 @@ fn browse(path: PathBuf, return_on_enter: bool, #[cfg(feature = "native-ops")] m
                             }
                         }
                         KeyCode::F(1) | KeyCode::Char('?') => {
-                            let lines=["Arrows / mouse: navigate; Enter: enter folder",
+                            let lines=["Arrows / mouse: navigate; Enter: enter folder / open file",
                                 "q / Esc: exit; [ ] history; h hidden; s sort",
-                                "/ filter; F5 refresh; i properties; p/F3 preview (native build)",
+                                "/ filter; g go to path; F5 refresh; i properties; p/F3 preview",
                                 "Workspace only: c/x/v copy/cut/paste; r rename; n/t create",
                                 "d trash; R restore; D purge; u undo; j pending journal",
                                 "All writes require explicit review. Default browse is read-only."].map(str::to_owned);
