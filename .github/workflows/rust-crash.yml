@@ -5,13 +5,11 @@ on:
     paths:
       - 'rust/**'
       - 'tests/crash/**'
-      - 'legacy/python/src/tree.py'
       - '.github/workflows/rust-crash.yml'
   pull_request:
     paths:
       - 'rust/**'
       - 'tests/crash/**'
-      - 'legacy/python/src/tree.py'
       - '.github/workflows/rust-crash.yml'
   workflow_dispatch:
 
@@ -29,6 +27,15 @@ jobs:
         group: [transfer-trash, restore-purge]
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Prepare pinned Python compatibility reference
+        run: |
+          set -euo pipefail
+          reference="$RUNNER_TEMP/tt-python-reference"
+          mkdir -p "$reference"
+          git fetch --no-tags --depth=1 origin da145f5b0799b1958cba09ca95c57c9bb2f3fede
+          git show da145f5b0799b1958cba09ca95c57c9bb2f3fede:legacy/python/src/tree.py > "$reference/tree.py"
+          test "$(git hash-object "$reference/tree.py")" = 3101ff8b3fdbbe0561c28a59f915ab751240e8a9
+          echo "TT_PYTHON_REFERENCE=$reference" >> "$GITHUB_ENV"
       - name: Compile native crash probe
         run: cargo build --locked --release --manifest-path rust/Cargo.toml --features crash-probe --bin tt-crash-probe
       - name: Install VM tools and generic guest kernel
