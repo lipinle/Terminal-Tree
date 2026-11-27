@@ -397,3 +397,36 @@ fn personal_trash_refuses_swapped_dirs_and_protected_state(){
     symlink(&f.base,root.join("files")).unwrap();
     assert!(Trash::new(&e,&data).is_err());
 }
+
+#[test]
+fn batch_preflight_refuses_late_conflicts_and_stale_source(){
+    let f=Fixture::new();let e=f.engine();
+    let src=f.root.join("source");let dst=f.root.join("destination");
+    fs::create_dir(&src).unwrap();fs::create_dir(&dst).unwrap();
+    for n in ["a","b"]{fs::write(src.join(n),n).unwrap();}
+    let items:Vec<_>=["a","b"].iter().map(|n|(e.review(&src.join(n)).unwrap(),e.destination(&dst.join(n)).unwrap())).collect();
+    e.validate_batch(&items,Transfer::Copy).unwrap();
+    fs::write(dst.join("b"),b"sentinel").unwrap();
+    assert!(e.validate_batch(&items,Transfer::Copy).is_err());
+    assert!(!dst.join("a").exists());
+    assert_eq!(fs::read(dst.join("b")).unwrap(),b"sentinel");
+    fs::remove_file(dst.join("b")).unwrap();
+    fs::write(src.join("b"),b"changed").unwrap();
+    assert!(e.validate_batch(&items,Transfer::Move).is_err());
+    assert!(!dst.join("a").exists());
+    assert_eq!(fs::read(src.join("a")).unwrap(),b"a");
+    assert!(e.pending().unwrap().is_empty());
+}
+#[test]
+fn batch_refuses_overlapping_sources_and_targets(){
+    let f=Fixture::new();let e=f.engine();
+    let src=f.root.join("source");fs::create_dir(&src).unwrap();
+    fs::write(src.join("child"),b"keep").unwrap();
+    let a=e.review(&src).unwrap();
+    let b=e.review(&src.join("child")).unwrap();
+    let d1=e.destination(&f.root.join("a")).unwrap();
+    let d2=e.destination(&f.root.join("b")).unwrap();
+    assert!(e.validate_batch(&[(a.clone(),d1.clone()),(b.clone(),d2)],Transfer::Copy).is_err());
+    assert!(e.validate_batch(&[(a,d1.clone()),(b,d1)],Transfer::Copy).is_err());
+    assert!(!f.root.join("a").exists());
+}

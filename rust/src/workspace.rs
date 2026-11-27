@@ -182,7 +182,7 @@ impl Workspace {
         }else{format!("{operation}: {done}/{total} complete")};
         // The complete failure path is shown in a scrollable modal, not just
         // the clipped status bar. No automatic rollback of durable items.
-        if done!=total {super::page("Batch stopped",&wrap(&message,70))?;}
+        if done!=total {let (width,_)=terminal::size()?;super::page("Batch stopped",&wrap(&message,usize::from(width).saturating_sub(1).max(1)))?;}
         self.refresh(model,message)
     }
     pub fn operate(&mut self, key: char, model: &mut Model) -> io::Result<String> {
@@ -212,6 +212,7 @@ impl Workspace {
         }
         let result = match key {
             'c'|'x' => {
+                self.clipboard=None;
                 let reviews = self.reviews(model)?;
                 self.clipboard = Some((reviews, if key=='c' {Transfer::Copy} else {Transfer::Move}));
                 self.clear_marks();
@@ -227,12 +228,12 @@ impl Workspace {
                     items.push((review.clone(),self.engine.destination(&dst)?));
                 }
                 let total=items.len();
-                self.engine.validate_batch(&items,kind)?;
+                if total>1{self.engine.validate_batch(&items,kind)?;}
                 let paths:Vec<_>=items.iter().flat_map(|(r,d)|[r.path(),d.path()]).collect();
                 let title=if total==1 {if matches!(kind,Transfer::Copy){"Copy item".into()}else{"Move item".into()}}
                     else{format!("{} {total} items - each committed separately",if matches!(kind,Transfer::Copy){"Copy"}else{"Move"})};
                 if !confirm(&title,&paths,"yes")?{return Ok("Cancelled".into());}
-                self.engine.validate_batch(&items,kind)?;
+                if total>1{self.engine.validate_batch(&items,kind)?;}
                 let mut done=0;
                 let mut failure=None;
                 for (review,target) in &items{
