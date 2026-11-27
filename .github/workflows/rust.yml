@@ -29,6 +29,12 @@ jobs:
           rustc --version
           cargo test --manifest-path rust/Cargo.toml
           cargo build --release --manifest-path rust/Cargo.toml
+      - name: Cross-language scan parity and terminal smoke test
+        run: |
+          python3 tests/benchmark/parity.py --binary rust/target/release/terminal-tree
+      - name: Record generated Cargo lockfile
+        run: |
+          python3 -c 'import base64; print("TT_CARGO_LOCK "+base64.b64encode(open("rust/Cargo.lock","rb").read()).decode())'
       - name: Compare read-only scan and startup with Python
         run: |
           python3 tests/benchmark/scan.py --binary rust/target/release/terminal-tree

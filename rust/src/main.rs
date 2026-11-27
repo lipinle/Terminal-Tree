@@ -11,6 +11,7 @@ use std::env;
 use std::ffi::OsString;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
+use std::os::unix::ffi::OsStrExt;
 use terminal_tree::{display_name, scan, Model, Order};
 use unicode_width::UnicodeWidthChar;
 
@@ -126,7 +127,7 @@ fn browse(path: PathBuf) -> io::Result<()> {
                         KeyCode::Up => { model.shift(-1); Ok(()) }
                         KeyCode::Down => { model.shift(1); Ok(()) }
                         KeyCode::PageUp => { model.shift(-(terminal::size()?.1.saturating_sub(4) as isize)); Ok(()) }
-                        KeyCode::PageDown => { model.shift((terminal::size()?.1.saturating_sub(4) as isize)); Ok(()) }
+                        KeyCode::PageDown => { model.shift(terminal::size()?.1.saturating_sub(4) as isize); Ok(()) }
                         KeyCode::Home => { model.selected = 0; Ok(()) }
                         KeyCode::End => { model.selected = model.entries.len().saturating_sub(1); Ok(()) }
                         KeyCode::Right | KeyCode::Enter => {
@@ -198,6 +199,29 @@ fn run() -> io::Result<()> {
             list(&path, hidden)
         }
         Some("--browse") => browse(path_arg(args.next())?),
+        Some("--scan-paths0") => {
+            let p = path_arg(args.next())?;
+            let order = match args.next().as_deref().and_then(|s| s.to_str()) {
+                Some("name") => Order::Name,
+                Some("size") => Order::Size,
+                Some("date") => Order::Date,
+                Some("type") => Order::Type,
+                _ => return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid sort order")),
+            };
+            let hidden = match args.next().as_deref().and_then(|s| s.to_str()) {
+                Some("0") => false,
+                Some("1") => true,
+                _ => return Err(io::Error::new(io::ErrorKind::InvalidInput, "hidden must be 0 or 1")),
+            };
+            let query = args.next().unwrap_or_default().into_string()
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid UTF-8 query"))?;
+            let mut out = io::BufWriter::new(io::stdout().lock());
+            for entry in scan(&p, hidden, order, &query)? {
+                out.write_all(entry.path.as_os_str().as_bytes())?;
+                out.write_all(&[0])?;
+            }
+            out.flush()
+        }
         Some("--scan-count") => {
             let p = path_arg(args.next())?;
             let n: usize = args.next().and_then(|x| x.to_str()?.parse().ok()).unwrap_or(1);
