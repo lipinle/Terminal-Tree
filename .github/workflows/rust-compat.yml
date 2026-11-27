@@ -4,11 +4,15 @@ on:
     paths:
       - 'rust/**'
       - 'tests/compat/**'
+      - 'tests/benchmark/**'
+      - 'legacy/python/src/tree.py'
       - '.github/workflows/rust-compat.yml'
   pull_request:
     paths:
       - 'rust/**'
       - 'tests/compat/**'
+      - 'tests/benchmark/**'
+      - 'legacy/python/src/tree.py'
       - '.github/workflows/rust-compat.yml'
   workflow_dispatch:
 
