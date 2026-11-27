@@ -64,7 +64,7 @@ impl Drop for Terminal {
     }
 }
 
-fn draw(model: &mut Model, message: &str, searching: bool, writable: bool) -> io::Result<()> {
+fn draw(model: &mut Model, message: &str, searching: bool, writable: bool, #[cfg(feature="native-ops")] workspace:Option<&workspace::Workspace>) -> io::Result<()> {
     let (w, h) = terminal::size()?;
     let width = usize::from(w).saturating_sub(1);
     let mut out = io::stdout().lock();
@@ -77,23 +77,31 @@ fn draw(model: &mut Model, message: &str, searching: bool, writable: bool) -> io
     for (row, index) in (start..end).enumerate() {
         let e = &model.entries[index];
         let (glyph, color) = icon(e.directory, e.symlink);
+        #[cfg(feature="native-ops")]
+        let marked=workspace.is_some_and(|w|w.marked(&e.path));
+        #[cfg(not(feature="native-ops"))]
+        let marked=false;
         queue!(out, MoveTo(0, (row + 1) as u16))?;
         if index == model.selected {
             queue!(out, SetBackgroundColor(Color::DarkGrey))?;
         }
         queue!(out, SetForegroundColor(color), Print(clip(
-            &format!("{} {} {}", if index + 1 == model.entries.len() { "└──" } else { "├──" }, glyph, e.name),
+            &format!("{} {} {} {}", if index + 1 == model.entries.len() { "└──" } else { "├──" }, if marked {"[x]"}else{"   "}, glyph, e.name),
             width)), ResetColor)?;
     }
+    #[cfg(feature="native-ops")]
+    let marked_count=workspace.map_or(0,|w|w.marked_count());
+    #[cfg(not(feature="native-ops"))]
+    let marked_count=0;
     queue!(out, MoveTo(0, h - 3), Print(clip(&format!(
-        "{}/{} | sort {:?} | hidden {} | filter: {}", if model.entries.is_empty() { 0 } else { model.selected + 1 },
-        model.entries.len(), model.order, model.hidden,
+        "{}/{} | marked {} | sort {:?} | hidden {} | filter: {}", if model.entries.is_empty() { 0 } else { model.selected + 1 },
+        model.entries.len(), marked_count, model.order, model.hidden,
         display_name(std::ffi::OsStr::new(&model.query))), width)),
         MoveTo(0, h - 2), Print(clip(message, width)),
         MoveTo(0, h - 1), Print(clip(if searching {
             "Filter: type text | Enter accept | Esc cancel"
         } else if writable {
-            "c/x/v copy/cut/paste | r rename | n/t create | d trash | R restore | D purge | u undo | q exit"
+            "Space mark | a all | A clear | c/x/v transfer | d/R/D trash/restore/purge | F1 help | q exit"
         } else {
             "↑↓ select | ← parent | →/Enter folder | / filter | h hidden | s sort | F5 refresh | q exit"
         }, width)))?;
@@ -191,7 +199,7 @@ fn browse(path: PathBuf, return_on_enter: bool, #[cfg(feature = "native-ops")] m
     let mut searching = false;
     let mut previous_query = String::new();
     loop {
-        draw(&mut model, &message, searching, writable)?;
+        draw(&mut model, &message, searching, writable, #[cfg(feature="native-ops")] workspace.as_ref())?;
         let event = event::read()?;
         #[cfg(feature = "native-ops")]
         let reload_event = match &event {
@@ -285,10 +293,12 @@ fn browse(path: PathBuf, return_on_enter: bool, #[cfg(feature = "native-ops")] m
                                 "/ filter; g go to path; F5 refresh; i properties; p/F3 preview",
                                 "Workspace only: c/x/v copy/cut/paste; r rename; n/t create",
                                 "d trash; R restore; D purge; u undo; j pending journal",
+                                "Space mark; a mark visible (max 1000); A clear; marks reset on directory change",
+                                "Batch operations stop on first failure; earlier items remain committed.",
                                 "All writes require explicit review. Default browse is read-only."].map(str::to_owned);
                             page("Terminal Tree help",&lines)
                         }
-                        KeyCode::Char('x' | 'v' | 'c' | 'd' | 'D' | 'r' | 'n' | 't' | 'R' | 'u' | 'j')
+                        KeyCode::Char('x' | 'v' | 'c' | 'd' | 'D' | 'r' | 'n' | 't' | 'R' | 'u' | 'j' | ' ' | 'a' | 'A')
                         | KeyCode::Delete | KeyCode::F(2) => {
                             #[cfg(feature = "native-ops")]
                             if let Some(w) = &mut workspace {

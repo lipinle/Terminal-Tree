@@ -265,6 +265,34 @@ impl<'a> Trash<'a> {
         })();
         finish.map_err(|e|io::Error::other(format!("item moved to Trash; inspect pending journal before retrying: {e}")))
     }
+    pub fn validate_send(&self,item:&Review)->io::Result<()>{
+        self.engine.check_journal()?;
+        self.engine.check(item)?;
+        if self.pinned.is_some(){
+            let files=self.private_dir("files")?;
+            self.private_dir("info")?;
+            require(item.identity.0==files.metadata()?.dev(),"cross-device Trash refused")?;
+        }else{
+            require(!item.path.starts_with(&self.data_home)&&!self.data_home.starts_with(&item.path),"managed Trash location protected")?;
+        }
+        Ok(())
+    }
+    pub fn validate_restore(&self,review:&RestoreReview)->io::Result<()>{
+        self.engine.check_journal()?;
+        self.check_item(&review.item)?;
+        self.check_info(review)?;
+        let dst=self.engine.parent_for(review.destination.path())?;
+        require(dir_id(&dst)?==review.destination.parent,"restore destination replaced")?;
+        no_conflict(&fd_path(&dst).join(review.destination.path().file_name().unwrap()))?;
+        require(review.item.identity.0==dst.metadata()?.dev(),"cross-device restore refused")?;
+        Ok(())
+    }
+    pub fn validate_purge(&self,review:&PurgeReview)->io::Result<()>{
+        self.engine.check_journal()?;
+        let parent=self.check_item(&review.item)?;
+        self.check_purge_info(review)?;
+        preflight_purge(&parent,review.item.path.file_name().unwrap(),&review.item.snapshot,Path::new("."))
+    }
     pub fn send(&self, item: &Review) -> io::Result<()> {
         self.send_with(item,&mut |_|Ok(()))
     }

@@ -251,6 +251,35 @@ impl Engine {
         no_conflict(&fd_path(&parent).join(path.file_name().unwrap()))?;
         Ok(Destination { path, parent: dir_id(&parent)? })
     }
+    /// Read-only batch preflight. A successful preflight does not reserve
+    /// names; each transaction still rechecks the reviewed identities.
+    pub fn validate_transfer(&self,review:&Review,destination:&Destination,kind:Transfer)->io::Result<()>{
+        self.check_journal()?;
+        let src=self.check(review)?;
+        let dst=self.path(&destination.path)?;
+        require(dst==destination.path && !dst.starts_with(&review.path),"destination inside source or changed")?;
+        let parent=self.parent_for(&dst)?;
+        require(dir_id(&parent)?==destination.parent,"reviewed destination replaced")?;
+        no_conflict(&fd_path(&parent).join(dst.file_name().unwrap()))?;
+        if matches!(kind,Transfer::Move){
+            require(fs::symlink_metadata(fd_path(&src).join(review.path.file_name().unwrap()))?.dev()==parent.metadata()?.dev(),"cross-device move refused")?;
+        }
+        Ok(())
+    }
+    pub fn validate_batch(&self,items:&[(Review,Destination)],kind:Transfer)->io::Result<()>{
+        require(!items.is_empty(),"empty batch")?;
+        for (i,(src,dst)) in items.iter().enumerate(){
+            self.validate_transfer(src,dst,kind)?;
+            for (other_src,other_dst) in &items[..i]{
+                let overlaps=|a:&Path,b:&Path|a.starts_with(b)||b.starts_with(a);
+                require(!overlaps(src.path(),other_src.path()) &&
+                    !overlaps(dst.path(),other_dst.path()) &&
+                    !overlaps(src.path(),other_dst.path()) &&
+                    !overlaps(other_src.path(),dst.path()),"overlapping batch paths refused")?;
+            }
+        }
+        Ok(())
+    }
     pub fn transfer_reviewed(&self, review: &Review, destination: &Destination, kind: Transfer) -> io::Result<Option<Undo>> {
         self.transfer_reviewed_with(review, destination, kind, &mut |_| Ok(()))
     }

@@ -1,5 +1,5 @@
 //! Explicitly scoped experimental write UI. The default navigator stays read-only.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap,BTreeSet};
 use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, Write};
@@ -100,7 +100,9 @@ pub struct Workspace {
     root: PathBuf,
     data: PathBuf,
     observed: BTreeMap<PathBuf, Stamp>,
-    clipboard: Option<(Review,Transfer)>,
+    marks: BTreeMap<PathBuf,Stamp>,
+    mark_directory: PathBuf,
+    clipboard: Option<(Vec<Review>,Transfer)>,
     undo: Vec<Undo>,
 }
 impl Workspace {
@@ -117,17 +119,20 @@ impl Workspace {
         let m = fs::metadata(&data)?;
         if !m.is_dir() || m.uid() != meta.uid() || m.mode() & 0o077 != 0 { return Err(error("private data directory required")); }
         Trash::new(&engine,&data)?;
-        Ok(Self { engine, root, data, observed:BTreeMap::new(), clipboard:None, undo:Vec::new() })
+        Ok(Self { engine, root, data, observed:BTreeMap::new(), marks:BTreeMap::new(),mark_directory:PathBuf::new(),clipboard:None, undo:Vec::new() })
     }
     pub fn personal(home:&Path,journal:&Path,extra:&[PathBuf])->io::Result<Self>{
         let root=home.to_path_buf();
         let engine=Engine::new_personal(&root,journal,extra,&[])?;
         let data=engine.personal_data_home().ok_or_else(||error("personal data home unavailable"))?.to_path_buf();
-        Ok(Self{engine,root,data,observed:BTreeMap::new(),clipboard:None,undo:Vec::new()})
+        Ok(Self{engine,root,data,observed:BTreeMap::new(),marks:BTreeMap::new(),mark_directory:PathBuf::new(),clipboard:None,undo:Vec::new()})
     }
     pub fn root(&self) -> &Path { &self.root }
     pub fn is_personal(&self)->bool{self.engine.is_personal()}
+    pub fn marked(&self,p:&Path)->bool{self.marks.contains_key(p)}
+    pub fn marked_count(&self)->usize{self.marks.len()}
     pub fn observe(&mut self, model: &Model) {
+        if self.mark_directory!=model.directory {self.marks.clear();self.mark_directory=model.directory.clone();}
         self.observed = model.entries.iter().filter_map(|e| stamp(&e.path).ok().map(|s|(e.path.clone(),s))).collect();
     }
     fn ordinary(&self,p:&Path) -> io::Result<()> {
@@ -152,22 +157,93 @@ impl Workspace {
         self.selected(model)?;
         Ok(review)
     }
+    fn selected_paths(&self,model:&Model)->io::Result<Vec<PathBuf>>{
+        if self.marks.is_empty(){return Ok(vec![self.selected(model)?]);}
+        let visible:BTreeSet<_>=model.entries.iter().map(|e|&e.path).collect();
+        for (p,s) in &self.marks{
+            if !visible.contains(p) || stamp(p)?!=*s || self.observed.get(p)!=Some(s){
+                return Err(error("marked item hidden, missing or changed; clear marks and select again"));
+            }
+        }
+        Ok(self.marks.keys().cloned().collect())
+    }
+    fn reviews(&self,model:&Model)->io::Result<Vec<Review>>{
+        let paths=self.selected_paths(model)?;
+        let mut out=Vec::with_capacity(paths.len());
+        for p in &paths{self.ordinary(p)?;out.push(self.engine.review(p)?);}
+        self.selected_paths(model)?;
+        Ok(out)
+    }
+    fn clear_marks(&mut self){self.marks.clear();}
+    fn finish_batch(&mut self,model:&mut Model,done:usize,total:usize,operation:&str,failure:Option<(PathBuf,io::Error)>)->io::Result<String>{
+        self.clear_marks();
+        let message=if let Some((path,e))=failure{
+            format!("{operation}: {done}/{total} confirmed complete; stopped at {}: {e}. Inspect journal and paths; do not blindly retry.",path_text(&path))
+        }else{format!("{operation}: {done}/{total} complete")};
+        // The complete failure path is shown in a scrollable modal, not just
+        // the clipped status bar. No automatic rollback of durable items.
+        if done!=total {super::page("Batch stopped",&wrap(&message,70))?;}
+        self.refresh(model,message)
+    }
     pub fn operate(&mut self, key: char, model: &mut Model) -> io::Result<String> {
+        if key==' '{
+            let p=self.selected(model)?;
+            if self.marks.remove(&p).is_none(){
+                if self.marks.len()>=1000{return Err(error("mark limit: 1000"));}
+                self.marks.insert(p.clone(),stamp(&p)?);
+            }
+            return Ok(format!("{} marked",self.marks.len()));
+        }
+        if key=='a'{
+            if model.entries.len()>1000{return Err(error("mark limit: 1000; use a filter"));}
+            let mut marks=BTreeMap::new();
+            for entry in &model.entries{
+                let s=stamp(&entry.path)?;
+                if self.observed.get(&entry.path)!=Some(&s){return Err(error("selection changed; refresh first"));}
+                marks.insert(entry.path.clone(),s);
+            }
+            self.marks=marks;
+            return Ok(format!("{} marked",self.marks.len()));
+        }
+        if key=='A'{self.clear_marks();return Ok("Marks cleared".into());}
+        if key=='r' && !self.marks.is_empty(){return Err(error("clear marks before single-item rename"));}
+        if matches!(key,'d'|'R'|'D') && !self.marks.is_empty(){
+            return self.batch_trash(key,model);
+        }
         let result = match key {
             'c'|'x' => {
-                let review = self.review(model)?;
-                self.clipboard = Some((review, if key=='c' {Transfer::Copy} else {Transfer::Move}));
+                let reviews = self.reviews(model)?;
+                self.clipboard = Some((reviews, if key=='c' {Transfer::Copy} else {Transfer::Move}));
+                self.clear_marks();
                 return Ok("Clipboard ready; v to review and paste".into());
             }
             'v' => {
-                let (review,kind) = self.clipboard.as_ref().ok_or_else(||error("clipboard empty"))?;
-                let dst = model.directory.join(review.path().file_name().unwrap());
-                self.ordinary(review.path())?; self.ordinary(&dst)?;
-                let target = self.engine.destination(&dst)?;
-                if !confirm(if matches!(kind,Transfer::Copy) {"Copy item"} else {"Move item"}, &[review.path(),target.path()], "yes")? { return Ok("Cancelled".into()); }
-                if let Some(undo) = self.engine.transfer_reviewed(review,&target,*kind)? { self.undo.push(undo); }
-                if matches!(kind,Transfer::Move) { self.clipboard=None; }
-                "Transfer completed"
+                let (reviews,kind) = self.clipboard.as_ref().ok_or_else(||error("clipboard empty"))?;
+                let kind=*kind;
+                let mut items=Vec::with_capacity(reviews.len());
+                for review in reviews{
+                    let dst=model.directory.join(review.path().file_name().unwrap());
+                    self.ordinary(review.path())?; self.ordinary(&dst)?;
+                    items.push((review.clone(),self.engine.destination(&dst)?));
+                }
+                let total=items.len();
+                self.engine.validate_batch(&items,kind)?;
+                let paths:Vec<_>=items.iter().flat_map(|(r,d)|[r.path(),d.path()]).collect();
+                let title=if total==1 {if matches!(kind,Transfer::Copy){"Copy item".into()}else{"Move item".into()}}
+                    else{format!("{} {total} items - each committed separately",if matches!(kind,Transfer::Copy){"Copy"}else{"Move"})};
+                if !confirm(&title,&paths,"yes")?{return Ok("Cancelled".into());}
+                self.engine.validate_batch(&items,kind)?;
+                let mut done=0;
+                let mut failure=None;
+                for (review,target) in &items{
+                    match self.engine.transfer_reviewed(review,target,kind){
+                        Ok(undo)=>{if let Some(u)=undo{self.undo.push(u);}done+=1;},
+                        Err(e)=>{failure=Some((review.path().to_path_buf(),e));break;}
+                    }
+                }
+                if matches!(kind,Transfer::Move)||failure.is_some(){self.clipboard=None;}
+                if total==1 && failure.is_none(){"Transfer completed"}
+                else{return self.finish_batch(model,done,total,"Transfer",failure);}
             }
             'r' => {
                 let review=self.review(model)?;
@@ -229,6 +305,68 @@ impl Workspace {
             _ => return Err(error("unsupported operation")),
         };
         self.refresh(model,result.into())
+    }
+    fn batch_trash(&mut self,key:char,model:&mut Model)->io::Result<String>{
+        let paths=self.selected_paths(model)?;
+        let total=paths.len();
+        let mut done=0usize;
+        let mut failure=None;
+        {
+            let trash=Trash::new(&self.engine,&self.data)?;
+            match key{
+                'd'=>{
+                    let reviews=self.reviews(model)?;
+                    for r in &reviews{trash.validate_send(r)?;}
+                    let display:Vec<_>=reviews.iter().map(|r|r.path()).collect();
+                    if !confirm(&format!("Trash {total} items - each committed separately"),&display,"yes")?{return Ok("Cancelled".into());}
+                    for r in &reviews{trash.validate_send(r)?;}
+                    for r in &reviews{
+                        match trash.send(r){Ok(())=>done+=1,Err(e)=>{failure=Some((r.path().to_path_buf(),e));break;}}
+                    }
+                }
+                'R'=>{
+                    let mut reviews=Vec::new();
+                    let mut targets=BTreeSet::new();
+                    for p in &paths{
+                        let r=trash.review_restore(p)?;
+                        self.ordinary(r.destination())?;
+                        if targets.iter().any(|d:&PathBuf|d.starts_with(r.destination())||r.destination().starts_with(d)){
+                            return Err(error("overlapping restore destinations"));
+                        }
+                        targets.insert(r.destination().to_path_buf());
+                        trash.validate_restore(&r)?;reviews.push(r);
+                    }
+                    self.selected_paths(model)?;
+                    let display:Vec<_>=reviews.iter().flat_map(|r|[r.source(),r.destination()]).collect();
+                    if !confirm(&format!("Restore {total} items - each committed separately"),&display,"yes")?{return Ok("Cancelled".into());}
+                    for r in &reviews{trash.validate_restore(r)?;}
+                    for r in &reviews{
+                        match trash.restore(r){
+                            Ok(terminal_tree::operations::RestoreOutcome::Restored)=>done+=1,
+                            Ok(_)=>{failure=Some((r.source().to_path_buf(),error("data restored; metadata pending")));break;},
+                            Err(e)=>{failure=Some((r.source().to_path_buf(),e));break;}
+                        }
+                    }
+                }
+                'D'=>{
+                    let mut reviews=Vec::new();
+                    for p in &paths{let r=trash.review_purge(p)?;trash.validate_purge(&r)?;reviews.push(r);}
+                    self.selected_paths(model)?;
+                    let display:Vec<_>=reviews.iter().map(|r|r.source()).collect();
+                    if !confirm(&format!("PERMANENT DELETE {total} items - cannot undo; may partially complete"),&display,"DELETE")?{return Ok("Cancelled".into());}
+                    for r in &reviews{trash.validate_purge(r)?;}
+                    for r in &reviews{
+                        match trash.purge(r,"DELETE"){
+                            Ok(terminal_tree::operations::PurgeOutcome::Deleted)=>done+=1,
+                            Ok(_)=>{failure=Some((r.source().to_path_buf(),error("data deleted; metadata pending")));break;},
+                            Err(e)=>{failure=Some((r.source().to_path_buf(),e));break;}
+                        }
+                    }
+                }
+                _=>return Err(error("unsupported batch action")),
+            }
+        }
+        self.finish_batch(model,done,total,match key{'d'=>"Trash",'R'=>"Restore",_=>"Purge"},failure)
     }
     fn refresh(&mut self,model:&mut Model,msg:String)->io::Result<String> {
         model.reload().map_err(|e|io::Error::other(format!("operation completed; refresh failed: {e}")))?;
