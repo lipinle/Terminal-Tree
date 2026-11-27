@@ -59,7 +59,7 @@ def main():
             ("large_scan_startup", fixture, args.entries, 1),
             ("large_scan_10_repeats", fixture, args.entries, 10),
         ]:
-            py = [sys.executable, "-c", PY_SCAN, str(ROOT/"legacy/python/src"), str(directory), str(repeats)]
+            py = [sys.executable, "-c", PY_SCAN, os.environ.get("TT_PYTHON_REFERENCE", str(ROOT/"legacy/python/src")), str(directory), str(repeats)]
             rust = [binary, "--scan-count", str(directory), str(repeats)]
             # Warm both implementations and validate counts, then alternate order.
             timed(py, entries*repeats, 1)

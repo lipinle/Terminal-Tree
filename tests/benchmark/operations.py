@@ -57,7 +57,7 @@ def once(binary,base,shape,kind,lang,number):
     make(source,shape)
     before=snapshot(source)
     cmd=([binary,str(work),str(journal),kind] if lang in ("rust","baseline","paranoid") else
-         [sys.executable,"-c",PYTHON,str(ROOT/"legacy/python/src"),str(work),str(state),kind])
+         [sys.executable,"-c",PYTHON,os.environ.get("TT_PYTHON_REFERENCE", str(ROOT/"legacy/python/src")),str(work),str(state),kind])
     if lang=="paranoid": cmd.append("paranoid")
     result=subprocess.run(cmd,check=True,capture_output=True,text=True)
     assert snapshot(destination)==before
