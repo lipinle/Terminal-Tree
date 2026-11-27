@@ -26,6 +26,7 @@ pub(crate) struct Manifest {
 }
 pub(crate) type Snapshot = BTreeMap<PathBuf, Identity>;
 type Links = BTreeMap<(u64, u64), Vec<PathBuf>>;
+type HashCache = BTreeMap<(u64,u64), (Identity,[u8;32])>;
 
 pub(crate) fn fd_path(f: &File) -> PathBuf {
     PathBuf::from(format!("/proc/self/fd/{}", f.as_raw_fd()))
@@ -59,7 +60,7 @@ fn check(path: &Path, original: &Metadata) -> io::Result<()> {
 }
 fn collect(path: &Path, relative: &Path, device: u64, flush: bool,
            items: &mut BTreeMap<PathBuf, Item>, snapshots: &mut Snapshot,
-           links: &mut Links, buffer: &mut [u8]) -> io::Result<()> {
+           links: &mut Links, buffer: &mut [u8], hashes: &mut HashCache) -> io::Result<()> {
     let m = fs::symlink_metadata(path)?;
     require(m.dev() == device, "cross-device entry refused")?;
     let (body, attrs) = if m.is_dir() {
@@ -67,7 +68,7 @@ fn collect(path: &Path, relative: &Path, device: u64, flush: bool,
         let attrs = attributes(&dir)?;
         for name in names(&dir)? {
             collect(&fd_path(&dir).join(&name), &relative.join(&name), device,
-                    flush, items, snapshots, links, buffer)?;
+                    flush, items, snapshots, links, buffer, hashes)?;
         }
         require(identity(&dir.metadata()?) == identity(&m), "directory changed during traversal")?;
         if flush { dir.sync_all()?; }
@@ -75,9 +76,19 @@ fn collect(path: &Path, relative: &Path, device: u64, flush: bool,
     } else if m.is_file() {
         let file = checked_open(path, &m, false)?;
         let attrs = attributes(&file)?;
-        let hash = digest(&file, buffer)?;
+        // Cache only within this traversal, for multiple names of one inode.
+        // A separate source/destination manifest always starts with an empty cache.
+        let key = (m.dev(),m.ino());
+        let hash = if let Some((id, hash)) = hashes.get(&key) {
+            require(*id == identity(&m), "hard-linked inode changed during traversal")?;
+            *hash
+        } else {
+            let hash = digest(&file, buffer)?;
+            if flush { file.sync_all()?; }
+            if m.nlink() > 1 { hashes.insert(key,(identity(&m),hash)); }
+            hash
+        };
         require(identity(&file.metadata()?) == identity(&m), "file changed during traversal")?;
-        if flush { file.sync_all()?; }
         links.entry((m.dev(), m.ino())).or_default().push(relative.to_path_buf());
         (Body::File(m.size(), hash), attrs)
     } else if m.file_type().is_symlink() {
@@ -95,7 +106,7 @@ pub(crate) fn manifest(path: &Path, flush: bool) -> io::Result<(Manifest, Snapsh
     let mut snapshots = BTreeMap::new();
     let mut links = Links::new();
     let mut buffer = vec![0; 1024 * 1024];
-    collect(path, Path::new("."), device, flush, &mut items, &mut snapshots, &mut links, &mut buffer)?;
+    collect(path, Path::new("."), device, flush, &mut items, &mut snapshots, &mut links, &mut buffer, &mut HashCache::new())?;
     let mut groups: Vec<_> = links.into_values().filter(|g| g.len() > 1).collect();
     for g in &mut groups { g.sort(); }
     groups.sort();

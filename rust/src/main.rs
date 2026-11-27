@@ -100,6 +100,77 @@ fn draw(model: &mut Model, message: &str, searching: bool, writable: bool) -> io
     out.flush()
 }
 
+
+fn page(title: &str, lines: &[String]) -> io::Result<()> {
+    let mut top=0usize;
+    loop {
+        let (w,h)=terminal::size()?;
+        let width=usize::from(w).saturating_sub(1);
+        let cap=usize::from(h).saturating_sub(2).max(1);
+        top=top.min(lines.len().saturating_sub(cap));
+        let mut out=io::stdout().lock();
+        queue!(out,MoveTo(0,0),Clear(ClearType::All),Print(clip(title,width)))?;
+        if h>=3 {
+            for (i,line) in lines.iter().skip(top).take(cap).enumerate() {
+                queue!(out,MoveTo(0,(i+1) as u16),Print(clip(line,width)))?;
+            }
+            queue!(out,MoveTo(0,h-1),Print(clip("Up/Down | PgUp/PgDn | q/Esc close",width)))?;
+        }
+        out.flush()?; drop(out);
+        if let Event::Key(k)=event::read()? {
+            if !matches!(k.kind,KeyEventKind::Press|KeyEventKind::Repeat) {continue;}
+            match k.code {
+                KeyCode::Esc|KeyCode::Char('q')|KeyCode::Enter=>return Ok(()),
+                KeyCode::Up=>top=top.saturating_sub(1),
+                KeyCode::Down=>top=top.saturating_add(1),
+                KeyCode::PageUp=>top=top.saturating_sub(cap),
+                KeyCode::PageDown=>top=top.saturating_add(cap),
+                KeyCode::Home=>top=0,
+                KeyCode::End=>top=lines.len(),
+                _=>(),
+            }
+        }
+    }
+}
+fn properties(path:&Path)->io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let m=std::fs::symlink_metadata(path)?;
+    let mut lines=vec![
+        display_name(path.as_os_str()),
+        format!("Mode: {:o}",m.mode()),
+        format!("Size: {} bytes",m.len()),
+        format!("UID/GID: {}/{}",m.uid(),m.gid()),
+        format!("Modified (Unix): {}.{:09}",m.mtime(),m.mtime_nsec()),
+        format!("Device/inode: {}/{}",m.dev(),m.ino()),
+        format!("Hard links: {}",m.nlink()),
+    ];
+    if m.file_type().is_symlink() {lines.push(format!("Link: {}",display_name(std::fs::read_link(path)?.as_os_str())));}
+    page("Properties",&lines)
+}
+#[cfg(feature="native-ops")]
+fn preview(path:&Path)->io::Result<()> {
+    use rustix::fs::{self as rx,Mode,OFlags};
+    use std::io::Read;
+    use std::os::unix::fs::MetadataExt;
+    let before=std::fs::symlink_metadata(path)?;
+    if !before.is_file() {return Err(io::Error::other("preview requires a regular non-link file"));}
+    let f:std::fs::File=rx::open(path,OFlags::RDONLY|OFlags::NOFOLLOW|OFlags::NONBLOCK|OFlags::CLOEXEC,Mode::empty())?.into();
+    let m=f.metadata()?;
+    if !m.is_file() || (m.dev(),m.ino())!=(before.dev(),before.ino()) {return Err(io::Error::other("file changed before preview"));}
+    let mut bytes=Vec::new();
+    f.take(65537).read_to_end(&mut bytes)?;
+    let mut lines=vec![display_name(path.as_os_str())];
+    if bytes.contains(&0) {lines.push("Binary file; preview unavailable".into());}
+    else {
+        let truncated=bytes.len()>65536; bytes.truncate(65536);
+        for line in bytes.split(|&b|b==b'\n') {
+            lines.push(display_name(std::ffi::OsStr::from_bytes(line)));
+        }
+        if truncated {lines.push("[Preview limited to 64 KiB]".into());}
+    }
+    page("File preview",&lines)
+}
+
 fn browse(path: PathBuf, return_on_enter: bool, #[cfg(feature = "native-ops")] mut workspace: Option<workspace::Workspace>) -> io::Result<PathBuf> {
     #[cfg(feature = "native-ops")]
     let writable = workspace.is_some();
@@ -163,8 +234,27 @@ fn browse(path: PathBuf, return_on_enter: bool, #[cfg(feature = "native-ops")] m
                         KeyCode::Char('s') => { model.order = model.order.next(); model.reload() }
                         KeyCode::F(5) | KeyCode::Char('f') => model.reload(),
                         KeyCode::Char('/') => { previous_query = model.query.clone(); searching = true; Ok(()) }
+                        KeyCode::Char('i') => {
+                            match model.entries.get(model.selected) {
+                                Some(e)=>properties(&e.path),
+                                None=>Err(io::Error::other("select an item")),
+                            }
+                        }
+                        #[cfg(feature="native-ops")]
+                        KeyCode::Char('p') | KeyCode::F(3) => {
+                            match model.entries.get(model.selected) {
+                                Some(e)=>preview(&e.path),
+                                None=>Err(io::Error::other("select a file")),
+                            }
+                        }
                         KeyCode::F(1) | KeyCode::Char('?') => {
-                            message = "Mouse wheel: move | Left click: folder | Right click: select | [ ] history".into(); Ok(())
+                            let lines=["Arrows / mouse: navigate; Enter: enter folder",
+                                "q / Esc: exit; [ ] history; h hidden; s sort",
+                                "/ filter; F5 refresh; i properties; p/F3 preview (native build)",
+                                "Workspace only: c/x/v copy/cut/paste; r rename; n/t create",
+                                "d trash; R restore; D purge; u undo; j pending journal",
+                                "All writes require explicit review. Default browse is read-only."].map(str::to_owned);
+                            page("Terminal Tree help",&lines)
                         }
                         KeyCode::Char('x' | 'v' | 'c' | 'd' | 'D' | 'r' | 'n' | 't' | 'R' | 'u' | 'j')
                         | KeyCode::Delete | KeyCode::F(2) => {

@@ -40,6 +40,8 @@ jobs:
           python3 tests/benchmark/result.py rust/target/release/terminal-tree
           bash -n rust/install-preview.sh
           bash -n rust/integration-preview.sh
+      - name: Verify side-by-side preview installation
+        run: python3 tests/benchmark/install_preview.py
       - name: Compare read-only scan and startup with Python
         run: |
           python3 tests/benchmark/scan.py --binary rust/target/release/terminal-tree
