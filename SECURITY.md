@@ -1,13 +1,22 @@
-# Security and data safety
+# Security policy
 
-Terminal Tree runs with the invoking user's privileges. Do not run the installer or navigator as root. Maintain independent backups of important files. Atomic no-overwrite operations do not guarantee durability after power loss; multi-item operations can partially complete. Path identity checks reduce ordinary races but are not a complete defense against concurrent hostile filesystem modification.
+## Supported versions
 
-Report security or data-loss concerns privately to the repository maintainer; avoid posting personal paths or sensitive file contents in issues.
+The Rust native implementation is a development preview (0.1.0); no stable Rust version is currently supported. Python 2.1.1 is archived and not actively maintained. Standard 3.0.0 and Paranoid are future releases. No security response time or long-term support commitment is implied.
 
-## 2.1.1 limitations
+## Reporting vulnerabilities
 
-Verified copies refuse filesystems or permissions that cannot preserve checked metadata (including ownership, nanosecond modification time and extended attributes). Directory sync failures may leave a completed rename with uncertain durability. `terminal_tree_recovery` reports unresolved journal records; inspect both paths and any staging directory before retrying. Records are private local files under `$XDG_STATE_HOME/terminal-tree/operations` (default `~/.local/state/terminal-tree/operations`). Do not delete pending records or stages without inspecting them. A pending record is not proof that an operation failed or succeeded. The journal is not a backup, cannot protect against disk/controller failure, and does not provide automatic rollback or protect against all hostile filesystem races. GIO controls Trash destination and durability. Permanent deletion in Trash is irreversible. A successful CI run is not proof of crash consistency on every filesystem.
+Please report suspected vulnerabilities, unsafe file operations, corruption or unintended deletion privately. Use GitHub's private vulnerability reporting if it is enabled for this repository. If it is not available, contact the maintainer privately through an established channel; do not publish exploit details, personal paths, credentials, or file contents in a public issue. Include the affected commit, OS/filesystem, sanitized reproduction steps and expected versus observed behavior. Use synthetic data for reproduction.
 
-Permanent directory deletion walks only entries in the reviewed snapshot and stops on unexpected or changed entries; it can still complete partially. Installer backup creation is exclusive and synced before replacement; installing multiple runtime files is not a single atomic transaction. SHA-256 verification incurs extra disk reads. Strict metadata checks can reject otherwise valid cross-filesystem copies.
+## Current Rust preview limitations
 
-Undo now checks nested entries as well as the top-level identity. Installation refuses symbolic-link or nonregular managed files (including .bashrc); users with symlinked dotfiles must migrate manually. The navigator result channel only accepts a private empty regular file created by the shell integration. Settings use an exclusive random temporary file. These restrictions intentionally prioritize avoiding unintended writes over compatibility.
+- Run the application as an unprivileged user. Keep independent backups; a journal is not a backup.
+- Native write operations require a scoped workspace or personal mode. Existing destinations are never overwritten. Cross-filesystem moves are refused on main.
+- Strict metadata checks can reject legitimate copies to filesystems without the required capabilities. A successful rename may have uncertain durability if a later sync fails.
+- Multi-item operations and permanent deletion can partially complete. Undo is session-local for eligible moves/renames; it cannot undo permanent deletion.
+- Pending records are neither proof of failure nor success. Inspect source, destination, staging and metadata before retrying. The recovery inspector does not automatically replay, delete or roll back.
+- Path identity checks reduce races but are not a complete defense against hostile concurrent filesystem modification. External applications may modify files opened through them.
+- VM crash tests are controlled simulations, not certification for every device, controller, filesystem or physical power-loss scenario.
+- Do not use the preview as the only tool for irreplaceable data. No guarantee of data recovery or absolute security is provided.
+
+The historical Python-specific policy is retained at [legacy/python/SECURITY.md](legacy/python/SECURITY.md).
