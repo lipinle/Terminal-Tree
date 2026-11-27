@@ -100,7 +100,7 @@ fn draw(model: &mut Model, message: &str, searching: bool, writable: bool) -> io
     out.flush()
 }
 
-fn browse(path: PathBuf, #[cfg(feature = "native-ops")] mut workspace: Option<workspace::Workspace>) -> io::Result<()> {
+fn browse(path: PathBuf, return_on_enter: bool, #[cfg(feature = "native-ops")] mut workspace: Option<workspace::Workspace>) -> io::Result<PathBuf> {
     #[cfg(feature = "native-ops")]
     let writable = workspace.is_some();
     #[cfg(not(feature = "native-ops"))]
@@ -147,6 +147,9 @@ fn browse(path: PathBuf, #[cfg(feature = "native-ops")] mut workspace: Option<wo
                         KeyCode::PageDown => { model.shift(terminal::size()?.1.saturating_sub(4) as isize); Ok(()) }
                         KeyCode::Home => { model.selected = 0; Ok(()) }
                         KeyCode::End => { model.selected = model.entries.len().saturating_sub(1); Ok(()) }
+                        KeyCode::Enter if return_on_enter && model.entries.get(model.selected).is_some_and(|e| e.directory) => {
+                            match model.enter() { Ok(()) => break, Err(e) => Err(e) }
+                        }
                         KeyCode::Right | KeyCode::Enter => {
                             if model.entries.get(model.selected).is_some_and(|e| !e.directory) {
                                 message = "File opening is not implemented in this read-only port.".into();
@@ -205,7 +208,7 @@ fn browse(path: PathBuf, #[cfg(feature = "native-ops")] mut workspace: Option<wo
         }
         if let Err(e) = result { message = display_name(std::ffi::OsStr::new(&e.to_string())); }
     }
-    Ok(())
+    Ok(model.directory)
 }
 
 fn path_arg(value: Option<OsString>) -> io::Result<PathBuf> {
@@ -216,6 +219,37 @@ fn path_arg(value: Option<OsString>) -> io::Result<PathBuf> {
         }
         None => env::current_dir(),
     }
+}
+
+
+#[cfg(feature = "native-ops")]
+fn result_channel(path: PathBuf) -> io::Result<()> {
+    use rustix::fs::{self as rx, OFlags, Mode};
+    use std::os::unix::fs::MetadataExt;
+    use std::fs::{self,File};
+    let parent = path.parent().ok_or_else(||io::Error::other("missing result parent"))?;
+    let name = path.file_name().ok_or_else(||io::Error::other("missing result filename"))?;
+    let uid = rustix::process::getuid().as_raw();
+    let directory:File=rx::open(parent,OFlags::RDONLY|OFlags::DIRECTORY|OFlags::NOFOLLOW|OFlags::CLOEXEC,Mode::empty())?.into();
+    let dm=directory.metadata()?;
+    if dm.uid()!=uid || dm.mode() & 0o077 != 0 {return Err(io::Error::other("private owned result directory required"));}
+    let mut file:File=rx::openat(&directory,name,OFlags::WRONLY|OFlags::NOFOLLOW|OFlags::NONBLOCK|OFlags::CLOEXEC,Mode::empty())?.into();
+    let original=file.metadata()?;
+    if !original.is_file() || original.uid()!=uid || original.mode() & 0o077 != 0 || original.nlink()!=1 || original.len()!=0 {
+        return Err(io::Error::other("private empty regular result file required"));
+    }
+    let destination=browse(env::current_dir()?,true,None)?.canonicalize()?;
+    if !destination.is_dir() {return Err(io::Error::other("result directory no longer exists"));}
+    let current=file.metadata()?;
+    let named=fs::symlink_metadata(&path)?;
+    let parent_now=fs::symlink_metadata(parent)?;
+    let id=|m:&fs::Metadata|(m.dev(),m.ino(),m.mode(),m.uid(),m.nlink(),m.len(),m.ctime(),m.ctime_nsec(),m.mtime(),m.mtime_nsec());
+    if id(&current)!=id(&original) || id(&named)!=id(&original) || (parent_now.dev(),parent_now.ino())!=(dm.dev(),dm.ino()) {
+        return Err(io::Error::other("result channel changed"));
+    }
+    file.write_all(destination.as_os_str().as_bytes())?;
+    file.write_all(&[0])?;
+    file.flush()
 }
 
 fn run() -> io::Result<()> {
@@ -231,9 +265,9 @@ fn run() -> io::Result<()> {
         Some("--browse") => {
             let p=path_arg(args.next())?;
             #[cfg(feature = "native-ops")]
-            { browse(p,None) }
+            { browse(p,false,None).map(|_| ()) }
             #[cfg(not(feature = "native-ops"))]
-            { browse(p) }
+            { browse(p,false).map(|_| ()) }
         },
         #[cfg(feature = "native-ops")]
         Some("--workspace") => {
@@ -242,7 +276,13 @@ fn run() -> io::Result<()> {
             let data=path_arg(Some(args.next().ok_or_else(||io::Error::other("data path required"))?))?;
             if args.next().is_some() { return Err(io::Error::other("unexpected argument")); }
             let w=workspace::Workspace::new(&root,&journal,&data)?;
-            browse(w.root().to_path_buf(),Some(w))
+            browse(w.root().to_path_buf(),false,Some(w)).map(|_| ())
+        },
+        #[cfg(feature = "native-ops")]
+        Some("--result") => {
+            let result = path_arg(Some(args.next().ok_or_else(||io::Error::other("result path required"))?))?;
+            if args.next().is_some() { return Err(io::Error::other("unexpected argument")); }
+            result_channel(result)
         },
         Some("--scan-paths0") => {
             let p = path_arg(args.next())?;

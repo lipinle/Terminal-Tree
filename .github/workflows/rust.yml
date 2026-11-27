@@ -35,6 +35,10 @@ jobs:
           python3 tests/benchmark/parity.py --binary rust/target/release/terminal-tree
       - name: Exercise scoped write UI through PTY
         run: python3 tests/benchmark/workspace.py rust/target/release/terminal-tree
+      - name: Test secure result channel and preview shell syntax
+        run: |
+          python3 tests/benchmark/result.py rust/target/release/terminal-tree
+          bash -n rust/install-preview.sh rust/integration-preview.sh
       - name: Record generated Cargo lockfile
         run: |
           python3 -c 'import base64; print("TT_CARGO_LOCK "+base64.b64encode(open("rust/Cargo.lock","rb").read()).decode())'
