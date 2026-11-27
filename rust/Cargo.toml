@@ -2,7 +2,7 @@
 name = "terminal-tree"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.74"
+rust-version = "1.75"
 license = "MIT"
 publish = false
 description = "Experimental native read-only Terminal Tree port"
@@ -10,6 +10,32 @@ description = "Experimental native read-only Terminal Tree port"
 [dependencies]
 crossterm = "=0.28.1"
 unicode-width = "=0.2.0"
+
+# The destructive probe is only compiled explicitly for isolated VM tests.
+[features]
+crash-probe = ["dep:rustix", "dep:sha2", "dep:serde_json", "dep:xattr"]
+
+[[bin]]
+name = "tt-crash-probe"
+path = "src/bin/crash_probe.rs"
+required-features = ["crash-probe"]
+
+[dependencies.rustix]
+version = "=0.38.44"
+features = ["fs"]
+optional = true
+
+[dependencies.sha2]
+version = "=0.10.9"
+optional = true
+
+[dependencies.serde_json]
+version = "=1.0.140"
+optional = true
+
+[dependencies.xattr]
+version = "=1.4.0"
+optional = true
 
 [profile.release]
 lto = "thin"

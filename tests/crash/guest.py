@@ -4,6 +4,8 @@ import json
 import os
 from pathlib import Path
 import signal
+import stat
+import subprocess
 import sys
 import traceback
 
@@ -41,10 +43,14 @@ def cut(case):
         signal.pause()
 
 
-def prepare():
+def prepare(engine="python"):
     WORK.mkdir()
     (ROOT / "home").mkdir()
     SOURCE.write_bytes(DATA)
+    if engine == "rust":
+        os.chmod(SOURCE, 0o640)
+        os.setxattr(SOURCE, "user.tt-test", b"preserve-xattr")
+        os.utime(SOURCE, ns=(1700000000123456789, 1700000000123456789))
     SENTINEL.write_text("do not modify", encoding="utf-8")
     # Make the baseline durable before the tested operation. The journal is
     # intentionally absent so the first-use directory creation is exercised.
@@ -95,7 +101,7 @@ def execute(case):
     cut(case)
 
 
-def verify(case):
+def verify(case, engine="python"):
     require(SENTINEL.read_text(encoding="utf-8") == "do not modify",
             "unrelated data changed")
     src, dst = SOURCE.exists(), DEST.exists()
@@ -113,6 +119,14 @@ def verify(case):
         require(src != dst, "move must retain exactly one intact name")
         if case in ("move-after-sync", "move-done"):
             require(dst, "synced move was lost")
+    if engine == "rust":
+        for p in (SOURCE, DEST):
+            if p.exists():
+                st = p.stat()
+                require(stat.S_IMODE(st.st_mode) == 0o640, "mode mismatch")
+                require(st.st_uid == 0 and st.st_gid == 0, "ownership mismatch")
+                require(st.st_mtime_ns == 1700000000123456789, "mtime mismatch")
+                require(os.getxattr(p, "user.tt-test") == b"preserve-xattr", "xattr mismatch")
     records = tree.recovery_records()
     directory = Path(tree.state_directory())
     done = list(directory.glob("*.done.json"))
@@ -135,10 +149,16 @@ def main():
                 if "=" in token)
     case = args.get("tt_case")
     require(case in CASES, "invalid case")
+    engine = args.get("tt_engine", "python")
+    require(engine in ("python", "rust"), "invalid engine")
     if args.get("tt_phase") == "execute":
+        if engine == "rust":
+            prepare(engine)
+            subprocess.run(["/tt/tt-crash-probe", case], check=True)
+            raise RuntimeError("native probe unexpectedly returned")
         execute(case)
     elif args.get("tt_phase") == "verify":
-        verify(case)
+        verify(case, engine)
     else:
         raise ValueError("invalid phase")
 

@@ -1,0 +1,49 @@
+name: Rust virtual crash consistency
+
+on:
+  push:
+    paths:
+      - 'rust/**'
+      - 'tests/crash/**'
+      - '.github/workflows/rust-crash.yml'
+  pull_request:
+    paths:
+      - 'rust/**'
+      - 'tests/crash/**'
+      - '.github/workflows/rust-crash.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ext4-power-cut:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Compile native crash probe
+        run: cargo build --release --manifest-path rust/Cargo.toml --features crash-probe --bin tt-crash-probe
+      - name: Install VM tools and generic guest kernel
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 busybox-static linux-image-virtual kmod cpio zstd xz-utils e2fsprogs python3
+      - name: Build isolated guest
+        run: |
+          set -euo pipefail
+          kernel=$(find /boot -maxdepth 1 -name 'vmlinuz-*-generic' -printf '%f\n' | sort -V | tail -n1)
+          test -n "$kernel"
+          version=${kernel#vmlinuz-}
+          sudo chmod a+r "/boot/$kernel"
+          bash tests/crash/build_guest.sh "$version" "$RUNNER_TEMP/tt-initramfs.gz" rust/target/release/tt-crash-probe
+          echo "TT_KERNEL=/boot/$kernel" >> "$GITHUB_ENV"
+      - name: Abrupt virtual power cuts and ext4 journal replay
+        run: |
+          python3 tests/crash/run_vm_tests.py --kernel "$TT_KERNEL" --initrd "$RUNNER_TEMP/tt-initramfs.gz" --logs "$RUNNER_TEMP/tt-crash-logs" --engine rust
+      - name: Upload serial logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rust-crash-serial-logs
+          path: ${{ runner.temp }}/tt-crash-logs/
+          if-no-files-found: warn

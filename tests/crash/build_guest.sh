@@ -2,7 +2,7 @@
 # Build an isolated RAM-only Linux guest. No physical disks or host directories
 # are passed through to the VM.
 set -euo pipefail
-if [[ $# != 2 ]]; then echo "Usage: $0 KERNEL_VERSION OUTPUT_INITRAMFS" >&2; exit 2; fi
+if [[ $# != 2 && $# != 3 ]]; then echo "Usage: $0 KERNEL_VERSION OUTPUT_INITRAMFS [RUST_PROBE]" >&2; exit 2; fi
 version=$1
 output=$(realpath -m "$2")
 here=$(cd -- "$(dirname -- "$0")" && pwd)
@@ -26,6 +26,7 @@ py=/usr/bin/python3
 pylib=$("$py" -c 'import sysconfig; print(sysconfig.get_path("stdlib"))')
 copy_binary "$py" usr/bin/python3
 copy_binary /usr/bin/cp usr/bin/cp
+if [[ $# == 3 ]]; then copy_binary "$(realpath "$3")" tt/tt-crash-probe; fi
 cp -aL "$pylib" "$root/usr/lib/"
 while IFS= read -r -d '' lib; do
     copy_binary "$lib" "${lib#/}"
