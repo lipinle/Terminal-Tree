@@ -254,3 +254,66 @@ fn kernel_copy_preserves_sparse_bytes_and_empty_file() {
     fs::write(dst.join("sparse"),b"changed").unwrap();
     assert_eq!(fs::metadata(src.join("sparse")).unwrap().len(),4*1024*1024+3);
 }
+
+#[test]
+fn journal_replacement_stops_before_publish() {
+    let f=Fixture::new(); let e=f.engine();
+    let source=f.root.join("source"); let dest=f.root.join("dest");
+    fs::write(&source,b"original").unwrap();
+    let reviewed=e.review(&source).unwrap();
+    let moved=f.base.join("journal-old");
+    let result=e.transfer_with(&reviewed,&dest,Transfer::Copy,&mut |p|{
+        if p=="copy-before-publish"{
+            fs::rename(&f.journal,&moved)?;
+            fs::create_dir(&f.journal)?;
+            fs::set_permissions(&f.journal,fs::Permissions::from_mode(0o700))?;
+        }
+        Ok(())
+    });
+    assert!(result.is_err() && !dest.exists());
+    assert_eq!(fs::read(source).unwrap(),b"original");
+    assert_eq!(fs::read_dir(&f.journal).unwrap().count(),0);
+    assert_eq!(fs::read_dir(moved).unwrap().count(),1);
+}
+#[test]
+fn personal_policy_guards_real_files_and_managed_state() {
+    if rustix::process::geteuid().is_root(){return;}
+    let f=Fixture::new();
+    let home=&f.root;
+    let managed=home.join(".local/state/terminal-tree");
+    fs::create_dir_all(&managed).unwrap();
+    let journal=managed.join("operations");
+    fs::create_dir(&journal).unwrap();
+    fs::set_permissions(&journal,fs::Permissions::from_mode(0o700)).unwrap();
+    let ordinary=home.join("documents");fs::create_dir(&ordinary).unwrap();
+    let src=ordinary.join("source");fs::write(&src,b"original").unwrap();
+    let outside=f.base.join("outside");fs::create_dir(&outside).unwrap();
+    let sentinel=outside.join("sentinel");fs::write(&sentinel,b"outside").unwrap();
+    symlink(&outside,home.join("escape")).unwrap();
+    symlink(&ordinary,home.join("alias")).unwrap();
+    fs::write(home.join(".bashrc"),b"protected").unwrap();
+    let e=Engine::new_personal(home,&journal,&[],&[]).unwrap();
+    for p in [home.clone(),home.join(".bashrc"),home.join(".local"),managed.clone(),journal.clone(),outside.clone(),
+        home.join("escape/sentinel"),home.join("alias/source"),home.join("documents/../.bashrc"),
+        home.join(".terminal-tree-copy-test"),PathBuf::from("/etc/passwd")]{
+        assert!(e.review(&p).is_err(),"unexpected review: {p:?}");
+        assert!(e.destination(&p).is_err(),"unexpected destination: {p:?}");
+    }
+    let dest=ordinary.join("copy");
+    e.transfer(&e.review(&src).unwrap(),&dest,Transfer::Copy).unwrap();
+    assert_eq!(fs::read(&dest).unwrap(),b"original");
+    let moved=ordinary.join("moved");
+    let undo=e.transfer(&e.review(&dest).unwrap(),&moved,Transfer::Move).unwrap().unwrap();
+    e.undo(&undo).unwrap();
+    assert_eq!(fs::read(&dest).unwrap(),b"original");
+    assert_eq!(fs::read(sentinel).unwrap(),b"outside");
+    assert!(e.pending().unwrap().is_empty());
+    assert!(terminal_tree::operations::Trash::new(&e,home).is_err());
+}
+#[test]
+fn personal_policy_refuses_invalid_external_root() {
+    if rustix::process::geteuid().is_root(){return;}
+    let f=Fixture::new();
+    assert!(Engine::new_personal(&f.root,&f.journal,&[f.base.clone()],&[]).is_err());
+    assert!(Engine::new_personal(std::path::Path::new("/"),&f.journal,&[],&[]).is_err());
+}

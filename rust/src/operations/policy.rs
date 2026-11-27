@@ -140,6 +140,11 @@ impl PersonalPolicy{
         root.check()?;
         require(!staged(&p)&&!self.protected.iter().any(|x|overlap(x,&p)),"protected runtime, personal configuration or recovery location")?;
         if !root.path.starts_with("/run/media"){require(!system(&p),"system location refused")?;}
+        // The final entry itself must not be a mount point (including a
+        // same-device bind mount). Also reject an ancestor mount under root.
+        let table=mounts()?;
+        require(!table.iter().any(|m|m.target.starts_with(&root.path)&&m.target!=root.path&&
+            (p.starts_with(&m.target)||m.target.starts_with(&p))),"unapproved nested mount refused")?;
         let parent=open_absolute_dir(p.parent().unwrap())?;
         require(mount_id(&parent)?==root.mount,"unapproved nested mount refused")?;
         Ok(p)

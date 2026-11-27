@@ -119,11 +119,18 @@ impl Workspace {
         Trash::new(&engine,&data)?;
         Ok(Self { engine, root, data, observed:BTreeMap::new(), clipboard:None, undo:Vec::new() })
     }
+    pub fn personal(home:&Path,journal:&Path,extra:&[PathBuf])->io::Result<Self>{
+        let root=home.to_path_buf();
+        let engine=Engine::new_personal(&root,journal,extra,&[])?;
+        Ok(Self{engine,root,data:PathBuf::new(),observed:BTreeMap::new(),clipboard:None,undo:Vec::new()})
+    }
     pub fn root(&self) -> &Path { &self.root }
+    pub fn is_personal(&self)->bool{self.engine.is_personal()}
     pub fn observe(&mut self, model: &Model) {
         self.observed = model.entries.iter().filter_map(|e| stamp(&e.path).ok().map(|s|(e.path.clone(),s))).collect();
     }
     fn ordinary(&self,p:&Path) -> io::Result<()> {
+        if self.engine.is_personal(){return self.engine.validate_personal_path(p);}
         let parent = p.parent().ok_or_else(||error("missing parent"))?.canonicalize()?;
         let p = parent.join(p.file_name().ok_or_else(||error("missing name"))?);
         if !p.starts_with(&self.root) || p == self.root || p.starts_with(&self.data) || self.data.starts_with(&p)
@@ -145,6 +152,7 @@ impl Workspace {
         Ok(review)
     }
     pub fn operate(&mut self, key: char, model: &mut Model) -> io::Result<String> {
+        if self.engine.is_personal() && matches!(key,'d'|'D'|'R') {return Err(error("Personal Trash not enabled; use Python for Trash"));}
         let result = match key {
             'c'|'x' => {
                 let review = self.review(model)?;

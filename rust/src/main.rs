@@ -174,8 +174,12 @@ fn preview(path:&Path)->io::Result<()> {
 fn browse(path: PathBuf, return_on_enter: bool, #[cfg(feature = "native-ops")] mut workspace: Option<workspace::Workspace>) -> io::Result<PathBuf> {
     #[cfg(feature = "native-ops")]
     let writable = workspace.is_some();
+    #[cfg(feature = "native-ops")]
+    let personal = workspace.as_ref().is_some_and(|w|w.is_personal());
     #[cfg(not(feature = "native-ops"))]
     let writable = false;
+    #[cfg(not(feature = "native-ops"))]
+    let personal = false;
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "Interactive terminal required"));
     }
@@ -183,7 +187,7 @@ fn browse(path: PathBuf, return_on_enter: bool, #[cfg(feature = "native-ops")] m
     #[cfg(feature = "native-ops")]
     if let Some(w) = &mut workspace { w.observe(&model); }
     let _terminal = Terminal::enter()?;
-    let mut message = String::from(if writable {"Experimental scoped workspace. Review all operations."} else {"Experimental read-only build. File mutations disabled."});
+    let mut message = String::from(if personal {"Personal preview: approved roots only. Trash disabled."} else if writable {"Experimental scoped workspace. Review all operations."} else {"Experimental read-only build. File mutations disabled."});
     let mut searching = false;
     let mut previous_query = String::new();
     loop {
@@ -386,6 +390,28 @@ fn run() -> io::Result<()> {
             { browse(p,false,None).map(|_| ()) }
             #[cfg(not(feature = "native-ops"))]
             { browse(p,false).map(|_| ()) }
+        },
+        #[cfg(feature = "native-ops")]
+        Some("--personal") => {
+            // Never infer a broader scope from an arbitrary HOME override.
+            // Resolve the real account's home from NSS via getent, then require
+            // the environment HOME to agree. This mode is explicitly opt-in.
+            let uid=rustix::process::getuid().as_raw();
+            let output=std::process::Command::new("getent").args(["passwd",&uid.to_string()]).output()?;
+            if !output.status.success(){return Err(io::Error::other("account home unavailable"));}
+            let raw=output.stdout.strip_suffix(b"\n").unwrap_or(&output.stdout);
+            let fields:Vec<_>=raw.split(|b|*b==b':').collect();
+            if fields.len()!=7 || fields[2]!=uid.to_string().as_bytes() || raw.contains(&b'\n'){
+                return Err(io::Error::other("ambiguous account record"));
+            }
+            let home=PathBuf::from(std::ffi::OsStr::from_bytes(fields[5]));
+            if env::var_os("HOME").as_deref()!=Some(home.as_os_str()){
+                return Err(io::Error::other("HOME differs from account home"));
+            }
+            let journal=path_arg(Some(args.next().ok_or_else(||io::Error::other("private existing journal path required"))?))?;
+            let extras=args.map(|p|path_arg(Some(p))).collect::<io::Result<Vec<_>>>()?;
+            let w=workspace::Workspace::personal(&home,&journal,&extras)?;
+            browse(home,false,Some(w)).map(|_| ())
         },
         #[cfg(feature = "native-ops")]
         Some("--workspace") => {

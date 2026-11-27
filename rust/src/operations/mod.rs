@@ -167,6 +167,10 @@ impl Engine {
         Ok(Self{root,root_identity,journal:file,journal_path:j,personal:Some(personal)})
     }
     pub fn is_personal(&self)->bool{self.personal.is_some()}
+    pub fn validate_personal_path(&self,path:&Path)->io::Result<()> {
+        require(self.is_personal(),"personal mode required")?;
+        self.path(path).map(|_| ())
+    }
     fn check_journal(&self)->io::Result<()>{
         let actual=policy::open_absolute_dir(&self.journal_path)?;
         let m=actual.metadata()?;
@@ -289,6 +293,7 @@ impl Engine {
             reject_mounts(&stage_path)?;
             checkpoint("copy-before-publish")?;
             self.check_journal()?;
+            reject_mounts(&stage_path)?;
             require(snapshot(&payload)? == staged, "verified payload changed before publish")?;
             self.check_identity(review)?;
             self.check_parent(&review.path, &src_parent)?;

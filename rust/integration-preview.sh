@@ -25,3 +25,7 @@ tt_rust_nav() {
 tt_rust_workspace() {
     "$_tt_rust_program" --workspace "$@"
 }
+
+tt_rust_personal() {
+    "$_tt_rust_program" --personal "$@"
+}
