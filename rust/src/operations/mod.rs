@@ -16,7 +16,7 @@ use xattr::FileExt;
 mod manifest;
 mod trash;
 pub use trash::{Trash, RestoreReview, RestoreOutcome, PurgeReview, PurgeOutcome};
-use manifest::{fd_path, manifest, copy_tree, Snapshot, Identity};
+use manifest::{fd_path, manifest, copy_tree, snapshot, Manifest, Snapshot, Identity};
 
 fn fail(message: &str) -> io::Error { io::Error::new(io::ErrorKind::InvalidData, message) }
 fn require(ok: bool, message: &str) -> io::Result<()> { if ok { Ok(()) } else { Err(fail(message)) } }
@@ -31,12 +31,11 @@ fn attributes(f: &File) -> io::Result<BTreeMap<OsString, Vec<u8>>> {
     }
     Ok(result)
 }
-fn digest(mut f: &File) -> io::Result<[u8; 32]> {
+fn digest(mut f: &File, buf: &mut [u8]) -> io::Result<[u8; 32]> {
     let before = identity(&f.metadata()?);
     let mut h = Sha256::new();
-    let mut buf = vec![0; 1024 * 1024];
     loop {
-        let n = f.read(&mut buf)?;
+        let n = f.read(buf)?;
         if n == 0 { break; }
         h.update(&buf[..n]);
     }
@@ -101,6 +100,7 @@ pub struct Review {
     identity: Identity,
     parent: (u64,u64),
     snapshot: Snapshot,
+    manifest: Manifest,
 }
 impl Review {
     pub fn path(&self) -> &Path { &self.path }
@@ -161,12 +161,12 @@ impl Engine {
         reject_mounts(&path)?;
         let parent = open_dir(path.parent().unwrap())?;
         let m = fs::symlink_metadata(fd_path(&parent).join(path.file_name().unwrap()))?;
-        let (_, snapshot) = manifest(&fd_path(&parent).join(path.file_name().unwrap()), false)?;
-        let reviewed = Review { path, identity: identity(&m), parent: dir_id(&parent)?, snapshot };
-        self.check(&reviewed)?;
+        let (manifest, snapshot) = manifest(&fd_path(&parent).join(path.file_name().unwrap()), false)?;
+        let reviewed = Review { path, identity: identity(&m), parent: dir_id(&parent)?, snapshot, manifest };
+        self.check_identity(&reviewed)?;
         Ok(reviewed)
     }
-    fn check(&self, review: &Review) -> io::Result<File> {
+    fn check_identity(&self, review: &Review) -> io::Result<File> {
         let p = self.path(&review.path)?;
         require(p == review.path, "source path changed")?;
         reject_mounts(&p)?;
@@ -174,7 +174,13 @@ impl Engine {
         require(dir_id(&parent)? == review.parent, "source parent changed")?;
         let entry = fd_path(&parent).join(p.file_name().unwrap());
         require(identity(&fs::symlink_metadata(&entry)?) == review.identity, "source changed")?;
-        require(manifest(&entry, false)?.1 == review.snapshot, "source tree changed")?;
+        require(snapshot(&entry)? == review.snapshot, "source tree changed")?;
+        Ok(parent)
+    }
+    fn check(&self, review: &Review) -> io::Result<File> {
+        let parent = self.check_identity(review)?;
+        let (content, ids) = manifest(&fd_path(&parent).join(review.path.file_name().unwrap()), false)?;
+        require(content == review.manifest && ids == review.snapshot, "reviewed content changed")?;
         Ok(parent)
     }
     fn log(&self, id: &str, operation: &str, src: Option<&Path>, dst: Option<&Path>, stage: Option<&Path>) -> io::Result<()> {
@@ -221,7 +227,7 @@ impl Engine {
         checkpoint: &mut dyn FnMut(&str) -> io::Result<()>) -> io::Result<Option<Undo>> {
         let dst = self.path(&destination.path)?;
         require(dst == destination.path, "destination path changed")?;
-        let src_parent = self.check(review)?;
+        let src_parent = self.check_identity(review)?;
         let dest_parent = open_dir(dst.parent().unwrap())?;
         require(dir_id(&dest_parent)? == destination.parent, "reviewed destination replaced")?;
         let dest_name = dst.file_name().unwrap();
@@ -242,11 +248,15 @@ impl Engine {
         if copy {
             let stage = create_dir_at(&dest_parent, OsStr::new(&stage_name))?;
             let payload = fd_path(&stage).join("payload");
-            copy_tree(&src, &payload, checkpoint)?;
-            self.check(review)?;
+            let staged = copy_tree(&src, &payload, &review.manifest, &review.snapshot, checkpoint)?;
+            self.check_identity(review)?;
             same_parent(dst.parent().unwrap(), &dest_parent)?;
             reject_mounts(&stage_path)?;
             checkpoint("copy-before-publish")?;
+            require(snapshot(&payload)? == staged, "verified payload changed before publish")?;
+            self.check_identity(review)?;
+            same_parent(review.path.parent().unwrap(), &src_parent)?;
+            same_parent(dst.parent().unwrap(), &dest_parent)?;
             stage.sync_all()?; dest_parent.sync_all()?;
             rx::renameat_with(&stage, "payload", &dest_parent, dest_name, RenameFlags::NOREPLACE)?;
             checkpoint("copy-before-sync")?;
@@ -259,23 +269,30 @@ impl Engine {
             checkpoint("copy-done")?;
             Ok(None)
         } else {
-            let before = manifest(&src, true)?.0;
-            self.check(review)?;
+            let (before, ids) = manifest(&src, true)?;
+            require(before == review.manifest && ids == review.snapshot, "source changed while syncing")?;
+            self.check_identity(review)?;
             same_parent(review.path.parent().unwrap(), &src_parent)?;
             same_parent(dst.parent().unwrap(), &dest_parent)?;
-            src_parent.sync_all()?; dest_parent.sync_all()?;
+            src_parent.sync_all()?;
+            let same_dir = dir_id(&src_parent)? == dir_id(&dest_parent)?;
+            if !same_dir { dest_parent.sync_all()?; }
             rx::renameat_with(&src_parent, src_name, &dest_parent, dest_name, RenameFlags::NOREPLACE)?;
             checkpoint("move-before-sync")?;
-            dest_parent.sync_all()?; src_parent.sync_all()?;
+            dest_parent.sync_all()?;
+            if !same_dir { src_parent.sync_all()?; }
             checkpoint("move-after-sync")?;
             self.complete(&id)?;
             checkpoint("move-done")?;
             // A failed post-move review must not cause a misleading retry.
             // If another writer has already changed the result, do not grant Undo.
             let after = self.review(&dst).and_then(|after| {
-                let (manifest_after, snapshot_after) = manifest(&dst, false)?;
-                require(manifest_after == before && snapshot_after == after.snapshot,
-                    "moved result changed before undo review")?;
+                require(after.manifest == before, "moved result changed before undo review")?;
+                require(after.snapshot.len() == review.snapshot.len() && review.snapshot.iter().all(|(p,id)| {
+                    if p == Path::new(".") {
+                        after.snapshot.get(p).is_some_and(|a| (a.0,a.1,a.2,a.3,a.4,a.5) == (id.0,id.1,id.2,id.3,id.4,id.5))
+                    } else { after.snapshot.get(p) == Some(id) }
+                }), "moved tree identity changed")?;
                 require(after.identity.0 == review.identity.0 && after.identity.1 == review.identity.1,
                     "moved inode replaced")?;
                 Ok(after)
