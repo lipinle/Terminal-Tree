@@ -1,4 +1,4 @@
-//! Experimental native operation core. Not wired to the live navigator yet.
+//! Experimental native operation core for an explicitly scoped workspace.
 //! The same transfer function is exercised in the crash-test guest.
 use rustix::fs::{self as rx, AtFlags, Mode, OFlags, RenameFlags};
 use sha2::{Digest, Sha256};
@@ -102,15 +102,25 @@ pub struct Review {
     parent: (u64,u64),
     snapshot: Snapshot,
 }
+impl Review {
+    pub fn path(&self) -> &Path { &self.path }
+}
 #[derive(Debug, Clone)]
 pub struct Destination {
     path: PathBuf,
     parent: (u64,u64),
 }
+impl Destination {
+    pub fn path(&self) -> &Path { &self.path }
+}
 #[derive(Debug)]
 pub struct Undo {
     review: Review,
     original: PathBuf,
+}
+impl Undo {
+    pub fn source(&self) -> &Path { &self.review.path }
+    pub fn destination(&self) -> &Path { &self.original }
 }
 #[derive(Debug, Clone, Copy)]
 pub enum Transfer { Copy, Move }
@@ -274,11 +284,22 @@ impl Engine {
         }
     }
     pub fn undo(&self, undo: &Undo) -> io::Result<()> {
-        self.transfer(&undo.review, &undo.original, Transfer::Move).map(|_| ())
+        let destination = self.destination(&undo.original)?;
+        self.undo_reviewed(undo, &destination)
+    }
+    pub fn undo_reviewed(&self, undo: &Undo, destination: &Destination) -> io::Result<()> {
+        require(destination.path == undo.original, "undo destination differs")?;
+        self.transfer_reviewed(&undo.review, destination, Transfer::Move).map(|_| ())
     }
     pub fn create(&self, destination: &Path, directory: bool) -> io::Result<()> {
-        let dst = self.path(destination)?;
+        let reviewed = self.destination(destination)?;
+        self.create_reviewed(&reviewed, directory)
+    }
+    pub fn create_reviewed(&self, destination: &Destination, directory: bool) -> io::Result<()> {
+        let dst = self.path(&destination.path)?;
+        require(dst == destination.path, "destination changed")?;
         let parent = open_dir(dst.parent().unwrap())?;
+        require(dir_id(&parent)? == destination.parent, "reviewed destination replaced")?;
         let name = dst.file_name().unwrap();
         no_conflict(&fd_path(&parent).join(name))?;
         let id = unique()?;

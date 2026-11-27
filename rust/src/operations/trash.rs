@@ -25,11 +25,18 @@ pub struct RestoreReview {
     info_parent: (u64,u64),
     info_bytes: Vec<u8>,
 }
+impl RestoreReview {
+    pub fn source(&self) -> &Path { self.item.path() }
+    pub fn destination(&self) -> &Path { self.destination.path() }
+}
 #[derive(Debug)]
 pub struct PurgeReview {
     item: Review,
     info: Option<(PathBuf, Identity, Vec<u8>)>,
     info_parent: (u64,u64),
+}
+impl PurgeReview {
+    pub fn source(&self) -> &Path { self.item.path() }
 }
 #[derive(Debug, PartialEq, Eq)]
 pub enum PurgeOutcome { Deleted, MetadataPending }

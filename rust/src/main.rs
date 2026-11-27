@@ -14,6 +14,8 @@ use std::path::{Path, PathBuf};
 use std::os::unix::ffi::OsStrExt;
 use terminal_tree::{display_name, scan, Model, Order};
 use unicode_width::UnicodeWidthChar;
+#[cfg(feature = "native-ops")]
+mod workspace;
 
 fn clip(text: &str, limit: usize) -> String {
     let mut width = 0;
@@ -62,12 +64,12 @@ impl Drop for Terminal {
     }
 }
 
-fn draw(model: &mut Model, message: &str, searching: bool) -> io::Result<()> {
+fn draw(model: &mut Model, message: &str, searching: bool, writable: bool) -> io::Result<()> {
     let (w, h) = terminal::size()?;
     let width = usize::from(w).saturating_sub(1);
     let mut out = io::stdout().lock();
     queue!(out, MoveTo(0, 0), Clear(ClearType::All), SetForegroundColor(Color::Cyan),
-        Print(clip(&format!("Terminal Tree [Rust / read-only] | {}",
+        Print(clip(&format!("Terminal Tree [Rust / {}] | {}", if writable {"workspace"} else {"read-only"},
             display_name(model.directory.as_os_str())), width)), ResetColor)?;
     if h < 5 { return out.flush(); }
     let capacity = usize::from(h - 4);
@@ -90,24 +92,39 @@ fn draw(model: &mut Model, message: &str, searching: bool) -> io::Result<()> {
         MoveTo(0, h - 2), Print(clip(message, width)),
         MoveTo(0, h - 1), Print(clip(if searching {
             "Filter: type text | Enter accept | Esc cancel"
+        } else if writable {
+            "c/x/v copy/cut/paste | r rename | n/t create | d trash | R restore | D purge | u undo | q exit"
         } else {
             "↑↓ select | ← parent | →/Enter folder | / filter | h hidden | s sort | F5 refresh | q exit"
         }, width)))?;
     out.flush()
 }
 
-fn browse(path: PathBuf) -> io::Result<()> {
+fn browse(path: PathBuf, #[cfg(feature = "native-ops")] mut workspace: Option<workspace::Workspace>) -> io::Result<()> {
+    #[cfg(feature = "native-ops")]
+    let writable = workspace.is_some();
+    #[cfg(not(feature = "native-ops"))]
+    let writable = false;
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "Interactive terminal required"));
     }
     let mut model = Model::new(path)?;
+    #[cfg(feature = "native-ops")]
+    if let Some(w) = &mut workspace { w.observe(&model); }
     let _terminal = Terminal::enter()?;
-    let mut message = String::from("Experimental read-only build. File mutations disabled.");
+    let mut message = String::from(if writable {"Experimental scoped workspace. Review all operations."} else {"Experimental read-only build. File mutations disabled."});
     let mut searching = false;
     let mut previous_query = String::new();
     loop {
-        draw(&mut model, &message, searching)?;
+        draw(&mut model, &message, searching, writable)?;
         let event = event::read()?;
+        #[cfg(feature = "native-ops")]
+        let reload_event = match &event {
+            Event::Key(k) => searching || matches!(k.code, KeyCode::Right | KeyCode::Left | KeyCode::Enter
+                | KeyCode::Char('h'|'s'|'f'|'['|']') | KeyCode::F(5)),
+            Event::Mouse(m) => matches!(m.kind, MouseEventKind::Down(MouseButton::Left)),
+            _ => false,
+        };
         let result = match event {
             Event::Key(key) if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
                 if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
@@ -146,9 +163,18 @@ fn browse(path: PathBuf) -> io::Result<()> {
                         KeyCode::F(1) | KeyCode::Char('?') => {
                             message = "Mouse wheel: move | Left click: folder | Right click: select | [ ] history".into(); Ok(())
                         }
-                        KeyCode::Char('x' | 'v' | 'c' | 'd' | 'D' | 'r' | 'n' | 't' | 'R' | 'u')
+                        KeyCode::Char('x' | 'v' | 'c' | 'd' | 'D' | 'r' | 'n' | 't' | 'R' | 'u' | 'j')
                         | KeyCode::Delete | KeyCode::F(2) => {
-                            message = "Disabled: the Rust safety engine has not been validated.".into(); Ok(())
+                            #[cfg(feature = "native-ops")]
+                            if let Some(w) = &mut workspace {
+                                let code = match key.code { KeyCode::Char(c)=>c, KeyCode::Delete=>'d', _=>'r' };
+                                match w.operate(code,&mut model) {
+                                    Ok(msg)=>{message=msg; Ok(())},
+                                    Err(e)=>Err(e),
+                                }
+                            } else { message = "Disabled: read-only navigator.".into(); Ok(()) }
+                            #[cfg(not(feature = "native-ops"))]
+                            { message = "Disabled: read-only navigator.".into(); Ok(()) }
                         }
                         _ => Ok(()),
                     }
@@ -173,6 +199,10 @@ fn browse(path: PathBuf) -> io::Result<()> {
             }
             _ => Ok(()),
         };
+        #[cfg(feature = "native-ops")]
+        if reload_event && result.is_ok() {
+            if let Some(w) = &mut workspace { w.observe(&model); }
+        }
         if let Err(e) = result { message = display_name(std::ffi::OsStr::new(&e.to_string())); }
     }
     Ok(())
@@ -198,7 +228,22 @@ fn run() -> io::Result<()> {
             let path = path_arg(if hidden { args.next() } else { first })?;
             list(&path, hidden)
         }
-        Some("--browse") => browse(path_arg(args.next())?),
+        Some("--browse") => {
+            let p=path_arg(args.next())?;
+            #[cfg(feature = "native-ops")]
+            { browse(p,None) }
+            #[cfg(not(feature = "native-ops"))]
+            { browse(p) }
+        },
+        #[cfg(feature = "native-ops")]
+        Some("--workspace") => {
+            let root=path_arg(args.next())?;
+            let journal=path_arg(Some(args.next().ok_or_else(||io::Error::other("journal path required"))?))?;
+            let data=path_arg(Some(args.next().ok_or_else(||io::Error::other("data path required"))?))?;
+            if args.next().is_some() { return Err(io::Error::other("unexpected argument")); }
+            let w=workspace::Workspace::new(&root,&journal,&data)?;
+            browse(w.root().to_path_buf(),Some(w))
+        },
         Some("--scan-paths0") => {
             let p = path_arg(args.next())?;
             let order = match args.next().as_deref().and_then(|s| s.to_str()) {
