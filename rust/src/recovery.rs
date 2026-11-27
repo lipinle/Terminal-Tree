@@ -13,13 +13,16 @@ fn field(record:&Value,key:&str)->String{
     }
     record.get(key).and_then(Value::as_str).map(|s|display_name(s.as_ref())).unwrap_or_else(||"-".into())
 }
-pub fn show(records:&[Value])->std::io::Result<()>{
+pub fn show(records:&[(OsString,std::io::Result<Value>)],truncated:bool)->std::io::Result<()>{
     let mut lines=vec![format!("Pending records: {}",records.len()),
         "Pending does not mean failed. A write may already have completed.".into(),
         "Inspect original, destination and staging/metadata before retrying.".into(),
         "Read-only view; no automatic deletion, rollback or replay.".into()];
-    for r in records{
+    if truncated {lines.push("Showing at most 128 records; additional records remain. No records were modified.".into());}
+    for (name,result) in records{
         lines.push(String::new());
+        lines.push(format!("Record: {}",display_name(name)));
+        let r=match result{Ok(r)=>r,Err(e)=>{lines.push(format!("Cannot read: {}",display_name(OsString::from(e.to_string()).as_os_str())));continue;}};
         lines.push(format!("ID: {} | Operation: {}",field(r,"id"),field(r,"operation")));
         for key in ["source","destination","stage"]{lines.push(format!("{key}: {}",field(r,key)));}
     }

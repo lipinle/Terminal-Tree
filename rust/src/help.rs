@@ -79,6 +79,7 @@ const TOPICS:&[Topic]=&[
         ("Workspace","--workspace ROOT JOURNAL DATA; private owned workspace, separate private journal and private data directory inside the workspace."),
         ("Personal","--personal JOURNAL [EXTRA_MOUNT ...]; explicit approved roots, existing private journal, real account HOME."),
         ("tt_rust_list","List a directory from Bash after sourcing preview integration.sh."),
+        ("tt_rust_ls","Use optional eza for a directory listing, or the native list if unavailable. No eza output is used for file operations."),
         ("tt_rust_nav","Browse from the current directory, then select a directory to return to Bash."),
         ("tt_rust_workspace","Launch the scoped workspace with ROOT JOURNAL DATA."),
         ("tt_rust_personal","Launch personal mode with JOURNAL and optional approved mount roots."),

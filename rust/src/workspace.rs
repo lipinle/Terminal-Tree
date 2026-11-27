@@ -318,9 +318,9 @@ impl Workspace {
                 return Ok("Rust view settings saved".into());
             }
             'j' => {
-                let records=self.engine.pending()?;
-                super::recovery::show(&records)?;
-                return Ok(format!("Pending records: {}; inspect journal before retrying",records.len()));
+                let (records,truncated)=self.engine.recovery_report()?;
+                super::recovery::show(&records,truncated)?;
+                return Ok(format!("Pending records: {}{}; inspect journal before retrying",records.len(),if truncated{"+"}else{""}));
             }
             _ => return Err(error("unsupported operation")),
         };

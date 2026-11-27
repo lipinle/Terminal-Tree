@@ -475,3 +475,21 @@ fn batch_path_index_rejects_nonadjacent_ancestors_and_duplicate_targets(){
     assert!(e.validate_batch(&[(c,first.clone()),(s,first)],Transfer::Copy).is_err());
     assert!(e.pending().unwrap().is_empty());
 }
+
+#[test]
+fn recovery_report_preserves_bad_records_and_shows_valid_ones(){
+    let f=Fixture::new();let e=f.engine();
+    let good=f.journal.join("good.pending.json");
+    let bad=f.journal.join("bad.pending.json");
+    let link=f.journal.join("link.pending.json");
+    fs::write(&good,b"{\"operation\":\"copy\"}").unwrap();
+    fs::write(&bad,b"{broken").unwrap();
+    for p in [&good,&bad]{fs::set_permissions(p,fs::Permissions::from_mode(0o600)).unwrap();}
+    symlink(&good,&link).unwrap();
+    let (rows,truncated)=e.recovery_report().unwrap();
+    assert!(!truncated);assert_eq!(rows.len(),3);
+    assert_eq!(rows.iter().filter(|(_,r)|r.is_ok()).count(),1);
+    assert_eq!(fs::read(&bad).unwrap(),b"{broken");
+    assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+    assert_eq!(fs::read_dir(&f.journal).unwrap().count(),3);
+}

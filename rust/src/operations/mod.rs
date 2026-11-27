@@ -416,6 +416,35 @@ impl Engine {
         self.complete(&id)
     }
     /// Read-only enumeration; malformed records are reported as errors.
+    /// Bounded, read-only diagnostic view. A bad record must not conceal
+    /// other pending records. Never interpret record paths as action inputs.
+    pub fn recovery_report(&self) -> io::Result<(Vec<(OsString,io::Result<serde_json::Value>)>,bool)> {
+        self.check_journal()?;
+        let mut out=Vec::new();
+        let mut truncated=false;
+        for entry in fs::read_dir(fd_path(&self.journal))? {
+            let name=entry?.file_name();
+            if !name.as_bytes().ends_with(b".pending.json"){continue;}
+            if out.len()>=128{truncated=true;break;}
+            let result=(||->io::Result<serde_json::Value>{
+                let f:File=rx::openat(&self.journal,&name,OFlags::RDONLY|OFlags::NOFOLLOW|OFlags::NONBLOCK|OFlags::CLOEXEC,Mode::empty())?.into();
+                let m=f.metadata()?;
+                require(m.is_file() && m.uid()==rustix::process::getuid().as_raw() && m.mode()&0o077==0 && m.nlink()==1 && m.len()<=65536,"unsafe or oversized recovery record")?;
+                let mut bytes=Vec::new();
+                (&f).take(65537).read_to_end(&mut bytes)?;
+                require(bytes.len()<=65536 && identity(&f.metadata()?)==identity(&m),"record changed during read")?;
+                let named=fs::symlink_metadata(fd_path(&self.journal).join(&name))?;
+                require(identity(&named)==identity(&m),"record replaced during read")?;
+                let value:serde_json::Value=serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+                require(value.is_object(),"invalid journal object")?;
+                Ok(value)
+            })();
+            out.push((name,result));
+        }
+        self.check_journal()?;
+        out.sort_by(|a,b|a.0.cmp(&b.0));
+        Ok((out,truncated))
+    }
     pub fn pending(&self) -> io::Result<Vec<serde_json::Value>> {
         self.check_journal()?;
         let mut out = Vec::new();
