@@ -10,6 +10,7 @@ use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use xattr::FileExt;
 
 type Attrs = BTreeMap<OsString, Vec<u8>>;
 type Identity = (u64, u64, u32, u64, i64, i64, i64, i64);
