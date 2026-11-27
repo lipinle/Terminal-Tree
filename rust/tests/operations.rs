@@ -156,3 +156,37 @@ fn gio_trash_round_trip_in_private_workspace() {
     assert_eq!(trash.restore(&review).unwrap(), RestoreOutcome::Restored);
     assert_eq!(fs::read(&p).unwrap(), b"gio fixture");
 }
+
+#[test]
+fn purge_requires_review_and_confirmation_and_preserves_symlink_target() {
+    use terminal_tree::operations::{Trash, PurgeOutcome};
+    let f = Fixture::new(); let e = f.engine();
+    let (data, files, info) = trash_fixture(&f);
+    let outside = f.root.join("untouched"); fs::write(&outside, b"keep").unwrap();
+    let p = files.join("folder"); fs::create_dir(&p).unwrap();
+    fs::write(p.join("file"), b"delete").unwrap();
+    symlink(&outside, p.join("link")).unwrap();
+    fs::write(info.join("folder.trashinfo"), b"[Trash Info]\nPath=/tmp/unused\n").unwrap();
+    let trash = Trash::new(&e, &data).unwrap();
+    assert!(trash.review_purge(&outside).is_err());
+    let review = trash.review_purge(&p).unwrap();
+    assert!(trash.purge(&review, "yes").is_err()); assert!(p.exists());
+    fs::write(p.join("added"), b"new").unwrap();
+    assert!(trash.purge(&review, "DELETE").is_err()); assert!(p.join("added").exists());
+    let review = trash.review_purge(&p).unwrap();
+    assert_eq!(trash.purge(&review, "DELETE").unwrap(), PurgeOutcome::Deleted);
+    assert!(!p.exists()); assert!(!info.join("folder.trashinfo").exists());
+    assert_eq!(fs::read(outside).unwrap(), b"keep");
+}
+#[test]
+fn hard_link_purge_refused_before_any_deletion() {
+    use terminal_tree::operations::Trash;
+    let f = Fixture::new(); let e = f.engine();
+    let (data, files, _) = trash_fixture(&f);
+    let p = files.join("folder"); fs::create_dir(&p).unwrap();
+    fs::write(p.join("a"), b"keep").unwrap();
+    fs::hard_link(p.join("a"), p.join("b")).unwrap();
+    let trash = Trash::new(&e, &data).unwrap();
+    assert!(trash.review_purge(&p).is_err());
+    assert!(p.join("a").exists() && p.join("b").exists());
+}

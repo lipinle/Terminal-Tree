@@ -15,7 +15,7 @@ use xattr::FileExt;
 
 mod manifest;
 mod trash;
-pub use trash::{Trash, RestoreReview, RestoreOutcome};
+pub use trash::{Trash, RestoreReview, RestoreOutcome, PurgeReview, PurgeOutcome};
 use manifest::{fd_path, manifest, copy_tree, Snapshot, Identity};
 
 fn fail(message: &str) -> io::Error { io::Error::new(io::ErrorKind::InvalidData, message) }

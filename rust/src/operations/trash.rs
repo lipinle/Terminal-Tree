@@ -1,7 +1,7 @@
 //! Experimental home Trash adapter for an explicit workspace.
 //! GIO controls trash placement; it is not a guarantee of power-loss durability.
 use super::{dir_id, fail, fd_path, identity, no_conflict, open_dir, require, same_parent,
-    unique, Destination, Engine, Identity, Review, Transfer};
+    unique, reject_mounts, Destination, Engine, Identity, Review, Snapshot, Transfer};
 use rustix::fs::{self as rx, AtFlags, Mode, OFlags};
 use std::ffi::OsString;
 use std::fs::{self, File};
@@ -25,6 +25,14 @@ pub struct RestoreReview {
     info_parent: (u64,u64),
     info_bytes: Vec<u8>,
 }
+#[derive(Debug)]
+pub struct PurgeReview {
+    item: Review,
+    info: Option<(PathBuf, Identity, Vec<u8>)>,
+    info_parent: (u64,u64),
+}
+#[derive(Debug, PartialEq, Eq)]
+pub enum PurgeOutcome { Deleted, MetadataPending }
 #[derive(Debug, PartialEq, Eq)]
 pub enum RestoreOutcome { Restored, MetadataPending }
 
@@ -70,6 +78,69 @@ fn info_file(parent: &File, name: &std::ffi::OsStr) -> io::Result<(Identity, Vec
     require(bytes.len() <= 65536 && identity(&file.metadata()?) == expected, "Trash info changed")?;
     Ok((expected, bytes))
 }
+
+fn children(snapshot: &Snapshot, rel: &Path) -> Vec<(OsString, PathBuf)> {
+    snapshot.keys().filter_map(|p| {
+        if p == rel { return None; }
+        let parent = p.parent()?;
+        if parent == rel { Some((p.file_name()?.to_os_string(), p.clone())) } else { None }
+    }).collect()
+}
+fn names(f: &File) -> io::Result<Vec<OsString>> {
+    let mut result = fs::read_dir(fd_path(f))?.map(|e| e.map(|x| x.file_name()))
+        .collect::<io::Result<Vec<_>>>()?;
+    result.sort();
+    Ok(result)
+}
+fn check_entry(parent: &File, name: &std::ffi::OsStr, expected: &Identity) -> io::Result<fs::Metadata> {
+    let m = fs::symlink_metadata(fd_path(parent).join(name))?;
+    require(identity(&m) == *expected, "Trash entry changed")?;
+    Ok(m)
+}
+fn preflight_purge(parent: &File, name: &std::ffi::OsStr, snapshot: &Snapshot, rel: &Path) -> io::Result<()> {
+    let expected = snapshot.get(rel).ok_or_else(|| fail("entry not reviewed"))?;
+    let m = check_entry(parent, name, expected)?;
+    if m.is_dir() {
+        let dir = open_dir(&fd_path(parent).join(name))?;
+        require(identity(&dir.metadata()?) == *expected, "directory replaced")?;
+        let expected_children = children(snapshot, rel);
+        let mut expected_names: Vec<_> = expected_children.iter().map(|(n,_)| n.clone()).collect();
+        expected_names.sort();
+        require(names(&dir)? == expected_names, "unreviewed Trash children")?;
+        for (n, r) in expected_children { preflight_purge(&dir, &n, snapshot, &r)?; }
+    } else {
+        // Removing one hard link changes sibling inode metadata; conservatively
+        // refuse such purges before any entry has been removed.
+        require(m.nlink() == 1, "hard-linked purge refused")?;
+    }
+    Ok(())
+}
+fn erase(parent: &File, name: &std::ffi::OsStr, snapshot: &Snapshot, rel: &Path, physical: &Path) -> io::Result<()> {
+    reject_mounts(physical)?;
+    let expected = snapshot.get(rel).ok_or_else(|| fail("entry not reviewed"))?;
+    let m = check_entry(parent, name, expected)?;
+    if m.is_dir() {
+        let dir = open_dir(&fd_path(parent).join(name))?;
+        require(identity(&dir.metadata()?) == *expected, "directory replaced")?;
+        let expected_children = children(snapshot, rel);
+        let mut expected_names: Vec<_> = expected_children.iter().map(|(n,_)| n.clone()).collect();
+        expected_names.sort();
+        require(names(&dir)? == expected_names, "unreviewed Trash children")?;
+        for (n, r) in expected_children {
+            erase(&dir, &n, snapshot, &r, &physical.join(&n))?;
+        }
+        require(names(&dir)?.is_empty(), "new Trash entries detected")?;
+        dir.sync_all()?;
+        let current = fs::symlink_metadata(fd_path(parent).join(name))?;
+        require(current.dev() == m.dev() && current.ino() == m.ino() && current.is_dir(), "Trash directory replaced")?;
+        rx::unlinkat(parent, name, AtFlags::REMOVEDIR)?;
+    } else {
+        require(m.nlink() == 1, "hard-linked purge refused")?;
+        rx::unlinkat(parent, name, AtFlags::empty())?;
+    }
+    parent.sync_all()
+}
+
 impl<'a> Trash<'a> {
     pub fn new(engine: &'a Engine, data_home: &Path) -> io::Result<Self> {
         require(fs::symlink_metadata(data_home)?.is_dir(), "data home symlink refused")?;
@@ -143,6 +214,57 @@ impl<'a> Trash<'a> {
         // Data has already moved. Never present a cleanup error as permission to retry.
         Ok(if cleanup.is_ok() { RestoreOutcome::Restored } else { RestoreOutcome::MetadataPending })
     }
+    pub fn review_purge(&self, path: &Path) -> io::Result<PurgeReview> {
+        let files = self.private_dir("files")?;
+        let info_parent = self.private_dir("info")?;
+        let item = self.engine.review(path)?;
+        require(item.path.parent() == Some(self.root.join("files").as_path())
+            && item.parent == dir_id(&files)?, "permanent deletion only in top-level home Trash")?;
+        preflight_purge(&files, item.path.file_name().unwrap(), &item.snapshot, Path::new("."))?;
+        let mut name = item.path.file_name().unwrap().to_os_string(); name.push(".trashinfo");
+        let info = match info_file(&info_parent, &name) {
+            Ok((id, bytes)) => Some((self.root.join("info").join(&name), id, bytes)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e),
+        };
+        Ok(PurgeReview { item, info, info_parent: dir_id(&info_parent)? })
+    }
+    fn check_purge_info(&self, review: &PurgeReview) -> io::Result<File> {
+        let dir = self.private_dir("info")?;
+        require(dir_id(&dir)? == review.info_parent, "Trash info directory changed")?;
+        if let Some((p, id, bytes)) = &review.info {
+            let actual = info_file(&dir, p.file_name().unwrap())?;
+            require(actual.0 == *id && actual.1 == *bytes, "Trash metadata changed")?;
+        } else {
+            let mut name = review.item.path.file_name().unwrap().to_os_string(); name.push(".trashinfo");
+            no_conflict(&fd_path(&dir).join(name))?;
+        }
+        Ok(dir)
+    }
+    pub fn purge(&self, review: &PurgeReview, confirmation: &str) -> io::Result<PurgeOutcome> {
+        require(confirmation == "DELETE", "explicit DELETE confirmation required")?;
+        let parent = self.engine.check(&review.item)?;
+        let current = self.private_dir("files")?;
+        require(dir_id(&parent)? == dir_id(&current)?, "Trash files directory changed")?;
+        self.check_purge_info(review)?;
+        let name = review.item.path.file_name().unwrap();
+        preflight_purge(&parent, name, &review.item.snapshot, Path::new("."))?;
+        let id = unique()?;
+        self.engine.log(&id, "permanent-delete", Some(&review.item.path), None, None)?;
+        self.engine.check(&review.item)?;
+        self.check_purge_info(review)?;
+        erase(&parent, name, &review.item.snapshot, Path::new("."), &review.item.path)?;
+        let cleanup = (|| -> io::Result<()> {
+            let info_parent = self.check_purge_info(review)?;
+            if let Some((p, _, _)) = &review.info {
+                rx::unlinkat(&info_parent, p.file_name().unwrap(), AtFlags::empty())?;
+                info_parent.sync_all()?;
+            }
+            self.engine.complete(&id)
+        })();
+        Ok(if cleanup.is_ok() { PurgeOutcome::Deleted } else { PurgeOutcome::MetadataPending })
+    }
+
 }
 #[cfg(test)]
 mod tests {
