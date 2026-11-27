@@ -1,0 +1,41 @@
+name: Rust port
+
+on:
+  push:
+    paths:
+      - 'rust/**'
+      - 'tests/benchmark/**'
+      - '.github/workflows/rust.yml'
+      - 'src/tree.py'
+  pull_request:
+    paths:
+      - 'rust/**'
+      - 'tests/benchmark/**'
+      - '.github/workflows/rust.yml'
+      - 'src/tree.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Build and test Rust read-only port
+        run: |
+          rustc --version
+          cargo test --manifest-path rust/Cargo.toml
+          cargo build --release --manifest-path rust/Cargo.toml
+      - name: Compare read-only scan and startup with Python
+        run: |
+          python3 tests/benchmark/scan.py --binary rust/target/release/terminal-tree
+      - name: Verify experimental write commands are unavailable
+        run: |
+          if rust/target/release/terminal-tree --delete /tmp; then
+            echo 'Unexpected mutation command accepted'
+            exit 1
+          fi
+          rust/target/release/terminal-tree --version
