@@ -15,7 +15,7 @@ CASES = (
 )
 
 
-def boot(kernel, initrd, disk, case, phase, log, timeout, engine="python"):
+def boot(kernel, initrd, disk, case, phase, log, timeout, engine="python", fixture="file"):
     expected = ("TT_CUT_READY " if phase == "execute" else "TT_PASS ") + case
     args = [
         "qemu-system-x86_64", "-machine", "q35", "-accel", "tcg",
@@ -23,7 +23,7 @@ def boot(kernel, initrd, disk, case, phase, log, timeout, engine="python"):
         "-nodefaults", "-no-reboot", "-display", "none",
         "-serial", "stdio", "-monitor", "none", "-net", "none",
         "-kernel", str(kernel), "-initrd", str(initrd),
-        "-append", f"console=ttyS0 quiet rdinit=/tt/init panic=1 tt_case={case} tt_phase={phase} tt_engine={engine}",
+        "-append", f"console=ttyS0 quiet rdinit=/tt/init panic=1 tt_case={case} tt_phase={phase} tt_engine={engine} tt_fixture={fixture}",
         "-drive", f"file={disk},format=raw,if=none,id=data,cache=none,aio=threads",
         "-device", "virtio-blk-pci,drive=data",
     ]
@@ -67,11 +67,16 @@ def main():
     parser.add_argument("--logs", required=True, type=Path)
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--engine", choices=("python", "rust"), default="python")
+    parser.add_argument("--fixture", choices=("file", "tree"), action="append")
     parser.add_argument("--case", choices=CASES, action="append")
     args = parser.parse_args()
     args.logs.mkdir(parents=True, exist_ok=True)
     cases = args.case or CASES
-    for case in cases:
+    fixtures = args.fixture or (("file", "tree") if args.engine == "rust" else ("file",))
+    if args.engine == "python" and fixtures != ("file",) and fixtures != ["file"]:
+        parser.error("tree fixture is Rust-only")
+    for fixture in fixtures:
+      for case in cases:
         with tempfile.TemporaryDirectory(prefix="tt-crash-") as temp:
             disk = Path(temp) / "disposable.raw"
             with disk.open("xb") as f:
@@ -79,15 +84,16 @@ def main():
             subprocess.run(["mkfs.ext4", "-F", "-q", "-E",
                             "lazy_itable_init=0,lazy_journal_init=0", str(disk)], check=True)
             for phase in ("execute", "verify"):
-                log = args.logs / f"{case}-{phase}.log"
+                log = args.logs / f"{fixture}-{case}-{phase}.log"
                 try:
                     boot(args.kernel.resolve(), args.initrd.resolve(), disk, case,
-                         phase, log, args.timeout, args.engine)
+                         phase, log, args.timeout, args.engine, fixture)
                 except BaseException:
                     if log.exists():
                         print(log.read_bytes()[-24000:].decode(errors="replace"), flush=True)
                     raise
-    print(f"VM crash/reboot checks passed: {len(cases)}/{len(cases)} (engine={args.engine})", flush=True)
+    total = len(fixtures) * len(cases)
+    print(f"VM crash/reboot checks passed: {total}/{total} (engine={args.engine})", flush=True)
 
 
 if __name__ == "__main__":

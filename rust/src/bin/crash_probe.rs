@@ -11,6 +11,8 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::time::Duration;
 use xattr::FileExt;
+#[path = "crash_probe/tree_probe.rs"]
+mod tree_probe;
 
 const ROOT: &str = "/mnt/data";
 const STAGE: &str = ".terminal-tree-copy-rust-probe";
@@ -172,16 +174,24 @@ fn run() -> io::Result<()> {
     }), "disposable ext4 guest mount required")?;
     let root: File = rx::open(Path::new(ROOT), OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC, Mode::empty())?.into();
     let work = directory_at(&root, "work")?;
-    let source = read_file(&work, SRC)?;
-    let original = source.metadata()?;
-    require(original.nlink() == 1, "test engine accepts only single-link regular files")?;
+    let fixture = std::env::args().nth(2).unwrap_or_else(|| "file".into());
+    require(matches!(fixture.as_str(), "file" | "tree")
+        && cmdline.split_whitespace().any(|x| x == format!("tt_fixture={fixture}")),
+        "fixture must match guest command line")?;
     let journal = journal(&root, &case)?;
-    if case.starts_with("copy-") {
-        copy(&work, &original, &source, &case)?;
+    if fixture == "tree" {
+        tree_probe::transact(&work, &case)?;
     } else {
-        source.sync_all()?;
-        same_source(&work, &original)?;
-        publish(&work, SRC, &work, &case, "move")?;
+        let source = read_file(&work, SRC)?;
+        let original = source.metadata()?;
+        require(original.nlink() == 1, "test engine accepts only single-link regular files")?;
+        if case.starts_with("copy-") {
+            copy(&work, &original, &source, &case)?;
+        } else {
+            source.sync_all()?;
+            same_source(&work, &original)?;
+            publish(&work, SRC, &work, &case, "move")?;
+        }
     }
     complete(&journal)?;
     cut(&case, if case.starts_with("copy-") { "copy-done" } else { "move-done" })?;

@@ -43,11 +43,38 @@ def cut(case):
         signal.pause()
 
 
-def prepare(engine="python"):
+def tree_manifest(path):
+    manifest, links = tree.content_manifest(str(path))
+    return json.dumps([manifest, links], sort_keys=True, ensure_ascii=True,
+                      default=lambda x: {"bytes": x.hex()} if isinstance(x, bytes) else str(x))
+
+
+def prepare(engine="python", fixture="file"):
     WORK.mkdir()
     (ROOT / "home").mkdir()
-    SOURCE.write_bytes(DATA)
-    if engine == "rust":
+    if fixture == "tree":
+        SOURCE.mkdir()
+        (SOURCE / "nested").mkdir()
+        (SOURCE / "nested" / "empty").mkdir()
+        (SOURCE / "large.bin").write_bytes(DATA)
+        os.link(SOURCE / "large.bin", SOURCE / "nested" / "hard-link")
+        (SOURCE / "nested" / "relative-link").symlink_to("../large.bin")
+        (SOURCE / "external-link").symlink_to("../unrelated.txt")
+        (SOURCE / "dangling-link").symlink_to("missing")
+        raw = os.fsencode(SOURCE) + b"/raw-\xff"
+        with open(raw, "wb") as f:
+            f.write(b"raw path")
+        os.chmod(SOURCE / "large.bin", 0o640)
+        os.chmod(SOURCE / "nested", 0o750)
+        os.setxattr(SOURCE / "large.bin", "user.tt-test", b"file-attr")
+        os.setxattr(SOURCE / "nested", "user.tt-test", b"dir-attr")
+        os.setxattr(SOURCE, "user.tt-test", b"root-attr")
+        for p in [*SOURCE.rglob("*"), SOURCE]:
+            os.utime(p, ns=(1700000000123456789, 1700000000123456789), follow_symlinks=False)
+        (ROOT / "baseline.json").write_text(tree_manifest(SOURCE), encoding="ascii")
+    else:
+        SOURCE.write_bytes(DATA)
+    if engine == "rust" and fixture == "file":
         os.chmod(SOURCE, 0o640)
         os.setxattr(SOURCE, "user.tt-test", b"preserve-xattr")
         os.utime(SOURCE, ns=(1700000000123456789, 1700000000123456789))
@@ -101,14 +128,23 @@ def execute(case):
     cut(case)
 
 
-def verify(case, engine="python"):
+def verify(case, engine="python", fixture="file"):
     require(SENTINEL.read_text(encoding="utf-8") == "do not modify",
             "unrelated data changed")
     src, dst = SOURCE.exists(), DEST.exists()
-    if src:
-        require(digest(SOURCE) == EXPECTED, "source checksum mismatch")
-    if dst:
-        require(digest(DEST) == EXPECTED, "published destination checksum mismatch")
+    if fixture == "tree":
+        baseline = (ROOT / "baseline.json").read_text(encoding="ascii")
+        for p in (SOURCE, DEST):
+            if p.exists():
+                require(tree_manifest(p) == baseline, "published tree differs from durable baseline")
+                require(os.path.samefile(p / "large.bin", p / "nested" / "hard-link"), "hard-link topology lost")
+                require((p / "external-link").is_symlink() and os.readlink(p / "external-link") == "../unrelated.txt", "external link changed")
+                require((p / "dangling-link").is_symlink(), "dangling link lost")
+    else:
+        if src:
+            require(digest(SOURCE) == EXPECTED, "source checksum mismatch")
+        if dst:
+            require(digest(DEST) == EXPECTED, "published destination checksum mismatch")
     if case.startswith("copy"):
         require(src, "copy lost its source")
         if case in ("copy-partial", "copy-before-publish"):
@@ -119,7 +155,7 @@ def verify(case, engine="python"):
         require(src != dst, "move must retain exactly one intact name")
         if case in ("move-after-sync", "move-done"):
             require(dst, "synced move was lost")
-    if engine == "rust":
+    if engine == "rust" and fixture == "file":
         for p in (SOURCE, DEST):
             if p.exists():
                 st = p.stat()
@@ -151,14 +187,16 @@ def main():
     require(case in CASES, "invalid case")
     engine = args.get("tt_engine", "python")
     require(engine in ("python", "rust"), "invalid engine")
+    fixture = args.get("tt_fixture", "file")
+    require(fixture == "file" or (engine == "rust" and fixture == "tree"), "invalid fixture")
     if args.get("tt_phase") == "execute":
         if engine == "rust":
-            prepare(engine)
-            subprocess.run(["/tt/tt-crash-probe", case], check=True)
+            prepare(engine, fixture)
+            subprocess.run(["/tt/tt-crash-probe", case, fixture], check=True)
             raise RuntimeError("native probe unexpectedly returned")
         execute(case)
     elif args.get("tt_phase") == "verify":
-        verify(case, engine)
+        verify(case, engine, fixture)
     else:
         raise ValueError("invalid phase")
 
