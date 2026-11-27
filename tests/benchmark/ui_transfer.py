@@ -22,7 +22,7 @@ def main(binary):
             def send(keys): os.write(master,keys)
             def go(path):
                 send(b"g"); wait(b"Go to path:")
-                send(os.fsencode(path)+b"\r"); wait(b"Rust / workspace | "+os.fsencode(path))
+                send(os.fsencode(path)+b"\r"); wait(b"Rust / workspace] | "+os.fsencode(path))
             def confirm(title,word=b"yes",final=b"Transfer completed"):
                 wait(title); send(b"\r"); wait(b"Type "+word+b":")
                 send(word+b"\r"); wait(final)
