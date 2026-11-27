@@ -100,6 +100,7 @@ pub struct Workspace {
     engine: Engine,
     root: PathBuf,
     data: PathBuf,
+    settings: super::settings::Store,
     observed: BTreeMap<PathBuf, Stamp>,
     marks: BTreeMap<PathBuf,Stamp>,
     mark_directory: PathBuf,
@@ -120,14 +121,17 @@ impl Workspace {
         let m = fs::metadata(&data)?;
         if !m.is_dir() || m.uid() != meta.uid() || m.mode() & 0o077 != 0 { return Err(error("private data directory required")); }
         Trash::new(&engine,&data)?;
-        Ok(Self { engine, root, data, observed:BTreeMap::new(), marks:BTreeMap::new(),mark_directory:PathBuf::new(),clipboard:None, undo:Vec::new() })
+        let settings=super::settings::Store::new(journal)?;
+        Ok(Self { engine, root, data,settings, observed:BTreeMap::new(), marks:BTreeMap::new(),mark_directory:PathBuf::new(),clipboard:None, undo:Vec::new() })
     }
     pub fn personal(home:&Path,journal:&Path,extra:&[PathBuf])->io::Result<Self>{
         let root=home.to_path_buf();
         let engine=Engine::new_personal(&root,journal,extra,&[])?;
         let data=engine.personal_data_home().ok_or_else(||error("personal data home unavailable"))?.to_path_buf();
-        Ok(Self{engine,root,data,observed:BTreeMap::new(),marks:BTreeMap::new(),mark_directory:PathBuf::new(),clipboard:None,undo:Vec::new()})
+        let settings=super::settings::Store::new(journal)?;
+        Ok(Self{engine,root,data,settings,observed:BTreeMap::new(),marks:BTreeMap::new(),mark_directory:PathBuf::new(),clipboard:None,undo:Vec::new()})
     }
+    pub fn load_settings(&self,model:&mut Model)->io::Result<()>{self.settings.load(model)}
     pub fn root(&self) -> &Path { &self.root }
     pub fn is_personal(&self)->bool{self.engine.is_personal()}
     pub fn marked(&self,p:&Path)->bool{self.marks.contains_key(p)}
@@ -308,6 +312,10 @@ impl Workspace {
                 if !confirm("PERMANENT DELETE - cannot undo",&[review.source()],"DELETE")? {return Ok("Cancelled".into());}
                 let outcome=worker::run(1,|p|{p.item(path_text(review.source()),0)?;trash.purge_with(&review,"DELETE",&mut |s|p.checkpoint(s))})?;
                 return self.refresh(model,format!("{outcome:?}"));
+            }
+            'S' => {
+                self.settings.save(model)?;
+                return Ok("Rust view settings saved".into());
             }
             'j' => {
                 let records=self.engine.pending()?;

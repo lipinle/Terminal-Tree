@@ -12,7 +12,7 @@ use std::ffi::OsString;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::os::unix::ffi::OsStrExt;
-use terminal_tree::{display_name, scan, Model, Order};
+use terminal_tree::{display_name, scan, Model, Order, KindFilter};
 use unicode_width::UnicodeWidthChar;
 #[cfg(feature = "native-ops")]
 mod workspace;
@@ -21,6 +21,8 @@ mod worker;
 mod places;
 #[cfg(feature="native-ops")]
 mod recovery;
+#[cfg(feature="native-ops")]
+mod settings;
 
 fn clip(text: &str, limit: usize) -> String {
     let mut width = 0;
@@ -99,8 +101,8 @@ fn draw(model: &mut Model, message: &str, searching: bool, writable: bool, #[cfg
     #[cfg(not(feature="native-ops"))]
     let marked_count=0;
     queue!(out, MoveTo(0, h - 3), Print(clip(&format!(
-        "{}/{} | marked {} | sort {:?} | hidden {} | filter: {}", if model.entries.is_empty() { 0 } else { model.selected + 1 },
-        model.entries.len(), marked_count, model.order, model.hidden,
+        "{}/{} | marked {} | sort {:?} | hidden {} | kind {:?} | filter: {}", if model.entries.is_empty() { 0 } else { model.selected + 1 },
+        model.entries.len(), marked_count, model.order, model.hidden, model.kind_filter,
         display_name(std::ffi::OsStr::new(&model.query))), width)),
         MoveTo(0, h - 2), Print(clip(message, width)),
         MoveTo(0, h - 1), Print(clip(if searching {
@@ -231,7 +233,7 @@ fn browse(path: PathBuf, return_on_enter: bool, #[cfg(feature = "native-ops")] m
     }
     let mut model = Model::new(path)?;
     #[cfg(feature = "native-ops")]
-    if let Some(w) = &mut workspace { w.observe(&model); }
+    if let Some(w) = &mut workspace { w.load_settings(&mut model)?;w.observe(&model); }
     let _terminal = Terminal::enter()?;
     let mut message = String::from(if personal {"Personal preview: approved roots; same-filesystem home Trash only."} else if writable {"Experimental scoped workspace. Review all operations."} else {"Experimental read-only build. File mutations disabled."});
     let mut searching = false;
@@ -242,7 +244,7 @@ fn browse(path: PathBuf, return_on_enter: bool, #[cfg(feature = "native-ops")] m
         #[cfg(feature = "native-ops")]
         let reload_event = match &event {
             Event::Key(k) => searching || matches!(k.code, KeyCode::Right | KeyCode::Left | KeyCode::Enter
-                | KeyCode::Char('h'|'s'|'f'|'g'|'['|']'|'m') | KeyCode::F(5) | KeyCode::F(4)),
+                | KeyCode::Char('h'|'s'|'f'|'g'|'['|']'|'m') | KeyCode::F(5) | KeyCode::F(4) | KeyCode::F(7) | KeyCode::F(6)),
             Event::Mouse(m) => matches!(m.kind, MouseEventKind::Down(MouseButton::Left)),
             _ => false,
         };
@@ -315,6 +317,24 @@ fn browse(path: PathBuf, return_on_enter: bool, #[cfg(feature = "native-ops")] m
                         KeyCode::Char('m') | KeyCode::F(4) => {
                             match places::choose()? {Some(p)=>model.go(p),None=>Ok(())}
                         }
+                        KeyCode::F(7) => {
+                            let labels=["All entries","Directories (not links)","Non-directory entries (not links)","Symbolic links"].map(str::to_owned);
+                            if let Some(i)=choose("Filter entry type",&labels)?{
+                                let old=model.kind_filter;
+                                model.kind_filter=[KindFilter::All,KindFilter::Directories,KindFilter::Files,KindFilter::Links][i];
+                                if let Err(e)=model.reload(){model.kind_filter=old;Err(e)}else{Ok(())}
+                            }else{Ok(())}
+                        }
+                        #[cfg(feature="native-ops")]
+                        KeyCode::F(6) => {
+                            if let Some(w)=&mut workspace{
+                                let actions=[('c',"Copy"),('x',"Cut"),('v',"Paste"),('r',"Rename"),('n',"New directory"),('t',"New file"),('d',"Move to Trash"),('R',"Restore"),('D',"Permanent Delete"),('u',"Undo move"),('j',"Recovery"),('S',"Save Rust view settings")];
+                                let labels:Vec<_>=actions.iter().map(|(_,label)|label.to_string()).collect();
+                                if let Some(i)=choose("Actions - writes require review",&labels)?{
+                                    match w.operate(actions[i].0,&mut model){Ok(msg)=>{message=msg;Ok(())},Err(e)=>Err(e)}
+                                }else{Ok(())}
+                            }else{Ok(())}
+                        }
                         KeyCode::Char('i') => {
                             match model.entries.get(model.selected) {
                                 Some(e)=>properties(&e.path),
@@ -335,12 +355,13 @@ fn browse(path: PathBuf, return_on_enter: bool, #[cfg(feature = "native-ops")] m
                                 "Workspace only: c/x/v copy/cut/paste; r rename; n/t create",
                                 "d trash; R restore; D purge; u undo; j recovery journal",
                                 "m / F4: My Computer (Home, Trash, File System, mounted devices)",
+                                "F6 actions; F7 entry type; S save Rust view settings (workspace/personal)",
                                 "Space mark; a mark visible (max 1000); A clear; marks reset on directory change",
                                 "Batch operations stop on first failure; earlier items remain committed.",
                                 "All writes require explicit review. Default browse is read-only."].map(str::to_owned);
                             page("Terminal Tree help",&lines)
                         }
-                        KeyCode::Char('x' | 'v' | 'c' | 'd' | 'D' | 'r' | 'n' | 't' | 'R' | 'u' | 'j' | ' ' | 'a' | 'A')
+                        KeyCode::Char('x' | 'v' | 'c' | 'd' | 'D' | 'r' | 'n' | 't' | 'R' | 'u' | 'j' | ' ' | 'a' | 'A' | 'S')
                         | KeyCode::Delete | KeyCode::F(2) => {
                             #[cfg(feature = "native-ops")]
                             if let Some(w) = &mut workspace {

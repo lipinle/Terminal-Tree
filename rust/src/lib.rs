@@ -130,6 +130,14 @@ pub fn scan(path: &Path, hidden: bool, order: Order, query: &str) -> io::Result<
     Ok(entries)
 }
 
+#[derive(Debug,Clone,Copy,PartialEq,Eq)]
+pub enum KindFilter { All, Directories, Files, Links }
+impl KindFilter{
+    fn accepts(self,e:&Entry)->bool{
+        match self{Self::All=>true,Self::Directories=>e.directory&&!e.symlink,
+            Self::Files=>!e.directory&&!e.symlink,Self::Links=>e.symlink}
+    }
+}
 #[derive(Debug)]
 pub struct Model {
     pub directory: PathBuf,
@@ -139,6 +147,7 @@ pub struct Model {
     pub hidden: bool,
     pub order: Order,
     pub query: String,
+    pub kind_filter: KindFilter,
     history: Vec<PathBuf>,
     history_index: usize,
 }
@@ -147,13 +156,14 @@ impl Model {
     pub fn new(directory: PathBuf) -> io::Result<Self> {
         let entries = scan(&directory, false, Order::Name, "")?;
         Ok(Self { directory: directory.clone(), entries, selected: 0, top: 0,
-            hidden: false, order: Order::Name, query: String::new(),
+            hidden: false, order: Order::Name, query: String::new(), kind_filter:KindFilter::All,
             history: vec![directory], history_index: 0 })
     }
 
     pub fn reload(&mut self) -> io::Result<()> {
         let selected_path = self.entries.get(self.selected).map(|e| e.path.clone());
-        let entries = scan(&self.directory, self.hidden, self.order, &self.query)?;
+        let mut entries = scan(&self.directory, self.hidden, self.order, &self.query)?;
+        entries.retain(|e|self.kind_filter.accepts(e));
         self.entries = entries;
         self.selected = selected_path.and_then(|p| self.entries.iter().position(|e| e.path == p))
             .unwrap_or_else(|| self.selected.min(self.entries.len().saturating_sub(1)));
@@ -162,7 +172,8 @@ impl Model {
     }
 
     fn load_directory(&mut self, directory: PathBuf) -> io::Result<()> {
-        let entries = scan(&directory, self.hidden, self.order, "")?;
+        let mut entries = scan(&directory, self.hidden, self.order, "")?;
+        entries.retain(|e|self.kind_filter.accepts(e));
         self.directory = directory;
         self.entries = entries;
         self.query.clear();
