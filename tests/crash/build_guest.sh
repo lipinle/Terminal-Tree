@@ -26,7 +26,10 @@ py=/usr/bin/python3
 pylib=$("$py" -c 'import sysconfig; print(sysconfig.get_path("stdlib"))')
 copy_binary "$py" usr/bin/python3
 copy_binary /usr/bin/cp usr/bin/cp
-if [[ $# == 3 ]]; then copy_binary "$(realpath "$3")" tt/tt-crash-probe; fi
+if [[ $# == 3 ]]; then
+    copy_binary "$(realpath "$3")" tt/tt-crash-probe
+    copy_binary /usr/bin/date usr/bin/date
+fi
 cp -aL "$pylib" "$root/usr/lib/"
 while IFS= read -r -d '' lib; do
     copy_binary "$lib" "${lib#/}"
