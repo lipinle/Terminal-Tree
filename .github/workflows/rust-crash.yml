@@ -20,6 +20,11 @@ jobs:
   ext4-power-cut:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        fixture: [file, tree]
+        group: [transfer-trash, restore-purge]
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Compile native crash probe
@@ -39,11 +44,33 @@ jobs:
           echo "TT_KERNEL=/boot/$kernel" >> "$GITHUB_ENV"
       - name: Abrupt virtual power cuts and ext4 journal replay
         run: |
-          python3 tests/crash/run_vm_tests.py --kernel "$TT_KERNEL" --initrd "$RUNNER_TEMP/tt-initramfs.gz" --logs "$RUNNER_TEMP/tt-crash-logs" --engine rust
+          set -euo pipefail
+          if [[ "$TT_GROUP" == transfer-trash ]]; then
+            cases=(copy-partial copy-before-publish copy-before-sync copy-after-sync copy-done move-before-sync move-after-sync move-done trash-journal trash-info-synced trash-before-sync trash-after-sync trash-done)
+          else
+            cases=(restore-journal restore-before-sync restore-after-sync restore-info-before-sync restore-info-after-sync restore-done purge-journal purge-entry-before-sync purge-entry-after-sync purge-data-synced purge-info-before-sync purge-info-after-sync purge-done)
+          fi
+          test "${#cases[@]}" -eq 13
+          # Verify the complete matrix covers the harness exactly once.
+          python3 - <<'PY'
+          import re, runpy
+          from pathlib import Path
+          ns = runpy.run_path("tests/crash/run_vm_tests.py")
+          groups = re.findall(r"^\s+cases=\(([^)]+)\)", Path(".github/workflows/rust-crash.yml").read_text(), re.M)
+          all_cases = [case for group in groups for case in group.split()]
+          assert len(groups) == 2 and all(len(g.split()) == 13 for g in groups)
+          assert sorted(all_cases) == sorted(ns["CASES"] + ns["PERSONAL_CASES"])
+          PY
+          args=()
+          for case in "${cases[@]}"; do args+=(--case "$case"); done
+          python3 tests/crash/run_vm_tests.py --kernel "$TT_KERNEL" --initrd "$RUNNER_TEMP/tt-initramfs.gz" --logs "$RUNNER_TEMP/tt-crash-logs" --engine rust --fixture "$TT_FIXTURE" "${args[@]}"
+        env:
+          TT_FIXTURE: ${{ matrix.fixture }}
+          TT_GROUP: ${{ matrix.group }}
       - name: Upload serial logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: rust-crash-serial-logs
+          name: rust-crash-serial-logs-${{ matrix.fixture }}-${{ matrix.group }}
           path: ${{ runner.temp }}/tt-crash-logs/
           if-no-files-found: warn

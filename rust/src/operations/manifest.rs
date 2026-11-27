@@ -107,12 +107,15 @@ pub(crate) fn manifest(path: &Path, flush: bool) -> io::Result<(Manifest, Snapsh
     manifest_with(path,flush,&mut |_|Ok(()))
 }
 pub(crate) fn manifest_with(path:&Path,flush:bool,checkpoint:&mut dyn FnMut(&str)->io::Result<()>)->io::Result<(Manifest,Snapshot)>{
+    let mut buffer=vec![0;1024*1024];
+    manifest_buffered(path,flush,checkpoint,&mut buffer)
+}
+fn manifest_buffered(path:&Path,flush:bool,checkpoint:&mut dyn FnMut(&str)->io::Result<()>,buffer:&mut [u8])->io::Result<(Manifest,Snapshot)>{
     let device = fs::symlink_metadata(path)?.dev();
     let mut items = BTreeMap::new();
     let mut snapshots = BTreeMap::new();
     let mut links = Links::new();
-    let mut buffer = vec![0; 1024 * 1024];
-    collect(path, Path::new("."), device, flush, &mut items, &mut snapshots, &mut links, &mut buffer, &mut HashCache::new(),checkpoint)?;
+    collect(path, Path::new("."), device, flush, &mut items, &mut snapshots, &mut links, buffer, &mut HashCache::new(),checkpoint)?;
     let mut groups: Vec<_> = links.into_values().filter(|g| g.len() > 1).collect();
     for g in &mut groups { g.sort(); }
     groups.sort();
@@ -249,10 +252,10 @@ pub(crate) fn copy_tree(src: &Path, payload: &Path, expected: &Manifest, reviewe
     copy_entry(src, payload, original.dev(), checkpoint, &mut BTreeMap::new(), &mut buffer)?;
     // Independently read and sync every staged file and directory before publish.
     checkpoint("copy-verify-stage")?;
-    let (actual, staged) = manifest_with(payload, true,checkpoint)?;
+    let (actual, staged) = manifest_buffered(payload, true,checkpoint,&mut buffer)?;
     require(&actual == expected, "staged tree differs from reviewed source")?;
     checkpoint("copy-verify-source")?;
-    let (source_after, ids_after) = manifest_with(src, false,checkpoint)?;
+    let (source_after, ids_after) = manifest_buffered(src, false,checkpoint,&mut buffer)?;
     require(&source_after == expected && &ids_after == reviewed, "source tree changed")?;
     Ok(staged)
 }

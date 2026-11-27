@@ -460,3 +460,18 @@ fn cancel_hash_review_and_move_before_commit(){
     assert!(!dst.exists());assert_eq!(fs::read(&src).unwrap(),vec![0x33;2*1024*1024]);
     assert_eq!(e.pending().unwrap().len(),1);
 }
+
+#[test]
+fn batch_path_index_rejects_nonadjacent_ancestors_and_duplicate_targets(){
+    let f=Fixture::new();let e=f.engine();
+    let parent=f.root.join("parent");fs::create_dir(&parent).unwrap();
+    let child=parent.join("child");fs::write(&child,b"child").unwrap();
+    let sibling=f.root.join("parent-other");fs::write(&sibling,b"sibling").unwrap();
+    let first=e.destination(&f.root.join("one")).unwrap();
+    let second=e.destination(&f.root.join("two")).unwrap();
+    let third=e.destination(&f.root.join("three")).unwrap();
+    let p=e.review(&parent).unwrap();let c=e.review(&child).unwrap();let s=e.review(&sibling).unwrap();
+    assert!(e.validate_batch(&[(p,first.clone()),(s.clone(),second.clone()),(c.clone(),third)],Transfer::Copy).is_err());
+    assert!(e.validate_batch(&[(c,first.clone()),(s,first)],Transfer::Copy).is_err());
+    assert!(e.pending().unwrap().is_empty());
+}

@@ -2,7 +2,7 @@
 //! The same transfer function is exercised in the crash-test guest.
 use rustix::fs::{self as rx, AtFlags, Mode, OFlags, RenameFlags};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap,BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, Metadata};
 use std::io::{self, Read, Write};
@@ -273,16 +273,17 @@ impl Engine {
     }
     pub fn validate_batch(&self,items:&[(Review,Destination)],kind:Transfer)->io::Result<()>{
         require(!items.is_empty(),"empty batch")?;
-        for (i,(src,dst)) in items.iter().enumerate(){
-            self.validate_transfer(src,dst,kind)?;
-            for (other_src,other_dst) in &items[..i]{
-                let overlaps=|a:&Path,b:&Path|a.starts_with(b)||b.starts_with(a);
-                require(!overlaps(src.path(),other_src.path()) &&
-                    !overlaps(dst.path(),other_dst.path()) &&
-                    !overlaps(src.path(),other_dst.path()) &&
-                    !overlaps(other_src.path(),dst.path()),"overlapping batch paths refused")?;
-            }
+        // Index every path once; checking ancestors is proportional to
+        // path depth rather than comparing all pairs in a large batch.
+        let mut paths=BTreeSet::new();
+        for (src,dst) in items{
+            require(paths.insert(src.path()) && paths.insert(dst.path()),"duplicate batch path refused")?;
         }
+        for path in &paths{
+            require(!path.ancestors().skip(1).any(|parent|paths.contains(parent)),"overlapping batch paths refused")?;
+        }
+        // Still independently validate every source manifest and destination.
+        for (src,dst) in items{self.validate_transfer(src,dst,kind)?;}
         Ok(())
     }
     pub fn transfer_reviewed(&self, review: &Review, destination: &Destination, kind: Transfer) -> io::Result<Option<Undo>> {
