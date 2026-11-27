@@ -5,11 +5,13 @@ on:
     paths:
       - 'rust/**'
       - 'tests/crash/**'
+      - 'legacy/python/src/tree.py'
       - '.github/workflows/rust-crash.yml'
   pull_request:
     paths:
       - 'rust/**'
       - 'tests/crash/**'
+      - 'legacy/python/src/tree.py'
       - '.github/workflows/rust-crash.yml'
   workflow_dispatch:
 

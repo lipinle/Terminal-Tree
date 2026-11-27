@@ -57,7 +57,7 @@ def once(binary,base,shape,kind,lang,number):
     make(source,shape)
     before=snapshot(source)
     cmd=([binary,str(work),str(journal),kind] if lang=="rust" else
-         [sys.executable,"-c",PYTHON,str(ROOT/"src"),str(work),str(state),kind])
+         [sys.executable,"-c",PYTHON,str(ROOT/"legacy/python/src"),str(work),str(state),kind])
     result=subprocess.run(cmd,check=True,capture_output=True,text=True)
     assert snapshot(destination)==before
     if kind=="copy": assert snapshot(source)==before

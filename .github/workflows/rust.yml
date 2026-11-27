@@ -6,13 +6,13 @@ on:
       - 'rust/**'
       - 'tests/benchmark/**'
       - '.github/workflows/rust.yml'
-      - 'src/tree.py'
+      - 'legacy/python/src/tree.py'
   pull_request:
     paths:
       - 'rust/**'
       - 'tests/benchmark/**'
       - '.github/workflows/rust.yml'
-      - 'src/tree.py'
+      - 'legacy/python/src/tree.py'
   workflow_dispatch:
 
 permissions:

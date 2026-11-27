@@ -25,11 +25,11 @@ jobs:
           test -n "$kernel"
           version=${kernel#vmlinuz-}
           sudo chmod a+r "/boot/$kernel"
-          bash tests/crash/build_guest.sh "$version" "$RUNNER_TEMP/tt-initramfs.gz"
+          bash legacy/python/tests/crash/build_guest.sh "$version" "$RUNNER_TEMP/tt-initramfs.gz"
           echo "TT_KERNEL=/boot/$kernel" >> "$GITHUB_ENV"
       - name: Abrupt virtual power cuts and ext4 journal replay
         run: |
-          python3 tests/crash/run_vm_tests.py --kernel "$TT_KERNEL" --initrd "$RUNNER_TEMP/tt-initramfs.gz" --logs "$RUNNER_TEMP/tt-crash-logs"
+          python3 legacy/python/tests/crash/run_vm_tests.py --kernel "$TT_KERNEL" --initrd "$RUNNER_TEMP/tt-initramfs.gz" --logs "$RUNNER_TEMP/tt-crash-logs"
       - name: Upload serial logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
