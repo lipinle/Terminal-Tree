@@ -23,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Compile native crash probe
-        run: cargo build --release --manifest-path rust/Cargo.toml --features crash-probe --bin tt-crash-probe
+        run: cargo build --locked --release --manifest-path rust/Cargo.toml --features crash-probe --bin tt-crash-probe
       - name: Install VM tools and generic guest kernel
         run: |
           sudo apt-get update

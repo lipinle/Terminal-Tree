@@ -8,7 +8,7 @@ target=$(realpath -m -- "$1")
 if [[ -e "$target" || -L "$target" || -L "$1" ]]; then echo "Refusing existing destination." >&2; exit 1; fi
 parent=$(dirname -- "$target")
 [[ -d "$parent" && -O "$parent" ]] || { echo "Owned existing parent required." >&2; exit 1; }
-cargo build --release --manifest-path "$here/Cargo.toml" --features native-ops --bin terminal-tree
+cargo build --locked --release --manifest-path "$here/Cargo.toml" --features native-ops --bin terminal-tree
 umask 077
 mkdir -- "$target"
 # Never overwrite existing files. Failure leaves a new directory for inspection.

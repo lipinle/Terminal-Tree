@@ -190,3 +190,51 @@ fn hard_link_purge_refused_before_any_deletion() {
     assert!(trash.review_purge(&p).is_err());
     assert!(p.join("a").exists() && p.join("b").exists());
 }
+
+#[test]
+fn corrupted_stage_is_not_published() {
+    let f = Fixture::new(); let e = f.engine();
+    let src = f.root.join("source"); let dst = f.root.join("dest");
+    fs::write(&src, b"original data").unwrap();
+    let review = e.review(&src).unwrap();
+    let result = e.transfer_with(&review, &dst, Transfer::Copy, &mut |point| {
+        if point == "copy-before-publish" {
+            let stage = fs::read_dir(&f.root)?.filter_map(Result::ok)
+                .find(|p| p.file_name().to_string_lossy().starts_with(".terminal-tree-copy-")).unwrap();
+            fs::write(stage.path().join("payload"), b"modified data")?;
+        }
+        Ok(())
+    });
+    assert!(result.is_err()); assert!(!dst.exists());
+    assert_eq!(fs::read(&src).unwrap(), b"original data");
+    assert_eq!(e.pending().unwrap().len(),1);
+}
+#[test]
+fn source_mutation_during_copy_is_refused() {
+    let f = Fixture::new(); let e = f.engine();
+    let src = f.root.join("source"); let dst = f.root.join("dest");
+    fs::write(&src, vec![7u8; 2*1024*1024]).unwrap();
+    let review = e.review(&src).unwrap();
+    let mut changed = false;
+    let result = e.transfer_with(&review, &dst, Transfer::Copy, &mut |point| {
+        if point == "copy-partial" && !changed {
+            fs::write(&src, vec![9u8; 2*1024*1024])?; changed = true;
+        }
+        Ok(())
+    });
+    assert!(changed && result.is_err() && !dst.exists());
+    assert_eq!(fs::read(&src).unwrap()[0],9);
+}
+#[test]
+fn moved_result_modified_before_undo_is_not_accepted() {
+    let f = Fixture::new(); let e = f.engine();
+    let src = f.root.join("source"); let dst = f.root.join("dest");
+    fs::write(&src, b"original").unwrap();
+    let review = e.review(&src).unwrap();
+    let undo = e.transfer_with(&review, &dst, Transfer::Move, &mut |point| {
+        if point == "move-after-sync" { fs::write(&dst, b"changed!")?; }
+        Ok(())
+    }).unwrap();
+    assert!(undo.is_none()); assert!(!src.exists());
+    assert_eq!(fs::read(dst).unwrap(),b"changed!");
+}
