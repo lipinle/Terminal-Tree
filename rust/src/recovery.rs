@@ -23,7 +23,19 @@ pub fn show(records:&[Value])->std::io::Result<()>{
         lines.push(format!("ID: {} | Operation: {}",field(r,"id"),field(r,"operation")));
         for key in ["source","destination","stage"]{lines.push(format!("{key}: {}",field(r,key)));}
     }
-    super::page("Recovery - pending journal",&lines)
+    use unicode_width::UnicodeWidthChar;
+    let width=usize::from(crossterm::terminal::size()?.0).saturating_sub(1).max(1);
+    let mut wrapped=Vec::new();
+    for line in lines{
+        let mut part=String::new();let mut used=0;
+        for c in line.chars(){
+            let n=c.width().unwrap_or(0);
+            if used+n>width&&!part.is_empty(){wrapped.push(std::mem::take(&mut part));used=0;}
+            part.push(c);used+=n;
+        }
+        wrapped.push(part);
+    }
+    super::page("Recovery - pending journal",&wrapped)
 }
 #[cfg(test)]
 mod tests{

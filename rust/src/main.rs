@@ -180,6 +180,12 @@ fn choose(title:&str,lines:&[String])->io::Result<Option<usize>>{
         }
     }
 }
+#[cfg(feature="native-ops")]
+fn actions_menu(w:&mut workspace::Workspace,model:&mut Model)->io::Result<Option<String>>{
+    let actions=[('c',"Copy"),('x',"Cut"),('v',"Paste"),('r',"Rename"),('n',"New directory"),('t',"New file"),('d',"Move to Trash"),('R',"Restore"),('D',"Permanent Delete"),('u',"Undo move"),('j',"Recovery"),('S',"Save Rust view settings")];
+    let labels:Vec<_>=actions.iter().map(|(_,label)|label.to_string()).collect();
+    if let Some(i)=choose("Actions - writes require review",&labels)?{w.operate(actions[i].0,model).map(Some)}else{Ok(None)}
+}
 fn properties(path:&Path)->io::Result<()> {
     use std::os::unix::fs::MetadataExt;
     let m=std::fs::symlink_metadata(path)?;
@@ -328,11 +334,8 @@ fn browse(path: PathBuf, return_on_enter: bool, #[cfg(feature = "native-ops")] m
                         #[cfg(feature="native-ops")]
                         KeyCode::F(6) => {
                             if let Some(w)=&mut workspace{
-                                let actions=[('c',"Copy"),('x',"Cut"),('v',"Paste"),('r',"Rename"),('n',"New directory"),('t',"New file"),('d',"Move to Trash"),('R',"Restore"),('D',"Permanent Delete"),('u',"Undo move"),('j',"Recovery"),('S',"Save Rust view settings")];
-                                let labels:Vec<_>=actions.iter().map(|(_,label)|label.to_string()).collect();
-                                if let Some(i)=choose("Actions - writes require review",&labels)?{
-                                    match w.operate(actions[i].0,&mut model){Ok(msg)=>{message=msg;Ok(())},Err(e)=>Err(e)}
-                                }else{Ok(())}
+                                match actions_menu(w,&mut model)?{Some(msg)=>{message=msg;Ok(())},None=>Ok(())}
+                            }else{Ok(())}
                             }else{Ok(())}
                         }
                         KeyCode::Char('i') => {
@@ -356,6 +359,7 @@ fn browse(path: PathBuf, return_on_enter: bool, #[cfg(feature = "native-ops")] m
                                 "d trash; R restore; D purge; u undo; j recovery journal",
                                 "m / F4: My Computer (Home, Trash, File System, mounted devices)",
                                 "F6 actions; F7 entry type; S save Rust view settings (workspace/personal)",
+                                "Ctrl+left click marks; Shift+right click opens actions; right click selects",
                                 "Space mark; a mark visible (max 1000); A clear; marks reset on directory change",
                                 "Batch operations stop on first failure; earlier items remain committed.",
                                 "All writes require explicit review. Default browse is read-only."].map(str::to_owned);
@@ -388,6 +392,17 @@ fn browse(path: PathBuf, return_on_enter: bool, #[cfg(feature = "native-ops")] m
                             let i = model.top + usize::from(mouse.row - 1);
                             if i < model.entries.len() {
                                 model.selected = i;
+                                #[cfg(feature="native-ops")]
+                                if let Some(w)=&mut workspace{
+                                    if mouse.kind==MouseEventKind::Down(MouseButton::Left)&&mouse.modifiers.contains(KeyModifiers::CONTROL){
+                                        match w.operate(' ',&mut model){Ok(msg)=>message=msg,Err(e)=>message=display_name(std::ffi::OsStr::new(&e.to_string()))}
+                                        continue;
+                                    }
+                                    if mouse.kind==MouseEventKind::Down(MouseButton::Right)&&mouse.modifiers.contains(KeyModifiers::SHIFT){
+                                        match actions_menu(w,&mut model){Ok(Some(msg))=>message=msg,Ok(None)=>(),Err(e)=>message=display_name(std::ffi::OsStr::new(&e.to_string()))}
+                                        continue;
+                                    }
+                                }
                                 if mouse.kind == MouseEventKind::Down(MouseButton::Left) { model.enter() }
                                 else { Ok(()) }
                             } else { Ok(()) }

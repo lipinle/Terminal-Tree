@@ -41,6 +41,8 @@ jobs:
         run: python3 tests/benchmark/ui_transfer.py rust/target/release/terminal-tree
       - name: Exercise batch operations through PTY
         run: python3 tests/benchmark/batch.py rust/target/release/terminal-tree
+      - name: Exercise recovery and view controls through PTY
+        run: python3 tests/benchmark/ui_tools.py rust/target/release/terminal-tree
       - name: Test secure result channel and preview shell syntax
         run: |
           python3 tests/benchmark/result.py rust/target/release/terminal-tree
