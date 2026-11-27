@@ -4,7 +4,9 @@ import os, pty, fcntl, struct, termios, subprocess, tempfile, sys
 from pathlib import Path
 from parity import wait_output
 
-def main(binary):
+def main(binary, mode):
+    marker = b"Rust / " + mode.encode("ascii") + b"]"
+    flags = ["--paranoid"] if mode == "Paranoid" else []
     with tempfile.TemporaryDirectory(prefix="tt-ui-transfer-") as tmp:
         base=Path(tmp); root=base/"workspace"; root.mkdir(mode=0o700)
         journal=base/"journal"; journal.mkdir(mode=0o700)
@@ -16,20 +18,20 @@ def main(binary):
         try:
             fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack("HHHH",28,160,0,0))
             before=termios.tcgetattr(slave)
-            p=subprocess.Popen([binary,"--workspace",str(root),str(journal),str(data)],
+            p=subprocess.Popen([binary,*flags,"--workspace",str(root),str(journal),str(data)],
                 stdin=slave,stdout=slave,stderr=slave,env=dict(os.environ,TERM="xterm-256color"))
             def wait(marker): wait_output(master,p,marker)
             def send(keys): os.write(master,keys)
             def go(path):
                 send(b"g"); wait(b"Go to path:")
-                send(os.fsencode(path)+b"\r"); wait(b"Rust / workspace] | "+os.fsencode(path))
+                send(os.fsencode(path)+b"\r"); wait(marker+b" | "+os.fsencode(path))
             def confirm(title,word=b"yes",final=b"Transfer completed"):
                 wait(title); send(b"\r"); wait(b"Type "+word+b":")
                 send(word+b"\r"); wait(final)
-            wait(b"Rust / workspace")
-            send(b"\x1b[B"); wait(b"Rust / workspace")
-            send(b"i"); wait(b"Properties"); send(b"q"); wait(b"Rust / workspace")
-            send(b"p"); wait(b"File preview"); send(b"q"); wait(b"Rust / workspace")
+            wait(marker)
+            send(b"\x1b[B"); wait(marker)
+            send(b"i"); wait(b"Properties"); send(b"q"); wait(marker)
+            send(b"p"); wait(b"File preview"); send(b"q"); wait(marker)
             send(b"c"); wait(b"Clipboard ready")
             go(folder)
             send(b"v"); confirm(b"Copy item")
@@ -60,8 +62,11 @@ def main(binary):
             send(b"q"); assert p.wait(timeout=8)==0
             assert termios.tcgetattr(slave)==before
             assert not list(journal.glob("*.pending.json"))
-            print("TT_UI_TRANSFER copy, cut, move, undo, properties, preview, trash, restore, purge passed")
+            print(f"TT_UI_TRANSFER {mode}: copy, cut, move, undo, properties, preview, trash, restore, purge passed")
         finally:
             if p and p.poll() is None: p.kill(); p.wait()
             os.close(master); os.close(slave)
-if __name__=="__main__": main(str(Path(sys.argv[1]).resolve()))
+if __name__=="__main__":
+    binary = str(Path(sys.argv[1]).resolve())
+    for mode in ("Standard", "Paranoid"):
+        main(binary, mode)

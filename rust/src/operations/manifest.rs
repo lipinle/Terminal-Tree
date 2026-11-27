@@ -13,7 +13,7 @@ use xattr::FileExt;
 type Attrs = BTreeMap<OsString, Vec<u8>>;
 pub(crate) type Identity = (u64, u64, u32, u64, i64, i64, i64, i64);
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Body { Directory, Link(PathBuf), File(u64, [u8; 32]) }
+enum Body { Directory, Link(PathBuf), File(u64, Option<[u8; 32]>) }
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Item {
     mode: u32, uid: u32, gid: u32, seconds: i64, nanos: i64,
@@ -23,6 +23,12 @@ struct Item {
 pub(crate) struct Manifest {
     items: BTreeMap<PathBuf, Item>,
     groups: Vec<Vec<PathBuf>>,
+}
+impl Manifest {
+    fn metadata_only(mut self)->Self {
+        for item in self.items.values_mut(){if let Body::File(_,hash)=&mut item.body{*hash=None;}}
+        self
+    }
 }
 pub(crate) type Snapshot = BTreeMap<PathBuf, Identity>;
 type Links = BTreeMap<(u64, u64), Vec<PathBuf>>;
@@ -58,7 +64,7 @@ fn checked_open(path: &Path, m: &Metadata, dir: bool) -> io::Result<File> {
 fn check(path: &Path, original: &Metadata) -> io::Result<()> {
     require(identity(&fs::symlink_metadata(path)?) == identity(original), "tree entry changed")
 }
-fn collect(path: &Path, relative: &Path, device: u64, flush: bool,
+fn collect(path: &Path, relative: &Path, device: u64, flush: bool, hash_content:bool,
            items: &mut BTreeMap<PathBuf, Item>, snapshots: &mut Snapshot,
            links: &mut Links, buffer: &mut [u8], hashes: &mut HashCache,checkpoint:&mut dyn FnMut(&str)->io::Result<()>) -> io::Result<()> {
     checkpoint("manifest-entry")?;
@@ -69,7 +75,7 @@ fn collect(path: &Path, relative: &Path, device: u64, flush: bool,
         let attrs = attributes(&dir)?;
         for name in names(&dir)? {
             collect(&fd_path(&dir).join(&name), &relative.join(&name), device,
-                    flush, items, snapshots, links, buffer, hashes,checkpoint)?;
+                    flush, hash_content, items, snapshots, links, buffer, hashes,checkpoint)?;
         }
         require(identity(&dir.metadata()?) == identity(&m), "directory changed during traversal")?;
         if flush { dir.sync_all()?; }
@@ -80,14 +86,17 @@ fn collect(path: &Path, relative: &Path, device: u64, flush: bool,
         // Cache only within this traversal, for multiple names of one inode.
         // A separate source/destination manifest always starts with an empty cache.
         let key = (m.dev(),m.ino());
-        let hash = if let Some((id, hash)) = hashes.get(&key) {
+        let hash = if !hash_content {
+            if flush {file.sync_all()?;}
+            None
+        } else if let Some((id, hash)) = hashes.get(&key) {
             require(*id == identity(&m), "hard-linked inode changed during traversal")?;
-            *hash
+            Some(*hash)
         } else {
             let hash = digest(&file, buffer,checkpoint)?;
             if flush { file.sync_all()?; }
             if m.nlink() > 1 { hashes.insert(key,(identity(&m),hash)); }
-            hash
+            Some(hash)
         };
         require(identity(&file.metadata()?) == identity(&m), "file changed during traversal")?;
         // Single-link files cannot contribute to a multi-name group.
@@ -103,19 +112,19 @@ fn collect(path: &Path, relative: &Path, device: u64, flush: bool,
         seconds: m.mtime(), nanos: m.mtime_nsec(), attrs, body });
     Ok(())
 }
-pub(crate) fn manifest(path: &Path, flush: bool) -> io::Result<(Manifest, Snapshot)> {
-    manifest_with(path,flush,&mut |_|Ok(()))
+pub(crate) fn manifest(path: &Path, flush: bool, hash_content:bool) -> io::Result<(Manifest, Snapshot)> {
+    manifest_with(path,flush,hash_content,&mut |_|Ok(()))
 }
-pub(crate) fn manifest_with(path:&Path,flush:bool,checkpoint:&mut dyn FnMut(&str)->io::Result<()>)->io::Result<(Manifest,Snapshot)>{
-    let mut buffer=vec![0;1024*1024];
-    manifest_buffered(path,flush,checkpoint,&mut buffer)
+pub(crate) fn manifest_with(path:&Path,flush:bool,hash_content:bool,checkpoint:&mut dyn FnMut(&str)->io::Result<()>)->io::Result<(Manifest,Snapshot)>{
+    let mut buffer=if hash_content {vec![0;1024*1024]}else{Vec::new()};
+    manifest_buffered(path,flush,hash_content,checkpoint,&mut buffer)
 }
-fn manifest_buffered(path:&Path,flush:bool,checkpoint:&mut dyn FnMut(&str)->io::Result<()>,buffer:&mut [u8])->io::Result<(Manifest,Snapshot)>{
+fn manifest_buffered(path:&Path,flush:bool,hash_content:bool,checkpoint:&mut dyn FnMut(&str)->io::Result<()>,buffer:&mut [u8])->io::Result<(Manifest,Snapshot)>{
     let device = fs::symlink_metadata(path)?.dev();
     let mut items = BTreeMap::new();
     let mut snapshots = BTreeMap::new();
     let mut links = Links::new();
-    collect(path, Path::new("."), device, flush, &mut items, &mut snapshots, &mut links, buffer, &mut HashCache::new(),checkpoint)?;
+    collect(path, Path::new("."), device, flush, hash_content, &mut items, &mut snapshots, &mut links, buffer, &mut HashCache::new(),checkpoint)?;
     let mut groups: Vec<_> = links.into_values().filter(|g| g.len() > 1).collect();
     for g in &mut groups { g.sort(); }
     groups.sort();
@@ -244,7 +253,7 @@ pub(crate) fn snapshot(path: &Path) -> io::Result<Snapshot> {
     collect_snapshot(path, Path::new("."), fs::symlink_metadata(path)?.dev(), &mut result)?;
     Ok(result)
 }
-pub(crate) fn copy_tree(src: &Path, payload: &Path, expected: &Manifest, reviewed: &Snapshot,
+pub(crate) fn copy_tree(src: &Path, payload: &Path, expected: &Manifest, reviewed: &Snapshot, paranoid:bool,
         checkpoint: &mut dyn FnMut(&str) -> io::Result<()>) -> io::Result<Snapshot> {
     let original = fs::symlink_metadata(src)?;
     require(&snapshot(src)? == reviewed, "source changed before copy")?;
@@ -252,10 +261,19 @@ pub(crate) fn copy_tree(src: &Path, payload: &Path, expected: &Manifest, reviewe
     copy_entry(src, payload, original.dev(), checkpoint, &mut BTreeMap::new(), &mut buffer)?;
     // Independently read and sync every staged file and directory before publish.
     checkpoint("copy-verify-stage")?;
-    let (actual, staged) = manifest_buffered(payload, true,checkpoint,&mut buffer)?;
-    require(&actual == expected, "staged tree differs from reviewed source")?;
+    let (actual, staged) = manifest_buffered(payload, true,true,checkpoint,&mut buffer)?;
+    if paranoid {
+        require(&actual == expected,"staged tree differs from reviewed source")?;
+    } else {
+        require(&actual.clone().metadata_only()==expected,"staged metadata differs from reviewed source")?;
+    }
     checkpoint("copy-verify-source")?;
-    let (source_after, ids_after) = manifest_buffered(src, false,checkpoint,&mut buffer)?;
-    require(&source_after == expected && &ids_after == reviewed, "source tree changed")?;
+    let (source_after, ids_after) = manifest_buffered(src, false,true,checkpoint,&mut buffer)?;
+    require(&ids_after==reviewed,"source tree changed")?;
+    // Both profiles independently read and compare source and staged bytes.
+    // Standard avoids redundant earlier content reads, never staged validation.
+    require(source_after==actual,"staged content differs from source")?;
+    if paranoid {require(&source_after==expected,"reviewed content changed")?;}
+    else {require(&source_after.metadata_only()==expected,"reviewed metadata changed")?;}
     Ok(staged)
 }

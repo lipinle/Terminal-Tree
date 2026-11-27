@@ -96,8 +96,20 @@ fn reject_mounts(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Verification profile. Both retain scope, journal, sync and no-overwrite guards.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SafetyMode {
+    #[default]
+    Standard,
+    Paranoid,
+}
+impl SafetyMode {
+    pub fn label(self)->&'static str {match self{Self::Standard=>"Standard",Self::Paranoid=>"Paranoid"}}
+    fn hashes(self)->bool {self==Self::Paranoid}
+}
 #[derive(Debug, Clone)]
 pub struct Review {
+    mode:SafetyMode,
     path: PathBuf,
     identity: Identity,
     parent: (u64,u64),
@@ -135,6 +147,7 @@ pub struct Engine {
     journal: File,
     journal_path: PathBuf,
     personal: Option<policy::PersonalPolicy>,
+    mode: SafetyMode,
 }
 impl Engine {
     pub fn new(root: &Path, journal: &Path) -> io::Result<Self> {
@@ -150,7 +163,7 @@ impl Engine {
         let meta = journal.metadata()?;
         require(meta.uid() == rustix::process::getuid().as_raw() && meta.permissions().mode() & 0o077 == 0,
             "private owned journal required")?;
-        Ok(Self { root_identity: dir_id(&open_dir(&root)?)?, root, journal, journal_path:j, personal:None })
+        Ok(Self { root_identity: dir_id(&open_dir(&root)?)?, root, journal, journal_path:j, personal:None, mode:SafetyMode::Standard })
     }
     /// Explicit personal-file preview; the home and listed external mounts
     /// are the only permitted roots. Home Trash uses a separate narrow adapter.
@@ -165,8 +178,11 @@ impl Engine {
         let personal=policy::PersonalPolicy::new(home,extra,&reserved)?;
         let root=policy::normal_absolute(home)?;
         let root_identity=dir_id(&policy::open_absolute_dir(&root)?)?;
-        Ok(Self{root,root_identity,journal:file,journal_path:j,personal:Some(personal)})
+        Ok(Self{root,root_identity,journal:file,journal_path:j,personal:Some(personal),mode:SafetyMode::Standard})
     }
+    /// Select once before creating any reviews. Reviews cannot cross profiles.
+    pub fn with_safety_mode(mut self,mode:SafetyMode)->Self{self.mode=mode;self}
+    pub fn safety_mode(&self)->SafetyMode{self.mode}
     pub fn is_personal(&self)->bool{self.personal.is_some()}
     pub fn personal_data_home(&self)->Option<&Path>{self.personal.as_ref().map(|p|p.data_home())}
     pub fn validate_personal_path(&self,path:&Path)->io::Result<()> {
@@ -204,12 +220,13 @@ impl Engine {
         reject_mounts(&path)?;
         let parent = self.parent_for(&path)?;
         let m = fs::symlink_metadata(fd_path(&parent).join(path.file_name().unwrap()))?;
-        let (manifest, snapshot) = manifest_with(&fd_path(&parent).join(path.file_name().unwrap()), false,checkpoint)?;
-        let reviewed = Review { path, identity: identity(&m), parent: dir_id(&parent)?, snapshot, manifest };
+        let (manifest, snapshot) = manifest_with(&fd_path(&parent).join(path.file_name().unwrap()), false,self.mode.hashes(),checkpoint)?;
+        let reviewed = Review { mode:self.mode,path, identity: identity(&m), parent: dir_id(&parent)?, snapshot, manifest };
         self.check_identity(&reviewed)?;
         Ok(reviewed)
     }
     fn check_identity(&self, review: &Review) -> io::Result<File> {
+        require(review.mode==self.mode,"review safety profile differs; review again")?;
         let p = self.path(&review.path)?;
         require(p == review.path, "source path changed")?;
         reject_mounts(&p)?;
@@ -222,7 +239,7 @@ impl Engine {
     }
     fn check(&self, review: &Review) -> io::Result<File> {
         let parent = self.check_identity(review)?;
-        let (content, ids) = manifest(&fd_path(&parent).join(review.path.file_name().unwrap()), false)?;
+        let (content, ids) = manifest(&fd_path(&parent).join(review.path.file_name().unwrap()), false,self.mode.hashes())?;
         require(content == review.manifest && ids == review.snapshot, "reviewed content changed")?;
         Ok(parent)
     }
@@ -230,7 +247,7 @@ impl Engine {
         self.check_journal()?;
         let hex = |p: &Path| p.as_os_str().as_bytes().iter().map(|b| format!("{b:02x}")).collect::<String>();
         let record = serde_json::json!({
-            "id": id, "operation": operation,
+            "id": id, "operation": operation, "safety_mode": self.mode.label(),
             "source": src.and_then(Path::to_str), "destination": dst.and_then(Path::to_str),
             "stage": stage.and_then(Path::to_str),
             "source_bytes_hex": src.map(hex), "destination_bytes_hex": dst.map(hex),
@@ -325,7 +342,7 @@ impl Engine {
         if copy {
             let stage = create_dir_at(&dest_parent, OsStr::new(&stage_name))?;
             let payload = fd_path(&stage).join("payload");
-            let staged = copy_tree(&src, &payload, &review.manifest, &review.snapshot, checkpoint)?;
+            let staged = copy_tree(&src, &payload, &review.manifest, &review.snapshot,self.mode.hashes(), checkpoint)?;
             self.check_identity(review)?;
             self.check_parent(&dst, &dest_parent)?;
             reject_mounts(&stage_path)?;
@@ -350,7 +367,7 @@ impl Engine {
             Ok(None)
         } else {
             checkpoint("move-verify-source")?;
-            let (before, ids) = manifest_with(&src, true,checkpoint)?;
+            let (before, ids) = manifest_with(&src, true,self.mode.hashes(),checkpoint)?;
             require(before == review.manifest && ids == review.snapshot, "source changed while syncing")?;
             self.check_identity(review)?;
             self.check_parent(&review.path, &src_parent)?;

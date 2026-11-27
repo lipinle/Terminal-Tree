@@ -78,8 +78,12 @@ fn draw(model: &mut Model, message: &str, searching: bool, writable: bool, #[cfg
     let (w, h) = terminal::size()?;
     let width = usize::from(w).saturating_sub(1);
     let mut out = io::stdout().lock();
+    #[cfg(feature="native-ops")]
+    let scope=workspace.map_or("read-only",|w|w.safety_label());
+    #[cfg(not(feature="native-ops"))]
+    let scope=if writable {"workspace"} else {"read-only"};
     queue!(out, MoveTo(0, 0), Clear(ClearType::All), SetForegroundColor(Color::Cyan),
-        Print(clip(&format!("Terminal Tree [Rust / {}] | {}", if writable {"workspace"} else {"read-only"},
+        Print(clip(&format!("Terminal Tree [Rust / {}] | {}", scope,
             display_name(model.directory.as_os_str())), width)), ResetColor)?;
     if h < 5 { return out.flush(); }
     let capacity = usize::from(h - 4);
@@ -441,7 +445,19 @@ fn result_channel(path: PathBuf) -> io::Result<()> {
 
 fn run() -> io::Result<()> {
     let mut args = env::args_os().skip(1);
-    match args.next().as_deref().and_then(|x| x.to_str()) {
+    let mut command=args.next();
+    #[cfg(feature="native-ops")]
+    let mode={
+        use terminal_tree::operations::SafetyMode;
+        if command.as_deref()==Some(std::ffi::OsStr::new("--paranoid")){
+            command=args.next();
+            if !matches!(command.as_deref().and_then(|s|s.to_str()),Some("--workspace"|"--personal")){
+                return Err(io::Error::other("--paranoid requires --workspace or --personal"));
+            }
+            SafetyMode::Paranoid
+        }else{SafetyMode::Standard}
+    };
+    match command.as_deref().and_then(|x| x.to_str()) {
         Some("--version") => { println!("terminal-tree Rust experimental {}", env!("CARGO_PKG_VERSION")); Ok(()) }
         Some("--list") => {
             let first = args.next();
@@ -475,7 +491,7 @@ fn run() -> io::Result<()> {
             }
             let journal=path_arg(Some(args.next().ok_or_else(||io::Error::other("private existing journal path required"))?))?;
             let extras=args.map(|p|path_arg(Some(p))).collect::<io::Result<Vec<_>>>()?;
-            let w=workspace::Workspace::personal(&home,&journal,&extras)?;
+            let w=workspace::Workspace::personal(&home,&journal,&extras,mode)?;
             browse(home,false,Some(w)).map(|_| ())
         },
         #[cfg(feature = "native-ops")]
@@ -484,7 +500,7 @@ fn run() -> io::Result<()> {
             let journal=path_arg(Some(args.next().ok_or_else(||io::Error::other("journal path required"))?))?;
             let data=path_arg(Some(args.next().ok_or_else(||io::Error::other("data path required"))?))?;
             if args.next().is_some() { return Err(io::Error::other("unexpected argument")); }
-            let w=workspace::Workspace::new(&root,&journal,&data)?;
+            let w=workspace::Workspace::new(&root,&journal,&data,mode)?;
             browse(w.root().to_path_buf(),false,Some(w)).map(|_| ())
         },
         #[cfg(feature = "native-ops")]
