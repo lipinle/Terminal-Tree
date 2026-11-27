@@ -482,7 +482,7 @@ fn personal_policy_refuses_invalid_external_root() {
         return;
     }
     let f = Fixture::new();
-    assert!(Engine::new_personal(&f.root, &f.journal, &[f.base.clone()], &[]).is_err());
+    assert!(Engine::new_personal(&f.root, &f.journal, std::slice::from_ref(&f.base), &[]).is_err());
     assert!(Engine::new_personal(std::path::Path::new("/"), &f.journal, &[], &[]).is_err());
 }
 

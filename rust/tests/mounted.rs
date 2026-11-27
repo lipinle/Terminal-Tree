@@ -13,7 +13,7 @@ fn mount_policy_and_real_enospc() {
     let journal = home.join("journal");
     fs::create_dir(&journal).unwrap();
     fs::set_permissions(&journal, fs::Permissions::from_mode(0o700)).unwrap();
-    let e = Engine::new_personal(&home, &journal, &[external.clone()], &[]).unwrap();
+    let e = Engine::new_personal(&home, &journal, std::slice::from_ref(&external), &[]).unwrap();
     let source = home.join("source");
     fs::write(&source, b"preserved data").unwrap();
     assert!(e.destination(&external).is_err());
@@ -29,7 +29,7 @@ fn mount_policy_and_real_enospc() {
     assert_eq!(fs::read(&dest).unwrap(), b"preserved data");
     let denied = home.join("denied");
     fs::write(&denied, b"private").unwrap();
-    fs::set_permissions(&denied, fs::Permissions::from_mode(0)).unwrap();
+    fs::set_permissions(&denied, fs::Permissions::from_mode(0o0)).unwrap();
     assert!(e.review(&denied).is_err());
     fs::set_permissions(&denied, fs::Permissions::from_mode(0o600)).unwrap();
     let big = home.join("large");
