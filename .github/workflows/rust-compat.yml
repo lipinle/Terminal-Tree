@@ -62,7 +62,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [macos-14, windows-2022]
+        # macOS validation deferred; hosted jobs repeatedly cancelled.
+        runner: [windows-2022]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     steps:
