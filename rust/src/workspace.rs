@@ -154,7 +154,7 @@ impl Workspace {
     fn review(&self,model:&Model) -> io::Result<Review> {
         let p = self.selected(model)?;
         self.ordinary(&p)?;
-        let review = self.engine.review(&p)?;
+        let review = worker::run(1,|progress|{progress.item(path_text(&p),0)?;self.engine.review_with(&p,&mut |s|progress.checkpoint(s))})?;
         self.selected(model)?;
         Ok(review)
     }
@@ -170,8 +170,11 @@ impl Workspace {
     }
     fn reviews(&self,model:&Model)->io::Result<Vec<Review>>{
         let paths=self.selected_paths(model)?;
-        let mut out=Vec::with_capacity(paths.len());
-        for p in &paths{self.ordinary(p)?;out.push(self.engine.review(p)?);}
+        let out=worker::run(paths.len(),|progress|{
+            let mut out=Vec::with_capacity(paths.len());
+            for (i,p) in paths.iter().enumerate(){progress.item(path_text(p),i)?;self.ordinary(p)?;out.push(self.engine.review_with(p,&mut |s|progress.checkpoint(s))?);}
+            Ok(out)
+        })?;
         self.selected_paths(model)?;
         Ok(out)
     }

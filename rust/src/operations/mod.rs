@@ -17,7 +17,7 @@ mod policy;
 mod manifest;
 mod trash;
 pub use trash::{Trash, RestoreReview, RestoreOutcome, PurgeReview, PurgeOutcome};
-use manifest::{fd_path, manifest, copy_tree, snapshot, Manifest, Snapshot, Identity};
+use manifest::{fd_path, manifest, manifest_with, copy_tree, snapshot, Manifest, Snapshot, Identity};
 
 fn fail(message: &str) -> io::Error { io::Error::new(io::ErrorKind::InvalidData, message) }
 fn require(ok: bool, message: &str) -> io::Result<()> { if ok { Ok(()) } else { Err(fail(message)) } }
@@ -32,13 +32,14 @@ fn attributes(f: &File) -> io::Result<BTreeMap<OsString, Vec<u8>>> {
     }
     Ok(result)
 }
-fn digest(mut f: &File, buf: &mut [u8]) -> io::Result<[u8; 32]> {
+fn digest(mut f: &File, buf: &mut [u8], checkpoint:&mut dyn FnMut(&str)->io::Result<()>) -> io::Result<[u8; 32]> {
     let before = identity(&f.metadata()?);
     let mut h = Sha256::new();
     loop {
         let n = f.read(buf)?;
         if n == 0 { break; }
         h.update(&buf[..n]);
+        checkpoint("hash-chunk")?;
     }
     require(identity(&f.metadata()?) == before, "file changed during hash")?;
     Ok(h.finalize().into())
@@ -195,11 +196,15 @@ impl Engine {
         Ok(parent.join(name))
     }
     pub fn review(&self, path: &Path) -> io::Result<Review> {
+        self.review_with(path,&mut |_|Ok(()))
+    }
+    #[doc(hidden)]
+    pub fn review_with(&self,path:&Path,checkpoint:&mut dyn FnMut(&str)->io::Result<()>)->io::Result<Review>{
         let path = self.path(path)?;
         reject_mounts(&path)?;
         let parent = self.parent_for(&path)?;
         let m = fs::symlink_metadata(fd_path(&parent).join(path.file_name().unwrap()))?;
-        let (manifest, snapshot) = manifest(&fd_path(&parent).join(path.file_name().unwrap()), false)?;
+        let (manifest, snapshot) = manifest_with(&fd_path(&parent).join(path.file_name().unwrap()), false,checkpoint)?;
         let reviewed = Review { path, identity: identity(&m), parent: dir_id(&parent)?, snapshot, manifest };
         self.check_identity(&reviewed)?;
         Ok(reviewed)
@@ -343,7 +348,7 @@ impl Engine {
             checkpoint("copy-done")?;
             Ok(None)
         } else {
-            let (before, ids) = manifest(&src, true)?;
+            let (before, ids) = manifest_with(&src, true,checkpoint)?;
             require(before == review.manifest && ids == review.snapshot, "source changed while syncing")?;
             self.check_identity(review)?;
             self.check_parent(&review.path, &src_parent)?;

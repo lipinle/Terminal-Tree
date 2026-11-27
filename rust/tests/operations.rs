@@ -430,3 +430,33 @@ fn batch_refuses_overlapping_sources_and_targets(){
     assert!(e.validate_batch(&[(a,d1.clone()),(b,d1)],Transfer::Copy).is_err());
     assert!(!f.root.join("a").exists());
 }
+
+#[test]
+fn cooperative_cancel_during_copy_preserves_source_and_pending_stage(){
+    let f=Fixture::new();let e=f.engine();
+    let src=f.root.join("large");let dst=f.root.join("destination");
+    fs::write(&src,vec![0x5a;4*1024*1024]).unwrap();
+    let r=e.review(&src).unwrap();let d=e.destination(&dst).unwrap();
+    let err=e.transfer_reviewed_with(&r,&d,Transfer::Copy,&mut |point|{
+        if point=="copy-partial"{Err(std::io::Error::new(std::io::ErrorKind::Interrupted,"cancelled"))}else{Ok(())}
+    }).unwrap_err();
+    assert_eq!(err.kind(),std::io::ErrorKind::Interrupted);
+    assert!(!dst.exists());
+    assert_eq!(fs::read(&src).unwrap(),vec![0x5a;4*1024*1024]);
+    assert_eq!(e.pending().unwrap().len(),1);
+}
+#[test]
+fn cancel_hash_review_and_move_before_commit(){
+    let f=Fixture::new();let e=f.engine();
+    let src=f.root.join("source");let dst=f.root.join("destination");
+    fs::write(&src,vec![0x33;2*1024*1024]).unwrap();
+    assert!(e.review_with(&src,&mut |point|if point=="hash-chunk"{Err(std::io::Error::new(std::io::ErrorKind::Interrupted,"cancelled"))}else{Ok(())}).is_err());
+    assert!(e.pending().unwrap().is_empty());
+    let r=e.review(&src).unwrap();let d=e.destination(&dst).unwrap();
+    let err=e.transfer_reviewed_with(&r,&d,Transfer::Move,&mut |point|{
+        if point=="transfer-commit"{Err(std::io::Error::new(std::io::ErrorKind::Interrupted,"cancelled"))}else{Ok(())}
+    }).unwrap_err();
+    assert_eq!(err.kind(),std::io::ErrorKind::Interrupted);
+    assert!(!dst.exists());assert_eq!(fs::read(&src).unwrap(),vec![0x33;2*1024*1024]);
+    assert_eq!(e.pending().unwrap().len(),1);
+}
