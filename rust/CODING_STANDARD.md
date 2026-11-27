@@ -1,6 +1,6 @@
 # Rust coding standard
 
-This is a release gate for the shared core and Standard edition. Paranoid work follows the same rules.
+These standards apply to all Rust code in this repository.
 
 ## Formatting
 
