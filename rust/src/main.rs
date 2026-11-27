@@ -16,6 +16,8 @@ use terminal_tree::{display_name, scan, Model, Order};
 use unicode_width::UnicodeWidthChar;
 #[cfg(feature = "native-ops")]
 mod workspace;
+#[cfg(feature="native-ops")]
+mod worker;
 
 fn clip(text: &str, limit: usize) -> String {
     let mut width = 0;

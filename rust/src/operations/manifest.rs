@@ -174,6 +174,7 @@ fn copy_bytes(input: &mut File, output: &mut File, size: u64, buffer: &mut [u8],
 }
 fn copy_entry(src: &Path, dst: &Path, device: u64, checkpoint: &mut dyn FnMut(&str) -> io::Result<()>,
               hardlinks: &mut BTreeMap<(u64, u64), PathBuf>, buffer: &mut [u8]) -> io::Result<()> {
+    checkpoint("copy-entry")?;
     let m = fs::symlink_metadata(src)?;
     require(m.dev() == device, "cross-device source refused")?;
     if m.is_dir() {
@@ -238,8 +239,10 @@ pub(crate) fn copy_tree(src: &Path, payload: &Path, expected: &Manifest, reviewe
     let mut buffer = vec![0; 1024 * 1024];
     copy_entry(src, payload, original.dev(), checkpoint, &mut BTreeMap::new(), &mut buffer)?;
     // Independently read and sync every staged file and directory before publish.
+    checkpoint("copy-verify-stage")?;
     let (actual, staged) = manifest(payload, true)?;
     require(&actual == expected, "staged tree differs from reviewed source")?;
+    checkpoint("copy-verify-source")?;
     let (source_after, ids_after) = manifest(src, false)?;
     require(&source_after == expected && &ids_after == reviewed, "source tree changed")?;
     Ok(staged)

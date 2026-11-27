@@ -292,7 +292,8 @@ impl Engine {
         let reviewed = self.destination(destination)?;
         self.transfer_reviewed_with(review, &reviewed, kind, checkpoint)
     }
-    fn transfer_reviewed_with(&self, review: &Review, destination: &Destination, kind: Transfer,
+    #[doc(hidden)]
+    pub fn transfer_reviewed_with(&self, review: &Review, destination: &Destination, kind: Transfer,
         checkpoint: &mut dyn FnMut(&str) -> io::Result<()>) -> io::Result<Option<Undo>> {
         let dst = self.path(&destination.path)?;
         require(dst == destination.path, "destination path changed")?;
@@ -312,6 +313,7 @@ impl Engine {
         if !copy {
             require(fs::symlink_metadata(&src)?.dev() == dest_parent.metadata()?.dev(), "cross-device move refused")?;
         }
+        checkpoint("transfer-prepare")?;
         self.log(&id, if copy {"copy"} else {"move"}, Some(&review.path), Some(&dst),
             if copy {Some(&stage_path)} else {None})?;
         if copy {
@@ -329,6 +331,7 @@ impl Engine {
             self.check_parent(&review.path, &src_parent)?;
             self.check_parent(&dst, &dest_parent)?;
             stage.sync_all()?; dest_parent.sync_all()?;
+            checkpoint("transfer-commit")?;
             rx::renameat_with(&stage, "payload", &dest_parent, dest_name, RenameFlags::NOREPLACE)?;
             checkpoint("copy-before-sync")?;
             dest_parent.sync_all()?; stage.sync_all()?;
@@ -349,6 +352,7 @@ impl Engine {
             let same_dir = dir_id(&src_parent)? == dir_id(&dest_parent)?;
             if !same_dir { dest_parent.sync_all()?; }
             self.check_journal()?;
+            checkpoint("transfer-commit")?;
             rx::renameat_with(&src_parent, src_name, &dest_parent, dest_name, RenameFlags::NOREPLACE)?;
             checkpoint("move-before-sync")?;
             dest_parent.sync_all()?;

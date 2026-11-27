@@ -240,6 +240,7 @@ impl<'a> Trash<'a> {
         let metadata=format!("[Trash Info]\nPath={encoded}\nDeletionDate={date}\n");
         let (content,ids)=super::manifest(&source,true)?;
         require(content==item.manifest && ids==item.snapshot,"source changed while syncing")?;
+        checkpoint("trash-prepare")?;
         self.engine.log(&id,"native-trash",Some(&item.path),Some(&target),Some(&self.root.join("info").join(&info_name)))?;
         checkpoint("trash-journal")?;
         let mut record:File=rx::openat(&info,&info_name,OFlags::WRONLY|OFlags::CREATE|OFlags::EXCL|OFlags::NOFOLLOW|OFlags::CLOEXEC,Mode::from_bits_truncate(0o600))?.into();
@@ -252,6 +253,7 @@ impl<'a> Trash<'a> {
         require(info_file(&info,&info_name)?==(info_id,metadata.as_bytes().to_vec()),"Trash metadata replaced")?;
         parent.sync_all()?;files.sync_all()?;
         self.engine.check_journal()?;
+        checkpoint("trash-commit")?;
         rx::renameat_with(&parent,item.path.file_name().unwrap(),&files,&name,rx::RenameFlags::NOREPLACE)?;
         let finish=(||->io::Result<()>{
             checkpoint("trash-before-sync")?;
@@ -306,6 +308,7 @@ impl<'a> Trash<'a> {
         let id = unique()?;
         self.engine.log(&id, "gio-trash", Some(&item.path), None, None)?;
         self.engine.check(item)?;
+        checkpoint("trash-commit")?;
         let status = Command::new("gio").arg("trash").arg("--").arg(&item.path)
             .env("XDG_DATA_HOME", &self.data_home).stdin(Stdio::null())
             .stdout(Stdio::null()).stderr(Stdio::piped()).output()?;
@@ -370,6 +373,7 @@ impl<'a> Trash<'a> {
             self.engine.check_parent(review.destination.path(),&dst)?;
             src.sync_all()?;dst.sync_all()?;
             self.engine.check_journal()?;
+            checkpoint("restore-commit")?;
             rx::renameat_with(&src,name,&dst,target,rx::RenameFlags::NOREPLACE)?;
             let finish=(||->io::Result<()>{
                 checkpoint("restore-before-sync")?;
@@ -380,7 +384,7 @@ impl<'a> Trash<'a> {
                 Ok(())
             })();
             if finish.is_err(){return Ok(RestoreOutcome::MetadataPending);}
-        }else{self.engine.transfer_reviewed(&review.item, &review.destination, Transfer::Move)?;}
+        }else{self.engine.transfer_reviewed_with(&review.item, &review.destination, Transfer::Move,checkpoint)?;}
         let cleanup = (|| -> io::Result<()> {
             let parent = self.check_info(review)?;
             rx::unlinkat(&parent, review.info.file_name().unwrap(), AtFlags::empty())?;
@@ -439,6 +443,7 @@ impl<'a> Trash<'a> {
         self.check_purge_info(review)?;
         self.engine.check_journal()?;
         require(dir_id(&self.private_dir("files")?)?==dir_id(&parent)?,"Trash files replaced")?;
+        checkpoint("purge-commit")?;
         erase(&parent, name, &review.item.snapshot, Path::new("."), &review.item.path,checkpoint)?;
         checkpoint("purge-data-synced")?;
         let cleanup = (|| -> io::Result<()> {
