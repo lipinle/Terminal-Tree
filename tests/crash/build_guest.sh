@@ -57,7 +57,7 @@ for mod in virtio_pci virtio_blk ext4; do
 done
 install -m 755 "$here/guest-init.sh" "$root/tt/init"
 install -m 644 "$here/guest.py" "$root/tt/guest.py"
-install -m 644 "$repo/src/tree.py" "$root/tt/tree.py"
+install -m 644 "$repo/legacy/python/src/tree.py" "$root/tt/tree.py"
 printf 'root:x:0:0:root:/root:/tt/bin/sh\n' > "$root/etc/passwd"
 printf 'root:x:0:\n' > "$root/etc/group"
 mkdir -p "$(dirname "$output")"
