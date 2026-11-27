@@ -76,101 +76,94 @@ fn check(path: &Path, original: &Metadata) -> io::Result<()> {
         "tree entry changed",
     )
 }
-fn collect(
-    path: &Path,
-    relative: &Path,
+// Keep all per-traversal state together. Each source or staged manifest
+// still receives its own fresh hash cache and identity snapshot.
+struct ManifestCollector<'a> {
     device: u64,
     flush: bool,
-    items: &mut BTreeMap<PathBuf, Item>,
-    snapshots: &mut Snapshot,
-    links: &mut Links,
-    buffer: &mut [u8],
-    hashes: &mut HashCache,
-    checkpoint: &mut dyn FnMut(&str) -> io::Result<()>,
-) -> io::Result<()> {
-    checkpoint("manifest-entry")?;
-    let m = fs::symlink_metadata(path)?;
-    require(m.dev() == device, "cross-device entry refused")?;
-    let (body, attrs) = if m.is_dir() {
-        let dir = checked_open(path, &m, true)?;
-        let attrs = attributes(&dir)?;
-        for name in names(&dir)? {
-            collect(
-                &fd_path(&dir).join(&name),
-                &relative.join(&name),
-                device,
-                flush,
-                items,
-                snapshots,
-                links,
-                buffer,
-                hashes,
-                checkpoint,
-            )?;
-        }
-        require(
-            identity(&dir.metadata()?) == identity(&m),
-            "directory changed during traversal",
-        )?;
-        if flush {
-            dir.sync_all()?;
-        }
-        (Body::Directory, attrs)
-    } else if m.is_file() {
-        let file = checked_open(path, &m, false)?;
-        let attrs = attributes(&file)?;
-        // Cache only within this traversal, for multiple names of one inode.
-        // A separate source/destination manifest always starts with an empty cache.
-        let key = (m.dev(), m.ino());
-        let hash = if let Some((id, hash)) = hashes.get(&key) {
+    items: BTreeMap<PathBuf, Item>,
+    snapshots: Snapshot,
+    links: Links,
+    buffer: &'a mut [u8],
+    hashes: HashCache,
+    checkpoint: &'a mut dyn FnMut(&str) -> io::Result<()>,
+}
+
+impl ManifestCollector<'_> {
+    fn collect(&mut self, path: &Path, relative: &Path) -> io::Result<()> {
+        (self.checkpoint)("manifest-entry")?;
+        let m = fs::symlink_metadata(path)?;
+        require(m.dev() == self.device, "cross-device entry refused")?;
+        let (body, attrs) = if m.is_dir() {
+            let dir = checked_open(path, &m, true)?;
+            let attrs = attributes(&dir)?;
+            for name in names(&dir)? {
+                self.collect(&fd_path(&dir).join(&name), &relative.join(&name))?;
+            }
             require(
-                *id == identity(&m),
-                "hard-linked inode changed during traversal",
+                identity(&dir.metadata()?) == identity(&m),
+                "directory changed during traversal",
             )?;
-            *hash
-        } else {
-            let hash = digest(&file, buffer, checkpoint)?;
-            if flush {
-                file.sync_all()?;
+            if self.flush {
+                dir.sync_all()?;
             }
+            (Body::Directory, attrs)
+        } else if m.is_file() {
+            let file = checked_open(path, &m, false)?;
+            let attrs = attributes(&file)?;
+            // Cache only within this traversal, for multiple names of one inode.
+            // A separate source/destination manifest always starts with an empty cache.
+            let key = (m.dev(), m.ino());
+            let hash = if let Some((id, hash)) = self.hashes.get(&key) {
+                require(
+                    *id == identity(&m),
+                    "hard-linked inode changed during traversal",
+                )?;
+                *hash
+            } else {
+                let hash = digest(&file, self.buffer, self.checkpoint)?;
+                if self.flush {
+                    file.sync_all()?;
+                }
+                if m.nlink() > 1 {
+                    self.hashes.insert(key, (identity(&m), hash));
+                }
+                hash
+            };
+            require(
+                identity(&file.metadata()?) == identity(&m),
+                "file changed during traversal",
+            )?;
+            // Single-link files cannot contribute to a multi-name group.
+            // Still hash and verify every file and its identity independently.
             if m.nlink() > 1 {
-                hashes.insert(key, (identity(&m), hash));
+                self.links
+                    .entry((m.dev(), m.ino()))
+                    .or_default()
+                    .push(relative.to_path_buf());
             }
-            hash
+            (Body::File(m.size(), hash), attrs)
+        } else if m.file_type().is_symlink() {
+            (Body::Link(fs::read_link(path)?), path_attrs(path)?)
+        } else {
+            return Err(fail("special file refused"));
         };
-        require(
-            identity(&file.metadata()?) == identity(&m),
-            "file changed during traversal",
-        )?;
-        // Single-link files cannot contribute to a multi-name group.
-        // Still hash and verify every file and its identity independently.
-        if m.nlink() > 1 {
-            links
-                .entry((m.dev(), m.ino()))
-                .or_default()
-                .push(relative.to_path_buf());
-        }
-        (Body::File(m.size(), hash), attrs)
-    } else if m.file_type().is_symlink() {
-        (Body::Link(fs::read_link(path)?), path_attrs(path)?)
-    } else {
-        return Err(fail("special file refused"));
-    };
-    check(path, &m)?;
-    snapshots.insert(relative.to_path_buf(), identity(&m));
-    items.insert(
-        relative.to_path_buf(),
-        Item {
-            mode: m.mode(),
-            uid: m.uid(),
-            gid: m.gid(),
-            seconds: m.mtime(),
-            nanos: m.mtime_nsec(),
-            attrs,
-            body,
-        },
-    );
-    Ok(())
+        check(path, &m)?;
+        self.snapshots.insert(relative.to_path_buf(), identity(&m));
+        self.items.insert(
+            relative.to_path_buf(),
+            Item {
+                mode: m.mode(),
+                uid: m.uid(),
+                gid: m.gid(),
+                seconds: m.mtime(),
+                nanos: m.mtime_nsec(),
+                attrs,
+                body,
+            },
+        );
+        Ok(())
+    }
 }
 pub(crate) fn manifest(path: &Path, flush: bool) -> io::Result<(Manifest, Snapshot)> {
     manifest_with(path, flush, &mut |_| Ok(()))
@@ -189,22 +182,23 @@ fn manifest_buffered(
     checkpoint: &mut dyn FnMut(&str) -> io::Result<()>,
     buffer: &mut [u8],
 ) -> io::Result<(Manifest, Snapshot)> {
-    let device = fs::symlink_metadata(path)?.dev();
-    let mut items = BTreeMap::new();
-    let mut snapshots = BTreeMap::new();
-    let mut links = Links::new();
-    collect(
-        path,
-        Path::new("."),
-        device,
+    let mut collector = ManifestCollector {
+        device: fs::symlink_metadata(path)?.dev(),
         flush,
-        &mut items,
-        &mut snapshots,
-        &mut links,
+        items: BTreeMap::new(),
+        snapshots: Snapshot::new(),
+        links: Links::new(),
         buffer,
-        &mut HashCache::new(),
+        hashes: HashCache::new(),
         checkpoint,
-    )?;
+    };
+    collector.collect(path, Path::new("."))?;
+    let ManifestCollector {
+        items,
+        snapshots,
+        links,
+        ..
+    } = collector;
     let mut groups: Vec<_> = links.into_values().filter(|g| g.len() > 1).collect();
     for g in &mut groups {
         g.sort();

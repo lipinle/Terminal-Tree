@@ -21,6 +21,11 @@ use manifest::{
 };
 pub use trash::{PurgeOutcome, PurgeReview, RestoreOutcome, RestoreReview, Trash};
 
+/// A pending journal entry and the result of validating and reading it.
+pub type RecoveryRecord = (OsString, io::Result<serde_json::Value>);
+/// Validated entries and a flag indicating that the report was truncated.
+pub type RecoveryReport = (Vec<RecoveryRecord>, bool);
+
 fn fail(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
@@ -729,9 +734,7 @@ impl Engine {
     /// Read-only enumeration; malformed records are reported as errors.
     /// Bounded, read-only diagnostic view. A bad record must not conceal
     /// other pending records. Never interpret record paths as action inputs.
-    pub fn recovery_report(
-        &self,
-    ) -> io::Result<(Vec<(OsString, io::Result<serde_json::Value>)>, bool)> {
+    pub fn recovery_report(&self) -> io::Result<RecoveryReport> {
         self.check_journal()?;
         let mut out = Vec::new();
         let mut truncated = false;

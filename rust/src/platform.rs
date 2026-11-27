@@ -42,19 +42,6 @@ pub fn open_file(path: &Path) -> io::Result<Child> {
         "External file opening is not implemented for this platform preview",
     ))
 }
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn relative_path_is_not_passed_to_opener() {
-        assert_eq!(
-            super::open_file(std::path::Path::new("-option"))
-                .unwrap_err()
-                .kind(),
-            std::io::ErrorKind::InvalidInput
-        );
-    }
-}
-
 pub fn home_dir() -> Option<std::path::PathBuf> {
     let key = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
     std::env::var_os(key)
@@ -101,4 +88,17 @@ pub fn properties(path: &Path) -> io::Result<Vec<String>> {
         ));
     }
     Ok(lines)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn relative_path_is_not_passed_to_opener() {
+        assert_eq!(
+            super::open_file(std::path::Path::new("-option"))
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::InvalidInput
+        );
+    }
 }
