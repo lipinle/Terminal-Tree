@@ -6,6 +6,7 @@ show_my_computer() {
     python3 "$_tree_program" --list "$@"
 }
 lsx() { show_my_computer "$@"; }
+terminal_tree_recovery() { python3 "$_tree_program" --recovery; }
 _tree_nav() {
     local tmp dest rc
     [[ -t 0 && -t 1 ]] || return 1

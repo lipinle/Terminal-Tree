@@ -137,7 +137,7 @@ def main():
                 shutil.copy2(path,b); print('Runtime backup:',b)
     if not marker: atomic(saved,prior.encode('utf-8','surrogateescape'))
     atomic(DATA/'tree.py',program); atomic(DATA/'integration.sh',integration); atomic(RC,new.encode('utf-8','surrogateescape'))
-    print('Installed Terminal Tree v2.1.0. Close and reopen Terminal. Ctrl+Down opens navigator; F1 for help.')
+    print('Installed Terminal Tree v2.1.1. Close and reopen Terminal. Ctrl+Down opens navigator; F1 for help.')
     if not shutil.which('eza'): print('eza not found: built-in colors and icons will be used.')
     if not shutil.which('gio'): print('Warning: gio not available; safe trash operation disabled.')
     if not shutil.which('findmnt'): print('Warning: findmnt not available; mount discovery disabled.')

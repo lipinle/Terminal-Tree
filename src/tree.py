@@ -213,6 +213,70 @@ def tree(p,hidden,order='name',query='',preview=None,devices=None,cached=None):
 import ctypes
 import errno
 import tempfile
+import hashlib
+import uuid
+from contextlib import contextmanager
+
+def sync_directory(path):
+    fd=os.open(path,os.O_RDONLY|os.O_DIRECTORY)
+    try: os.fsync(fd)
+    finally: os.close(fd)
+
+def state_directory():
+    return os.path.join(os.environ.get('XDG_STATE_HOME') or os.path.join(HOME,'.local','state'),'terminal-tree','operations')
+
+def managed_locations():
+    return [os.path.realpath(p) for p in (state_directory(),
+        os.path.join(os.environ.get('XDG_DATA_HOME') or os.path.join(HOME,'.local','share'),'terminal-tree'),
+        os.path.dirname(CONF))]
+
+def journal_directory():
+    path=state_directory()
+    os.makedirs(path,mode=0o700,exist_ok=True)
+    st=os.lstat(path)
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid!=os.getuid() or stat.S_IMODE(st.st_mode)&0o077:
+        raise ValueError('Operation journal must be a private directory owned by you')
+    sync_directory(os.path.dirname(path))
+    sync_directory(os.path.dirname(os.path.dirname(path)))
+    return path
+
+@contextmanager
+def operation_log(kind,src=None,dst=None,stage=None):
+    directory=journal_directory()
+    ident=uuid.uuid4().hex
+    pending=os.path.join(directory,ident+'.pending.json')
+    completed=os.path.join(directory,ident+'.done.json')
+    record={'id':ident,'operation':kind,'source':src,'destination':dst,'stage':stage,
+            'started':datetime.now().astimezone().isoformat()}
+    fd=os.open(pending,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+    with os.fdopen(fd,'w',encoding='utf-8') as f:
+        json.dump(record,f,ensure_ascii=True); f.write('\n'); f.flush(); os.fsync(f.fileno())
+    sync_directory(directory)
+    # Exceptions, including interrupts, deliberately leave a pending record.
+    yield record
+    os.replace(pending,completed)
+    sync_directory(directory)
+
+def recovery_records():
+    path=state_directory()
+    if not os.path.exists(path): return []
+    path=journal_directory()
+    out=[]
+    for name in sorted(os.listdir(path)):
+        if not name.endswith('.pending.json'): continue
+        p=os.path.join(path,name)
+        try:
+            fd=os.open(p,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+            with os.fdopen(fd,'r',encoding='utf-8') as f:
+                st=os.fstat(f.fileno())
+                if not stat.S_ISREG(st.st_mode) or st.st_uid!=os.getuid() or st.st_size>1024*1024:
+                    raise ValueError('Invalid journal record')
+                rec=json.loads(f.read(1024*1024+1))
+            if not isinstance(rec,dict): raise ValueError('Invalid journal record')
+            out.append(rec)
+        except (OSError,ValueError):
+            out.append({'unreadable_record':p})
+    return out
 
 def identity(p):
     st=os.lstat(p)
@@ -237,6 +301,8 @@ def guard_source(p, destructive=True):
     if not os.path.basename(p): raise ValueError('Root is protected')
     protected=[os.path.realpath(HOME),os.path.realpath(TRASH),os.path.realpath(TF),
                '/bin','/boot','/dev','/etc','/lib','/lib64','/proc','/root','/run','/sbin','/sys','/usr','/var']
+    if destructive and any(inside(real,r) or inside(r,real) for r in managed_locations()):
+        raise ValueError('Terminal Tree state and runtime are protected: '+safe(p))
     if any(real==r or inside(r,real) for r in protected): raise ValueError('Protected location: '+safe(p))
     if destructive and any(inside(real,r) for r in protected[3:]): raise ValueError('System location is protected: '+safe(p))
     if destructive and inside(real,os.path.realpath(TRASH)) and os.path.dirname(real)!=os.path.realpath(TF):
@@ -250,6 +316,8 @@ def guard_destination(p):
     real=os.path.realpath(p)
     if real=='/' or any(inside(real,r) for r in ('/bin','/boot','/dev','/etc','/lib','/lib64','/proc','/root','/run','/sbin','/sys','/usr','/var',os.path.realpath(TRASH))):
         raise ValueError('Protected destination: '+safe(p))
+    if any(inside(real,r) for r in managed_locations()):
+        raise ValueError('Terminal Tree state and runtime are protected')
     if not os.path.isdir(p): raise ValueError('Destination directory unavailable')
 
 def dir_identity(p):
@@ -262,17 +330,40 @@ def check_dir(p,expected):
 def nonconflict(p):
     if exists(p): raise FileExistsError('Destination already exists: '+safe(p))
 
-def rename_noreplace(src,dst):
-    # Linux renameat2(RENAME_NOREPLACE) is atomic, including concurrent collisions.
+@contextmanager
+def pinned_directory(path,expected):
+    fd=os.open(os.path.realpath(path),os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+    try:
+        st=os.fstat(fd)
+        if (st.st_dev,st.st_ino)!=expected: raise ValueError('Directory changed; operation cancelled')
+        check_dir(path,expected)
+        yield fd
+    finally: os.close(fd)
+
+def identity_at(fd,name):
+    st=os.stat(name,dir_fd=fd,follow_symlinks=False); parent=os.fstat(fd)
+    return (st.st_dev,st.st_ino,st.st_mode,st.st_size,st.st_mtime_ns,st.st_ctime_ns,parent.st_dev,parent.st_ino)
+
+def rename_noreplace(src,dst,expected=None,dest_expected=None):
     libc=ctypes.CDLL(None,use_errno=True)
     fn=getattr(libc,'renameat2',None)
     if fn is None: raise RuntimeError('Atomic no-overwrite rename unavailable; operation refused')
     fn.argtypes=[ctypes.c_int,ctypes.c_char_p,ctypes.c_int,ctypes.c_char_p,ctypes.c_uint]
     fn.restype=ctypes.c_int
-    if fn(-100,os.fsencode(src),-100,os.fsencode(dst),1):
-        e=ctypes.get_errno()
-        if e==errno.EXDEV: raise ValueError('Cross-drive move refused: copy, verify, then move original to Trash')
-        raise OSError(e,os.strerror(e),dst)
+    expected=identity(src) if expected is None else expected
+    sp=os.path.dirname(src) or '.'; dp=os.path.dirname(dst) or '.'
+    dest_expected=dir_identity(dp) if dest_expected is None else dest_expected
+    sn=os.path.basename(src); dn=os.path.basename(dst)
+    with pinned_directory(sp,expected[-2:]) as sf, pinned_directory(dp,dest_expected) as df:
+        os.fsync(sf); os.fsync(df)
+        if identity_at(sf,sn)!=expected: raise ValueError('Source changed; operation cancelled')
+        check_dir(sp,expected[-2:]); check_dir(dp,dest_expected)
+        if fn(sf,os.fsencode(sn),df,os.fsencode(dn),1):
+            e=ctypes.get_errno()
+            if e==errno.EXDEV: raise ValueError('Cross-drive move refused: copy, verify, then move original to Trash')
+            raise OSError(e,os.strerror(e),dst)
+        # A sync error after rename is an uncertain result, not permission to retry.
+        os.fsync(df); os.fsync(sf)
 
 def tree_signature(p):
     # Refuse special files and nested mounts; detect normal concurrent edits.
@@ -287,32 +378,132 @@ def tree_signature(p):
             with os.scandir(a) as it: todo.extend(e.path for e in it)
     return result
 
+def content_manifest(root,flush=False):
+    # Compare content, metadata, links and tree topology, never following final symlinks.
+    out={}; links={}; dirs=[]; todo=[root]
+    def key(st):
+        return (st.st_dev,st.st_ino,st.st_mode,st.st_size,st.st_mtime_ns,st.st_ctime_ns)
+    while todo:
+        path=todo.pop(); rel=os.path.relpath(path,root)
+        st=os.lstat(path); mode=st.st_mode; sig=key(st)
+        try:
+            names=os.listxattr(path,follow_symlinks=False)
+            attrs=tuple(sorted((n,os.getxattr(path,n,follow_symlinks=False)) for n in names))
+        except OSError as e:
+            if e.errno not in (errno.ENOTSUP,errno.EOPNOTSUPP): raise
+            attrs=()
+        meta=(stat.S_IMODE(mode),st.st_uid,st.st_gid,st.st_mtime_ns,attrs)
+        if stat.S_ISREG(mode):
+            fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+            with os.fdopen(fd,'rb') as f:
+                if key(os.fstat(f.fileno()))!=sig: raise ValueError('File changed before verification')
+                digest=hashlib.sha256()
+                while True:
+                    buf=f.read(1024*1024)
+                    if not buf: break
+                    digest.update(buf)
+                if key(os.fstat(f.fileno()))!=sig: raise ValueError('File changed during verification')
+                if flush: os.fsync(f.fileno())
+            out[rel]=('file',meta,st.st_size,digest.hexdigest())
+            links.setdefault((st.st_dev,st.st_ino),[]).append(rel)
+        elif stat.S_ISLNK(mode):
+            out[rel]=('link',meta,os.readlink(path))
+        elif stat.S_ISDIR(mode):
+            out[rel]=('dir',meta); dirs.append((path,sig))
+            with os.scandir(path) as it: todo.extend(e.path for e in it)
+        else: raise ValueError('Special file is not supported: '+safe(path))
+        if key(os.lstat(path))!=sig: raise ValueError('Entry changed during verification')
+    for path,sig in reversed(dirs):
+        if key(os.lstat(path))!=sig: raise ValueError('Directory changed during verification')
+        if flush: sync_directory(path)
+    topology=tuple(sorted(tuple(sorted(group)) for group in links.values() if len(group)>1))
+    return out,topology
+
 def copy_item(src,dst,expected=None):
-    guard_source(src,False); guard_destination(os.path.dirname(dst)); nonconflict(dst)
-    if expected is not None: unchanged(src,expected)
+    guard_source(src,False); parent=os.path.dirname(dst); guard_destination(parent); nonconflict(dst)
+    expected=identity(src) if expected is None else expected
+    unchanged(src,expected); dest_id=dir_identity(parent)
     if not os.path.islink(src) and isdir(src) and inside(os.path.realpath(dst),os.path.realpath(src)):
         raise ValueError('Cannot copy directory into itself')
-    before=tree_signature(src)
-    # Private staging on destination filesystem; final name appears only after successful copy.
-    with tempfile.TemporaryDirectory(prefix='.terminal-tree-copy-',dir=os.path.dirname(dst)) as stage:
-        payload=os.path.join(stage,'payload')
-        subprocess.run(['cp','-a','--reflink=auto','--',src,payload],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
-        if tree_signature(src)!=before: raise ValueError('Source changed during copy; copy cancelled')
-        if expected is not None: unchanged(src,expected)
-        rename_noreplace(payload,dst)
+    before=tree_signature(src); manifest=content_manifest(src)
+    if tree_signature(src)!=before: raise ValueError('Source changed before copy')
+    stage_name='.terminal-tree-copy-'+uuid.uuid4().hex
+    if not shutil.rmtree.avoids_symlink_attacks: raise RuntimeError('Safe staging cleanup unavailable')
+    with operation_log('copy',src,dst,os.path.join(parent,stage_name)):
+        with pinned_directory(parent,dest_id) as fd:
+            os.mkdir(stage_name,0o700,dir_fd=fd)
+            stage='/proc/self/fd/'+str(fd)+'/'+stage_name
+            stage_id=dir_identity(stage)
+            payload=os.path.join(stage,'payload')
+            try:
+                subprocess.run(['cp','-a','--reflink=auto','--',src,payload],pass_fds=(fd,),
+                               check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+                if content_manifest(payload,flush=True)!=manifest:
+                    raise ValueError('Copy verification failed (content or metadata differs)')
+                if tree_signature(src)!=before: raise ValueError('Source changed during copy; copy cancelled')
+                unchanged(src,expected); check_dir(parent,dest_id); guard_destination(parent)
+                rename_noreplace(payload,dst,dest_expected=dest_id)
+            finally:
+                st=os.stat(stage_name,dir_fd=fd,follow_symlinks=False)
+                if not stat.S_ISDIR(st.st_mode) or (st.st_dev,st.st_ino)!=stage_id:
+                    raise ValueError('Staging directory changed; manual recovery required')
+                shutil.rmtree(stage)
+                os.fsync(fd)
 
 def move_item(src,dst,expected=None):
-    guard_source(src); guard_destination(os.path.dirname(dst)); nonconflict(dst)
+    guard_source(src); parent=os.path.dirname(dst); guard_destination(parent); nonconflict(dst)
+    expected=identity(src) if expected is None else expected
+    unchanged(src,expected); dest_id=dir_identity(parent)
     if not os.path.islink(src) and isdir(src) and inside(os.path.realpath(dst),os.path.realpath(src)):
         raise ValueError('Cannot move directory into itself')
-    if expected is not None: unchanged(src,expected)
-    rename_noreplace(src,dst)
+    with operation_log('move',src,dst):
+        guard_source(src); guard_destination(parent)
+        rename_noreplace(src,dst,expected,dest_id)
 
 def gio_trash(p,expected=None):
     guard_source(p)
-    if expected is not None: unchanged(p,expected)
+    expected=identity(p) if expected is None else expected
+    unchanged(p,expected)
     if not shutil.which('gio'): raise RuntimeError('gio not installed; no permanent-delete fallback')
-    subprocess.run(['gio','trash','--',p],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+    with operation_log('gio-trash',p):
+        guard_source(p); unchanged(p,expected)
+        subprocess.run(['gio','trash','--',p],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+        sync_directory(os.path.dirname(p))
+
+def create_item(p,directory):
+    parent=os.path.dirname(p); guard_destination(parent); dest_id=dir_identity(parent)
+    nonconflict(p)
+    with operation_log('mkdir' if directory else 'create-file',dst=p):
+        with pinned_directory(parent,dest_id) as fd:
+            name=os.path.basename(p)
+            if directory: os.mkdir(name,dir_fd=fd)
+            else:
+                out=os.open(name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o666,dir_fd=fd)
+                try: os.fsync(out)
+                finally: os.close(out)
+            os.fsync(fd)
+
+def purge_item(p,expected,snapshot):
+    if os.path.dirname(p)!=TF: raise ValueError('Permanent delete is only allowed directly inside home Trash')
+    guard_source(p); unchanged(p,expected)
+    if tree_signature(p)!=snapshot: raise ValueError('Contents changed during review; deletion cancelled')
+    if not shutil.rmtree.avoids_symlink_attacks: raise RuntimeError('Safe recursive removal unavailable')
+    info=os.path.join(TRASH,'info',os.path.basename(p)+'.trashinfo')
+    info_sig=identity(info) if exists(info) else None
+    with operation_log('permanent-delete',p):
+        with pinned_directory(TF,expected[-2:]) as fd:
+            guard_source(p)
+            if tree_signature(p)!=snapshot or identity_at(fd,os.path.basename(p))!=expected:
+                raise ValueError('Contents changed during review; deletion cancelled')
+            if stat.S_ISDIR(expected[2]): shutil.rmtree('/proc/self/fd/'+str(fd)+'/'+os.path.basename(p))
+            else: os.unlink(os.path.basename(p),dir_fd=fd)
+            os.fsync(fd)
+        if info_sig is not None:
+            if not stat.S_ISREG(info_sig[2]): raise ValueError('Deleted item; nonregular Trash metadata retained')
+            with pinned_directory(os.path.dirname(info),info_sig[-2:]) as fd:
+                if identity_at(fd,os.path.basename(info))!=info_sig:
+                    raise ValueError('Deleted item; changed Trash metadata retained')
+                os.unlink(os.path.basename(info),dir_fd=fd); os.fsync(fd)
 
 def restore_path(p):
     if os.path.dirname(p)!=TF: raise ValueError('Select an item directly under home Trash')
@@ -333,17 +524,27 @@ def restore_path(p):
 def restore(p,expected=None,record=None):
     dst,info,sig,parent=restore_path(p)
     if record is not None and (dst,info,sig,parent)!=record: raise ValueError('Trash metadata changed; restore cancelled')
-    check_dir(os.path.dirname(dst),parent)
-    move_item(p,dst,expected)
+    moved=False
     try:
-        unchanged(info,sig); os.unlink(info)
-    except (OSError,ValueError): return 'Restored; stale Trash metadata left in place'
+        with operation_log('restore',p,dst):
+            check_dir(os.path.dirname(dst),parent); unchanged(info,sig)
+            move_item(p,dst,expected); moved=True
+            with pinned_directory(os.path.dirname(info),sig[-2:]) as fd:
+                if identity_at(fd,os.path.basename(info))!=sig:
+                    raise ValueError('Trash metadata changed')
+                os.unlink(os.path.basename(info),dir_fd=fd); os.fsync(fd)
+    except (OSError,ValueError,RuntimeError):
+        if moved: return 'Restored; metadata or durability needs review (see --recovery)'
+        raise
     return 'Restored'
 
 
 class Nav:
     def __init__(self,s,p,hidden,order):
         self.s=s; self.p=p; self.hidden=hidden; self.order=order; self.query=''; self.mark=set(); self.clipboard=[]; self.cut=False; self.history=[p]; self.hidx=0; self.rows=[]; self.sel=0; self.top=0; self.msg=''; self.cache={}; self.devices=mounts(); self.result=p; self.undo=[]; self.theme=Theme(); self._safety_seen={}; self._safety_clip={}; self.rebuild()
+        try:
+            if recovery_records(): self.msg='Unresolved file operations: run terminal_tree_recovery in Bash'
+        except (OSError,ValueError): self.msg='Operation journal unavailable; file changes may be refused'
     def cached(self,p,q):
         k=(p,self.hidden,self.order,q)
         if k not in self.cache:
@@ -640,9 +841,7 @@ class Nav:
             guard_destination(self.p); n=self.name('New folder: ' if k=='n' else 'New file: ')
             if n:
                 p=os.path.join(self.p,n); guard_destination(self.p)
-                if k=='n': os.mkdir(p)
-                else:
-                    with open(p,'xb'): pass
+                create_item(p,k=='n')
                 self.msg='Created'
         elif k in ('d',curses.KEY_DC,'D'):
             for a in targets:
@@ -658,13 +857,7 @@ class Nav:
                     expected=self._safety_seen[a]; guard_source(a); unchanged(a,expected)
                     if k=='D' and tree_signature(a)!=snapshots[a]: raise ValueError('Contents changed during review; deletion cancelled')
                     if k!='D': gio_trash(a,expected)
-                    elif stat.S_ISDIR(os.lstat(a).st_mode):
-                        if not shutil.rmtree.avoids_symlink_attacks: raise RuntimeError('Safe recursive removal unavailable')
-                        shutil.rmtree(a)
-                    else: os.unlink(a)
-                    if k=='D':
-                        info=os.path.join(TRASH,'info',os.path.basename(a)+'.trashinfo')
-                        if exists(info): os.unlink(info)
+                    else: purge_item(a,expected,snapshots[a])
                     self.mark.discard(a); done+=1
                 except (OSError,ValueError,RuntimeError,subprocess.SubprocessError) as e: error=str(e); break
             self.msg=f'{done}/{len(targets)} completed'+('; stopped: '+error if error else '')
@@ -751,7 +944,13 @@ class Nav:
 HELP=['Terminal Tree — keys','↑ ↓ select; ← parent; → enter folder; Enter open file / cd and exit on folder','q / Esc exit at current folder; Home/End; Page Up/Down','h hidden; / filter current directory; g go to path; [ ] history','Space mark; a mark visible children; A clear marks; c copy; x cut; v paste','r/F2 rename; n new folder; t new file; d/Delete trash; D permanent delete from home Trash only (type DELETE)','R restore home Trash item; u undo last rename/move (session only)','i properties; p/F3 text preview; f/F5 refresh; s/F9 sort; S save settings','? / F1 help. Search is nonrecursive. Mounts are listed, not modified.']
 
 def main():
-    ap=argparse.ArgumentParser(); ap.add_argument('--list',action='store_true'); ap.add_argument('-a','--all',action='store_true'); ap.add_argument('--result'); args=ap.parse_args(); p=os.getcwd(); cfg=settings(); hidden=args.all or cfg.get('hidden') is True; order=cfg.get('order','name'); order=order if order in ('name','size','date','type') else 'name'
+    ap=argparse.ArgumentParser(); ap.add_argument('--list',action='store_true'); ap.add_argument('-a','--all',action='store_true'); ap.add_argument('--result'); ap.add_argument('--recovery',action='store_true'); args=ap.parse_args();
+    if args.recovery:
+        records=recovery_records()
+        print(json.dumps(records,ensure_ascii=True,indent=2) if records else 'No unresolved operations recorded.')
+        return
+    if os.geteuid()==0 and not args.list: ap.error('Navigator must not run as root')
+    p=os.getcwd(); cfg=settings(); hidden=args.all or cfg.get('hidden') is True; order=cfg.get('order','name'); order=order if order in ('name','size','date','type') else 'name'
     if args.list:
         print('\nLocation: '+safe(p))
         rows=tree(p,hidden,order); lim= max(10,shutil.get_terminal_size((80,24)).lines-4)

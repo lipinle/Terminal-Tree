@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.1.1 — data integrity hardening
+
+- Verify staged copies using SHA-256, metadata, symlink targets and hardlink topology before publication; refuse mismatches.
+- Sync staged data and directory entries, pin rename parent directories, protect runtime/state, and journal file mutations before they happen.
+- Report unresolved operations with `terminal_tree_recovery` (read-only; no automatic deletion or rollback).
+- Expand regression tests for corrupt copies, concurrent collisions, interrupted operations and journal failures.
+
 ## 2.1.0 — consolidated baseline
 
 - Imported the original Bash navigator and earlier _print_branch implementation.
