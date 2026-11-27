@@ -49,17 +49,22 @@ fn unescape(raw:&[u8])->io::Result<PathBuf>{
             result.push(n as u8); i+=4;
         }else{result.push(raw[i]);i+=1;}
     }
-    normal_absolute(&PathBuf::from(std::ffi::OsString::from_vec(result)))
+    require(!result.is_empty()&&!result.contains(&0),"invalid mount field")?;
+    Ok(PathBuf::from(std::ffi::OsString::from_vec(result)))
 }
 #[derive(Debug)]
 struct Mount {id:u64, root:PathBuf, target:PathBuf}
-fn mounts()->io::Result<Vec<Mount>>{
+fn mounts()->io::Result<Vec<Mount>>{parse_mounts(&fs::read("/proc/self/mountinfo")?)}
+fn parse_mounts(bytes:&[u8])->io::Result<Vec<Mount>>{
     let mut out=Vec::new();
-    for line in fs::read("/proc/self/mountinfo")?.split(|b|*b==b'\n').filter(|x|!x.is_empty()){
+    for line in bytes.split(|b|*b==b'\n').filter(|x|!x.is_empty()){
         let fields:Vec<_>=line.split(|b|*b==b' ').collect();
         require(fields.len()>=10,"invalid mountinfo")?;
         let id=std::str::from_utf8(fields[0]).map_err(io::Error::other)?.parse::<u64>().map_err(io::Error::other)?;
-        out.push(Mount{id,root:unescape(fields[3])?,target:unescape(fields[4])?});
+        // Root can be an opaque kernel name for special mounts (e.g. nsfs).
+        // Only the selected approved mount may have root exactly "/".
+        // Every mount target must still be a normal absolute path.
+        out.push(Mount{id,root:unescape(fields[3])?,target:normal_absolute(&unescape(fields[4])?)?});
     }
     require(!out.is_empty(),"mount table unavailable")?;
     Ok(out)
@@ -93,7 +98,7 @@ impl PersonalPolicy{
         let h=Root::new(&home)?;
         let table=mounts()?;
         let hm=table.iter().find(|m|m.id==h.mount).ok_or_else(||fail("home mount missing"))?;
-        require(hm.root==Path::new("/"),"home on subdirectory/bind mount not supported yet")?;
+        require(hm.root.as_os_str().as_bytes()==b"/","home on subdirectory/bind mount not supported yet")?;
         let mut roots=vec![h];
         for path in extra{
             let path=normal_absolute(path)?;
@@ -102,7 +107,7 @@ impl PersonalPolicy{
             let r=Root::new(&path)?;
             require(r.dir.metadata()?.dev()!=fs::metadata("/")?.dev(),"system root filesystem alias refused")?;
             let m=table.iter().find(|m|m.id==r.mount).ok_or_else(||fail("external mount missing"))?;
-            require(m.target==path && m.root==Path::new("/") && !roots.iter().any(|r0|r0.dir.metadata().map_or(true,|a|r.dir.metadata().map_or(true,|b|a.dev()==b.dev()))),"external root must be a distinct whole-filesystem mount")?;
+            require(m.target==path && m.root.as_os_str().as_bytes()==b"/" && !roots.iter().any(|r0|r0.dir.metadata().map_or(true,|a|r.dir.metadata().map_or(true,|b|a.dev()==b.dev()))),"external root must be a distinct whole-filesystem mount")?;
             roots.push(r);
         }
         let data_home=normal_absolute(&std::env::var_os("XDG_DATA_HOME").filter(|v|!v.is_empty()).map(PathBuf::from).unwrap_or_else(||home.join(".local/share")))?;
@@ -176,5 +181,19 @@ impl PersonalPolicy{
         let dir=open_absolute_dir(p.parent().unwrap())?;
         require(mount_id(&dir)?==root.mount,"parent mount changed")?;
         Ok(dir)
+    }
+}
+
+#[cfg(test)]
+mod tests{
+    use super::*;
+    #[test]
+    fn opaque_mount_roots_do_not_invalidate_other_mounts_or_grant_access(){
+        let table=parse_mounts(b"1 0 8:1 / / rw - ext4 /dev/sda rw\n2 1 0:4 net:[1234] /run/netns/test rw - nsfs nsfs rw\n3 1 8:2 /subvol /mnt/btrfs rw - btrfs /dev/sdb rw\n").unwrap();
+        assert_eq!(table[0].root.as_os_str().as_bytes(),b"/");
+        assert_ne!(table[1].root.as_os_str().as_bytes(),b"/");
+        assert_ne!(table[2].root.as_os_str().as_bytes(),b"/");
+        assert!(parse_mounts(b"1 0 8:1 / relative rw - ext4 /dev/sda rw\n").is_err());
+        assert!(parse_mounts(b"1 0 8:1 / /mnt/\\000 rw - ext4 /dev/sda rw\n").is_err());
     }
 }

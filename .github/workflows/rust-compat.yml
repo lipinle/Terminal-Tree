@@ -28,8 +28,9 @@ jobs:
       - name: Build and test native runtime
         run: |
           uname -a
-          ldd --version | head -n1
-          cargo test --locked --manifest-path rust/Cargo.toml --features native-ops
+          ldd --version
+          # Synthetic homes must not inherit the host's XDG paths.
+          env -u XDG_DATA_HOME -u XDG_CONFIG_HOME -u XDG_STATE_HOME cargo test --locked --manifest-path rust/Cargo.toml --features native-ops
           cargo build --locked --release --manifest-path rust/Cargo.toml --features native-ops --bin terminal-tree
       - name: Terminal help, navigation and persistence
         run: |
