@@ -11,7 +11,7 @@ const TOPICS:&[Topic]=&[
         ("PgUp / PgDn","Move by one visible page."),
         ("Home / End","Select the first / last entry."),
         ("Left / Right","Go to parent / enter selected folder."),
-        ("Enter","Enter a folder or open a regular file using xdg-open (or gio open if xdg-open is missing). An external application may edit it."),
+        ("Enter","Enter a folder or open a regular file where a desktop opener is supported. Linux uses xdg-open / gio; macOS uses open. An external application may edit the file."),
         ("[ / ]","Go backward / forward in navigation history."),
         ("g","Go to a path (native build). Relative paths, absolute paths and ~/ are supported. Enter accepts; Esc cancels."),
         ("m / F4","My Computer: choose Home, existing home Trash, File System or mounted media. Discovery does not grant write access."),

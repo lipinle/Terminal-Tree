@@ -1,8 +1,12 @@
 //! Read-only location picker; discovery never grants write permissions.
-use std::{collections::BTreeSet,ffi::OsString,fs,io,path::{Path,PathBuf}};
+use std::{io,path::PathBuf};
+#[cfg(target_os="linux")]
+use std::{collections::BTreeSet,ffi::OsString,fs,path::Path};
+#[cfg(target_os="linux")]
 use std::os::unix::ffi::OsStringExt;
 use terminal_tree::display_name;
 
+#[cfg(target_os="linux")]
 fn decode(raw:&[u8])->io::Result<PathBuf>{
     let mut out=Vec::new();let mut i=0;
     while i<raw.len(){
@@ -17,6 +21,7 @@ fn decode(raw:&[u8])->io::Result<PathBuf>{
     if !path.is_absolute(){return Err(io::Error::other("mount path not absolute"));}
     Ok(path)
 }
+#[cfg(target_os="linux")]
 fn media_mounts(bytes:&[u8])->io::Result<Vec<PathBuf>>{
     let mut out=BTreeSet::new();
     for line in bytes.split(|&b|b==b'\n').filter(|l|!l.is_empty()){
@@ -31,16 +36,22 @@ fn media_mounts(bytes:&[u8])->io::Result<Vec<PathBuf>>{
 }
 pub fn choose()->io::Result<Option<PathBuf>>{
     let mut entries=Vec::new();
-    if let Some(home)=std::env::var_os("HOME").map(PathBuf::from).filter(|p|p.is_absolute()){
+    if let Some(home)=super::platform::home_dir(){
         entries.push((format!("Home | {}",display_name(home.as_os_str())),home.clone()));
+        #[cfg(target_os="linux")]
+        {
         let data=std::env::var_os("XDG_DATA_HOME").filter(|v|!v.is_empty()).map(PathBuf::from).unwrap_or_else(||home.join(".local/share"));
         let trash=data.join("Trash/files");
         if trash.is_absolute() && trash.is_dir(){entries.push((format!("Trash | {}",display_name(trash.as_os_str())),trash));}
+        }
     }
-    entries.push(("File System | /".into(),PathBuf::from("/")));
+    let root=super::platform::filesystem_root()?;
+    entries.push((format!("File System | {}",display_name(root.as_os_str())),root));
     // Missing procfs (minimal containers/chroots) must not prevent basic
     // browsing. The safety policy still requires mount information for writes.
+    #[cfg(target_os="linux")]
     let detected=fs::read("/proc/self/mountinfo").and_then(|bytes|media_mounts(&bytes));
+    #[cfg(target_os="linux")]
     let title=match detected{
         Ok(paths)=>{
             for p in paths{entries.push((format!("Mounted device | {}",display_name(p.as_os_str())),p));}
@@ -48,10 +59,12 @@ pub fn choose()->io::Result<Option<PathBuf>>{
         },
         Err(_)=>"My Computer - mount discovery unavailable",
     };
+    #[cfg(not(target_os="linux"))]
+    let title="My Computer - read-only platform preview";
     let labels:Vec<_>=entries.iter().map(|(s,_)|s.clone()).collect();
     Ok(super::choose(title,&labels)?.map(|i|entries[i].1.clone()))
 }
-#[cfg(test)]
+#[cfg(all(test,target_os="linux"))]
 mod tests{
     use super::*;
     #[test]

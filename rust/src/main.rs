@@ -11,6 +11,7 @@ use std::env;
 use std::ffi::OsString;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 use terminal_tree::{display_name, scan, Model, Order, KindFilter};
 use unicode_width::UnicodeWidthChar;
@@ -189,19 +190,7 @@ fn actions_menu(w:&mut workspace::Workspace,model:&mut Model)->io::Result<Option
     if let Some(i)=choose("Actions - writes require review",&labels)?{w.operate(actions[i].0,model).map(Some)}else{Ok(None)}
 }
 fn properties(path:&Path)->io::Result<()> {
-    use std::os::unix::fs::MetadataExt;
-    let m=std::fs::symlink_metadata(path)?;
-    let mut lines=vec![
-        display_name(path.as_os_str()),
-        format!("Mode: {:o}",m.mode()),
-        format!("Size: {} bytes",m.len()),
-        format!("UID/GID: {}/{}",m.uid(),m.gid()),
-        format!("Modified (Unix): {}.{:09}",m.mtime(),m.mtime_nsec()),
-        format!("Device/inode: {}/{}",m.dev(),m.ino()),
-        format!("Hard links: {}",m.nlink()),
-    ];
-    if m.file_type().is_symlink() {lines.push(format!("Link: {}",display_name(std::fs::read_link(path)?.as_os_str())));}
-    page("Properties",&lines)
+    page("Properties",&platform::properties(path)?)
 }
 #[cfg(feature="native-ops")]
 fn preview(path:&Path)->io::Result<()> {
@@ -504,6 +493,7 @@ fn run() -> io::Result<()> {
             if args.next().is_some() { return Err(io::Error::other("unexpected argument")); }
             result_channel(result)
         },
+        #[cfg(unix)]
         Some("--scan-paths0") => {
             let p = path_arg(args.next())?;
             let order = match args.next().as_deref().and_then(|s| s.to_str()) {
