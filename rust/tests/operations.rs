@@ -238,3 +238,19 @@ fn moved_result_modified_before_undo_is_not_accepted() {
     assert!(undo.is_none()); assert!(!src.exists());
     assert_eq!(fs::read(dst).unwrap(),b"changed!");
 }
+
+#[test]
+fn kernel_copy_preserves_sparse_bytes_and_empty_file() {
+    use std::io::{Seek,SeekFrom,Write};
+    let f=Fixture::new(); let e=f.engine();
+    let src=f.root.join("source"); fs::create_dir(&src).unwrap();
+    fs::write(src.join("empty"),b"").unwrap();
+    let mut sparse=fs::File::create(src.join("sparse")).unwrap();
+    sparse.seek(SeekFrom::Start(4*1024*1024)).unwrap(); sparse.write_all(b"end").unwrap();
+    let dst=f.root.join("dest");
+    e.transfer(&e.review(&src).unwrap(),&dst,Transfer::Copy).unwrap();
+    assert_eq!(fs::read(src.join("sparse")).unwrap(),fs::read(dst.join("sparse")).unwrap());
+    assert_eq!(fs::metadata(dst.join("empty")).unwrap().len(),0);
+    fs::write(dst.join("sparse"),b"changed").unwrap();
+    assert_eq!(fs::metadata(src.join("sparse")).unwrap().len(),4*1024*1024+3);
+}

@@ -4,7 +4,7 @@ use rustix::fs::{self as rx, AtFlags, Mode, OFlags, Timestamps, Timespec, CWD};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs::{self, File, FileTimes, Metadata};
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Write, Seek, SeekFrom};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -110,6 +110,57 @@ fn metadata(f: &File, original: &Metadata, attrs: &Attrs) -> io::Result<()> {
     f.set_times(FileTimes::new().set_modified(original.modified()?))?;
     Ok(())
 }
+// Only unsupported-operation errors permit a slower implementation. Disk I/O,
+// ENOSPC and permission errors remain fatal; verification never becomes optional.
+fn unsupported(e: rustix::io::Errno) -> bool {
+    matches!(e, rustix::io::Errno::OPNOTSUPP | rustix::io::Errno::XDEV
+        | rustix::io::Errno::NOSYS | rustix::io::Errno::INVAL | rustix::io::Errno::NOTTY)
+}
+fn copy_bytes(input: &mut File, output: &mut File, size: u64, buffer: &mut [u8],
+              checkpoint: &mut dyn FnMut(&str) -> io::Result<()>) -> io::Result<()> {
+    // FICLONE uses the already opened private destination, never a pathname.
+    // A successful clone is still read independently by the staged manifest.
+    match rx::ioctl_ficlone(&*output, &*input) {
+        Ok(()) => {
+            require(output.metadata()?.len() == size, "reflink length mismatch")?;
+            checkpoint("copy-reflink")?;
+            if size != 0 { checkpoint("copy-partial")?; }
+            return Ok(());
+        }
+        Err(e) if unsupported(e) => {
+            // Reset a private unpublished payload before trying another method.
+            output.set_len(0)?;
+        }
+        Err(e) => return Err(e.into()),
+    }
+    let mut copied = 0u64;
+    while copied < size {
+        let count = (size - copied).min(buffer.len() as u64) as usize;
+        match rx::copy_file_range(&*input, None, &*output, None, count) {
+            Ok(0) => break,
+            Ok(n) => {
+                copied += n as u64;
+                checkpoint("copy-partial")?;
+            }
+            Err(e) if e == rustix::io::Errno::INTR => continue,
+            Err(e) if unsupported(e) => break,
+            Err(e) => return Err(e.into()),
+        }
+    }
+    // Continue at the exact confirmed offset, including a partially completed
+    // kernel copy. Never silently accept short reads or a changed source.
+    input.seek(SeekFrom::Start(copied))?;
+    output.seek(SeekFrom::Start(copied))?;
+    while copied < size {
+        let count = (size - copied).min(buffer.len() as u64) as usize;
+        let n = input.read(&mut buffer[..count])?;
+        require(n > 0, "source shortened during copy")?;
+        output.write_all(&buffer[..n])?;
+        copied += n as u64;
+        checkpoint("copy-partial")?;
+    }
+    require(output.metadata()?.len() == size, "copied length mismatch")
+}
 fn copy_entry(src: &Path, dst: &Path, device: u64, checkpoint: &mut dyn FnMut(&str) -> io::Result<()>,
               hardlinks: &mut BTreeMap<(u64, u64), PathBuf>, buffer: &mut [u8]) -> io::Result<()> {
     let m = fs::symlink_metadata(src)?;
@@ -133,12 +184,7 @@ fn copy_entry(src: &Path, dst: &Path, device: u64, checkpoint: &mut dyn FnMut(&s
             let attrs = attributes(&input)?;
             let mut output: File = rx::open(dst, OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL
                 | OFlags::NOFOLLOW | OFlags::CLOEXEC, Mode::from_bits_truncate(0o600))?.into();
-            loop {
-                let n = input.read(buffer)?;
-                if n == 0 { break; }
-                output.write_all(&buffer[..n])?;
-                checkpoint("copy-partial")?;
-            }
+            copy_bytes(&mut input, &mut output, m.size(), buffer, checkpoint)?;
             metadata(&output, &m, &attrs)?;
             // Store a stable private staging path, not a transient child fd.
             if m.nlink() > 1 { hardlinks.insert(key, dst.canonicalize()?); }
