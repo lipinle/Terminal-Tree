@@ -5,7 +5,7 @@ use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::Path;
 use std::time::Duration;
-use terminal_tree::operations::{Engine, Transfer, Trash};
+use terminal_tree::operations::{Engine, Transfer, Trash, SafetyMode};
 
 const ROOT: &str = "/mnt/data";
 const CASES: &[&str] = &[
@@ -39,6 +39,11 @@ fn run() -> io::Result<()> {
         left.split_whitespace().nth(4) == Some(ROOT)
             && right.split_whitespace().take(2).eq(["ext4", "/dev/vda"])
     }), "disposable ext4 guest mount required")?;
+    let mode=match cmdline.split_whitespace().find_map(|s|s.strip_prefix("tt_safety=")){
+        Some("standard")=>SafetyMode::Standard,
+        Some("paranoid")=>SafetyMode::Paranoid,
+        _=>return Err(fail("explicit crash-test safety mode required")),
+    };
     let personal=case.starts_with("trash-")||case.starts_with("restore-")||case.starts_with("purge-");
     if personal{
         require(rustix::process::getuid().as_raw()==1000 && rustix::process::geteuid().as_raw()==1000,"unprivileged disposable guest required")?;
@@ -46,7 +51,7 @@ fn run() -> io::Result<()> {
         let journal=Path::new(ROOT).join("state/terminal-tree/operations");
         let data=home.join(".local/share");
         require(std::env::var_os("XDG_DATA_HOME").as_deref()==Some(data.as_os_str()),"fixture data home mismatch")?;
-        let e=Engine::new_personal(&home,&journal,&[],&[])?;
+        let e=Engine::new_personal(&home,&journal,&[],&[])?.with_safety_mode(mode);
         let trash=Trash::new(&e,&data)?;
         let mut checkpoint=|point:&str|->io::Result<()>{
             if point==case{
@@ -72,7 +77,7 @@ fn run() -> io::Result<()> {
     new_directory(&app, "operations")?;
     let work = Path::new(ROOT).join("work");
     let journal = Path::new(ROOT).join("state/terminal-tree/operations");
-    let engine = Engine::new(&work, &journal)?;
+    let engine = Engine::new(&work, &journal)?.with_safety_mode(mode);
     let review = engine.review(&work.join("source.bin"))?;
     let kind = if case.starts_with("copy-") { Transfer::Copy } else { Transfer::Move };
     engine.transfer_with(&review, &work.join("destination.bin"), kind, &mut |point| {

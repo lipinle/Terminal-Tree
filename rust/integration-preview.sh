@@ -29,6 +29,9 @@ tt_rust_workspace() {
 tt_rust_personal() {
     "$_tt_rust_program" --personal "$@"
 }
+tt_rust_paranoid() {
+    "$_tt_rust_program" --paranoid "$@"
+}
 
 # Optional external listing. eza owns its formatting/configuration; the
 # native file engine does not consume or trust its output.

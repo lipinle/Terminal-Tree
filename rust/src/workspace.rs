@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use crossterm::{cursor::MoveTo, event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     queue, style::Print, terminal::{self, Clear, ClearType}};
 use terminal_tree::{display_name, Model};
-use terminal_tree::operations::{Engine, Review, Transfer, Trash, Undo};
+use terminal_tree::operations::{Engine, Review, Transfer, Trash, Undo, SafetyMode};
 use unicode_width::UnicodeWidthChar;
 use super::worker;
 
@@ -108,14 +108,14 @@ pub struct Workspace {
     undo: Vec<Undo>,
 }
 impl Workspace {
-    pub fn new(root: &Path, journal: &Path, data: &Path) -> io::Result<Self> {
+    pub fn new(root: &Path, journal: &Path, data: &Path,mode:SafetyMode) -> io::Result<Self> {
         if rustix::process::geteuid().is_root() { return Err(error("do not run as root")); }
         let root = root.canonicalize()?;
         let meta = fs::metadata(&root)?;
         if meta.uid() != rustix::process::getuid().as_raw() || meta.mode() & 0o077 != 0 {
             return Err(error("private owned workspace (0700) required"));
         }
-        let engine = Engine::new(&root, journal)?;
+        let engine = Engine::new(&root, journal)?.with_safety_mode(mode);
         let data = data.canonicalize()?;
         if data == root || !data.starts_with(&root) { return Err(error("private data directory inside workspace required")); }
         let m = fs::metadata(&data)?;
@@ -124,15 +124,16 @@ impl Workspace {
         let settings=super::settings::Store::new(journal)?;
         Ok(Self { engine, root, data,settings, observed:BTreeMap::new(), marks:BTreeMap::new(),mark_directory:PathBuf::new(),clipboard:None, undo:Vec::new() })
     }
-    pub fn personal(home:&Path,journal:&Path,extra:&[PathBuf])->io::Result<Self>{
+    pub fn personal(home:&Path,journal:&Path,extra:&[PathBuf],mode:SafetyMode)->io::Result<Self>{
         let root=home.to_path_buf();
-        let engine=Engine::new_personal(&root,journal,extra,&[])?;
+        let engine=Engine::new_personal(&root,journal,extra,&[])?.with_safety_mode(mode);
         let data=engine.personal_data_home().ok_or_else(||error("personal data home unavailable"))?.to_path_buf();
         let settings=super::settings::Store::new(journal)?;
         Ok(Self{engine,root,data,settings,observed:BTreeMap::new(),marks:BTreeMap::new(),mark_directory:PathBuf::new(),clipboard:None,undo:Vec::new()})
     }
     pub fn load_settings(&self,model:&mut Model)->io::Result<()>{self.settings.load(model)}
     pub fn root(&self) -> &Path { &self.root }
+    pub fn safety_label(&self)->&'static str{self.engine.safety_mode().label()}
     pub fn is_personal(&self)->bool{self.engine.is_personal()}
     pub fn marked(&self,p:&Path)->bool{self.marks.contains_key(p)}
     pub fn marked_count(&self)->usize{self.marks.len()}

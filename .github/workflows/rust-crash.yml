@@ -26,6 +26,7 @@ jobs:
       fail-fast: false
       matrix:
         fixture: [file, tree]
+        safety: [standard, paranoid]
         group: [transfer-trash, restore-purge]
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -65,14 +66,15 @@ jobs:
           PY
           args=()
           for case in "${cases[@]}"; do args+=(--case "$case"); done
-          python3 tests/crash/run_vm_tests.py --kernel "$TT_KERNEL" --initrd "$RUNNER_TEMP/tt-initramfs.gz" --logs "$RUNNER_TEMP/tt-crash-logs" --engine rust --fixture "$TT_FIXTURE" "${args[@]}"
+          python3 tests/crash/run_vm_tests.py --kernel "$TT_KERNEL" --initrd "$RUNNER_TEMP/tt-initramfs.gz" --logs "$RUNNER_TEMP/tt-crash-logs" --engine rust --safety "$TT_SAFETY" --fixture "$TT_FIXTURE" "${args[@]}"
         env:
+          TT_SAFETY: ${{ matrix.safety }}
           TT_FIXTURE: ${{ matrix.fixture }}
           TT_GROUP: ${{ matrix.group }}
       - name: Upload serial logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: rust-crash-serial-logs-${{ matrix.fixture }}-${{ matrix.group }}
+          name: rust-crash-serial-logs-${{ matrix.safety }}-${{ matrix.fixture }}-${{ matrix.group }}
           path: ${{ runner.temp }}/tt-crash-logs/
           if-no-files-found: warn

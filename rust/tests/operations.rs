@@ -3,7 +3,7 @@ use std::fs;
 use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use terminal_tree::operations::{Engine, Transfer};
+use terminal_tree::operations::{Engine, Transfer, SafetyMode};
 struct Fixture { base: PathBuf, root: PathBuf, journal: PathBuf }
 impl Fixture {
     fn new() -> Self {
@@ -447,7 +447,7 @@ fn cooperative_cancel_during_copy_preserves_source_and_pending_stage(){
 }
 #[test]
 fn cancel_hash_review_and_move_before_commit(){
-    let f=Fixture::new();let e=f.engine();
+    let f=Fixture::new();let e=f.engine().with_safety_mode(SafetyMode::Paranoid);
     let src=f.root.join("source");let dst=f.root.join("destination");
     fs::write(&src,vec![0x33;2*1024*1024]).unwrap();
     assert!(e.review_with(&src,&mut |point|if point=="hash-chunk"{Err(std::io::Error::new(std::io::ErrorKind::Interrupted,"cancelled"))}else{Ok(())}).is_err());
@@ -492,4 +492,61 @@ fn recovery_report_preserves_bad_records_and_shows_valid_ones(){
     assert_eq!(fs::read(&bad).unwrap(),b"{broken");
     assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
     assert_eq!(fs::read_dir(&f.journal).unwrap().count(),3);
+}
+
+#[test]
+fn safety_profiles_keep_copy_integrity_and_avoid_redundant_move_hashes(){
+    for mode in [SafetyMode::Standard,SafetyMode::Paranoid]{
+        let f=Fixture::new();
+        assert_eq!(f.engine().safety_mode(),SafetyMode::Standard);
+        let e=f.engine().with_safety_mode(mode);
+        let src=f.root.join("source");
+        let dst=f.root.join("destination");
+        let moved=f.root.join("moved");
+        let content=vec![0x7b;2*1024*1024];
+        fs::write(&src,&content).unwrap();
+        let mut review_hashes=0;
+        let r=e.review_with(&src,&mut |point|{if point=="hash-chunk"{review_hashes+=1;}Ok(())}).unwrap();
+        assert_eq!(review_hashes>0,mode==SafetyMode::Paranoid);
+        let mut copy_hashes=0;
+        e.transfer_with(&r,&dst,Transfer::Copy,&mut |p|{if p=="hash-chunk"{copy_hashes+=1;}Ok(())}).unwrap();
+        assert!(copy_hashes>=4,"both modes must independently hash source and copy");
+        assert_eq!(fs::read(&dst).unwrap(),content);
+        let mut move_hashes=0;
+        let undo=e.transfer_with(&e.review(&dst).unwrap(),&moved,Transfer::Move,&mut |p|{if p=="hash-chunk"{move_hashes+=1;}Ok(())}).unwrap().unwrap();
+        assert_eq!(move_hashes>0,mode==SafetyMode::Paranoid);
+        e.undo(&undo).unwrap();
+        assert_eq!(fs::read(&dst).unwrap(),content);
+        assert!(e.pending().unwrap().is_empty());
+    }
+}
+#[test]
+fn both_profiles_reject_corrupted_copy_before_verification(){
+    for mode in [SafetyMode::Standard,SafetyMode::Paranoid]{
+        let f=Fixture::new();let e=f.engine().with_safety_mode(mode);
+        let src=f.root.join("source");let dst=f.root.join("destination");
+        fs::write(&src,b"original").unwrap();
+        let r=e.review(&src).unwrap();
+        let result=e.transfer_with(&r,&dst,Transfer::Copy,&mut |p|{
+            if p=="copy-verify-stage"{
+                let stage=fs::read_dir(&f.root)?.filter_map(Result::ok)
+                    .find(|entry|entry.file_name().to_string_lossy().starts_with(".terminal-tree-copy-")).unwrap();
+                fs::write(stage.path().join("payload"),b"modified")?;
+            }
+            Ok(())
+        });
+        assert!(result.is_err());assert!(!dst.exists());
+        assert_eq!(fs::read(&src).unwrap(),b"original");
+        assert_eq!(e.pending().unwrap().len(),1);
+    }
+}
+#[test]
+fn safety_profile_cannot_reuse_review_from_other_profile(){
+    let f=Fixture::new();let src=f.root.join("source");let dst=f.root.join("destination");
+    fs::write(&src,b"keep").unwrap();
+    let standard=f.engine();
+    let paranoid=f.engine().with_safety_mode(SafetyMode::Paranoid);
+    assert!(paranoid.transfer(&standard.review(&src).unwrap(),&dst,Transfer::Move).is_err());
+    assert!(standard.transfer(&paranoid.review(&src).unwrap(),&dst,Transfer::Copy).is_err());
+    assert!(!dst.exists());assert!(standard.pending().unwrap().is_empty());
 }

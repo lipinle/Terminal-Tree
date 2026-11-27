@@ -195,12 +195,13 @@ impl<'a> Trash<'a> {
         let parent=self.private_dir("files")?;
         let entry=fd_path(&parent).join(p.file_name().ok_or_else(||fail("missing Trash filename"))?);
         let m=fs::symlink_metadata(&entry)?;
-        let (manifest,snapshot)=super::manifest(&entry,false)?;
-        let item=Review{path:p,identity:identity(&m),parent:dir_id(&parent)?,snapshot,manifest};
+        let (manifest,snapshot)=super::manifest(&entry,false,self.engine.mode.hashes())?;
+        let item=Review{mode:self.engine.mode,path:p,identity:identity(&m),parent:dir_id(&parent)?,snapshot,manifest};
         self.check_item(&item)?;
         Ok(item)
     }
     fn check_item(&self,item:&Review)->io::Result<File>{
+        require(item.mode==self.engine.mode,"review safety profile differs; review again")?;
         if self.pinned.is_none(){return self.engine.check(item);}
         require(item.path.parent()==Some(self.root.join("files").as_path()),"not a home Trash item")?;
         reject_mounts(&item.path)?;
@@ -208,7 +209,7 @@ impl<'a> Trash<'a> {
         require(dir_id(&parent)?==item.parent,"Trash parent changed")?;
         let entry=fd_path(&parent).join(item.path.file_name().unwrap());
         require(identity(&fs::symlink_metadata(&entry)?)==item.identity,"Trash item changed")?;
-        let (manifest,snapshot)=super::manifest(&entry,false)?;
+        let (manifest,snapshot)=super::manifest(&entry,false,self.engine.mode.hashes())?;
         require(manifest==item.manifest && snapshot==item.snapshot,"Trash content changed")?;
         Ok(parent)
     }
@@ -238,7 +239,7 @@ impl<'a> Trash<'a> {
         let date=std::str::from_utf8(&date.stdout).map_err(io::Error::other)?.trim();
         require(date.len()==19 && date.bytes().all(|b|b.is_ascii_digit()||b"-T:".contains(&b)),"invalid deletion date")?;
         let metadata=format!("[Trash Info]\nPath={encoded}\nDeletionDate={date}\n");
-        let (content,ids)=super::manifest(&source,true)?;
+        let (content,ids)=super::manifest(&source,true,self.engine.mode.hashes())?;
         require(content==item.manifest && ids==item.snapshot,"source changed while syncing")?;
         checkpoint("trash-prepare")?;
         self.engine.log(&id,"native-trash",Some(&item.path),Some(&target),Some(&self.root.join("info").join(&info_name)))?;
@@ -366,7 +367,7 @@ impl<'a> Trash<'a> {
             let target=review.destination.path().file_name().unwrap();
             require(fs::symlink_metadata(fd_path(&src).join(name))?.dev()==dst.metadata()?.dev(),"cross-device restore refused")?;
             no_conflict(&fd_path(&dst).join(target))?;
-            let (content,ids)=super::manifest(&fd_path(&src).join(name),true)?;
+            let (content,ids)=super::manifest(&fd_path(&src).join(name),true,self.engine.mode.hashes())?;
             require(content==review.item.manifest && ids==review.item.snapshot,"Trash content changed while syncing")?;
             self.check_item(&review.item)?;
             self.check_info(review)?;

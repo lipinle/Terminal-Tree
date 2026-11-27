@@ -56,8 +56,9 @@ def once(binary,base,shape,kind,lang,number):
     source=work/"source"; destination=work/"destination"
     make(source,shape)
     before=snapshot(source)
-    cmd=([binary,str(work),str(journal),kind] if lang in ("rust","baseline") else
+    cmd=([binary,str(work),str(journal),kind] if lang in ("rust","baseline","paranoid") else
          [sys.executable,"-c",PYTHON,str(ROOT/"legacy/python/src"),str(work),str(state),kind])
+    if lang=="paranoid": cmd.append("paranoid")
     result=subprocess.run(cmd,check=True,capture_output=True,text=True)
     assert snapshot(destination)==before
     if kind=="copy": assert snapshot(source)==before
@@ -72,11 +73,12 @@ def main(binary,baseline=None):
     result={}
     profile={}
     comparison={}
+    modes={}
     with tempfile.TemporaryDirectory(prefix="tt-ops-benchmark-") as tmp:
         base=Path(tmp)
         for shape in ("file32MiB","tree500"):
             for kind in ("copy","move"):
-                samples={"python":[],"rust":[]}
+                samples={"python":[],"rust":[],"paranoid":[]}
                 phase_samples={}
                 if baseline: samples["baseline"]=[]
                 for i in range(3):
@@ -91,11 +93,14 @@ def main(binary,baseline=None):
                 p,r=[statistics.median(samples[l]) for l in ("python","rust")]
                 key=f"{shape}_{kind}"
                 result[key]={"python_ms":round(p,3),"rust_ms":round(r,3),"python_over_rust":round(p/r,2)}
+                paranoid=statistics.median(samples["paranoid"])
+                modes[key]={"standard_ms":round(r,3),"paranoid_ms":round(paranoid,3),"paranoid_over_standard":round(paranoid/r,3)}
                 profile[key]={k:round(statistics.median(v),3) for k,v in phase_samples.items()}
                 if baseline:
                     old=statistics.median(samples["baseline"])
                     comparison[key]={"baseline_ms":round(old,3),"current_ms":round(r,3),"baseline_over_current":round(old/r,3)}
     print("TT_OPS_BENCHMARK "+json.dumps(result,sort_keys=True))
+    print("TT_SAFETY_MODE_BENCHMARK "+json.dumps(modes,sort_keys=True))
     print("TT_PHASE_BENCHMARK "+json.dumps(profile,sort_keys=True))
     if baseline: print("TT_SAME_RUN_BENCHMARK "+json.dumps(comparison,sort_keys=True))
 

@@ -24,7 +24,7 @@ pub fn show(records:&[(OsString,std::io::Result<Value>)],truncated:bool)->std::i
         lines.push(format!("Record: {}",display_name(name)));
         let r=match result{Ok(r)=>r,Err(e)=>{lines.push(format!("Cannot read: {}",display_name(OsString::from(e.to_string()).as_os_str())));continue;}};
         lines.push(format!("ID: {} | Operation: {}",field(r,"id"),field(r,"operation")));
-        for key in ["source","destination","stage"]{lines.push(format!("{key}: {}",field(r,key)));}
+        for key in ["safety_mode","source","destination","stage"]{lines.push(format!("{key}: {}",field(r,key)));}
     }
     use unicode_width::UnicodeWidthChar;
     let width=usize::from(crossterm::terminal::size()?.0).saturating_sub(1).max(1);
