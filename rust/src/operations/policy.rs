@@ -100,6 +100,7 @@ impl PersonalPolicy{
             require(["/mnt","/media","/run/media"].iter().any(|p|path.starts_with(p)&&path!=Path::new(p)),"external root must be under a media mount location")?;
             require(!roots.iter().any(|r|overlap(&r.path,&path)),"overlapping approved roots refused")?;
             let r=Root::new(&path)?;
+            require(r.dir.metadata()?.dev()!=fs::metadata("/")?.dev(),"system root filesystem alias refused")?;
             let m=table.iter().find(|m|m.id==r.mount).ok_or_else(||fail("external mount missing"))?;
             require(m.target==path && m.root==Path::new("/") && !roots.iter().any(|r0|r0.dir.metadata().map_or(true,|a|r.dir.metadata().map_or(true,|b|a.dev()==b.dev()))),"external root must be a distinct whole-filesystem mount")?;
             roots.push(r);
