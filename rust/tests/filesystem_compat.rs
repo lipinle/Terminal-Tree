@@ -13,7 +13,7 @@ fn filesystem_compatibility() {
     let journal = home.join("journal");
     fs::create_dir(&journal).unwrap();
     fs::set_permissions(&journal, fs::Permissions::from_mode(0o700)).unwrap();
-    let e = Engine::new_personal(&home, &journal, &[external.clone()], &[]).unwrap();
+    let e = Engine::new_personal(&home, &journal, std::slice::from_ref(&external), &[]).unwrap();
     let src = home.join("source");
     let dest = external.join("copy");
     fs::write(&src, b"verified data").unwrap();
