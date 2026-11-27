@@ -27,7 +27,7 @@ jobs:
       - name: Build and test Rust read-only port
         run: |
           rustc --version
-          cargo test --manifest-path rust/Cargo.toml
+          cargo test --manifest-path rust/Cargo.toml --features native-ops
           cargo build --release --manifest-path rust/Cargo.toml
       - name: Cross-language scan parity and terminal smoke test
         run: |

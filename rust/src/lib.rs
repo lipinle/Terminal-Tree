@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 //! Native read-only filesystem model. No file mutation API is exposed.
+#[cfg(feature = "native-ops")]
+pub mod operations;
+
 use std::ffi::OsStr;
 use std::fs;
 use std::io;

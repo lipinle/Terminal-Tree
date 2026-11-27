@@ -13,7 +13,8 @@ unicode-width = "=0.2.0"
 
 # The destructive probe is only compiled explicitly for isolated VM tests.
 [features]
-crash-probe = ["dep:rustix", "dep:sha2", "dep:serde_json", "dep:xattr"]
+native-ops = ["dep:rustix", "dep:sha2", "dep:serde_json", "dep:xattr"]
+crash-probe = ["native-ops"]
 
 [[bin]]
 name = "tt-crash-probe"
@@ -22,7 +23,7 @@ required-features = ["crash-probe"]
 
 [dependencies.rustix]
 version = "=0.38.44"
-features = ["fs"]
+features = ["fs", "process"]
 optional = true
 
 [dependencies.sha2]
