@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use xattr::FileExt;
 
+mod policy;
 mod manifest;
 mod trash;
 pub use trash::{Trash, RestoreReview, RestoreOutcome, PurgeReview, PurgeOutcome};
@@ -131,6 +132,8 @@ pub struct Engine {
     root: PathBuf,
     root_identity: (u64,u64),
     journal: File,
+    journal_path: PathBuf,
+    personal: Option<policy::PersonalPolicy>,
 }
 impl Engine {
     pub fn new(root: &Path, journal: &Path) -> io::Result<Self> {
@@ -146,9 +149,39 @@ impl Engine {
         let meta = journal.metadata()?;
         require(meta.uid() == rustix::process::getuid().as_raw() && meta.permissions().mode() & 0o077 == 0,
             "private owned journal required")?;
-        Ok(Self { root_identity: dir_id(&open_dir(&root)?)?, root, journal })
+        Ok(Self { root_identity: dir_id(&open_dir(&root)?)?, root, journal, journal_path:j, personal:None })
+    }
+    /// Explicit personal-file preview; the home and listed external mounts
+    /// are the only permitted roots. Normal Trash is intentionally disabled.
+    pub fn new_personal(home:&Path, journal:&Path, extra:&[PathBuf], protected:&[PathBuf])->io::Result<Self>{
+        let j=policy::normal_absolute(journal)?;
+        let file=policy::open_absolute_dir(&j)?;
+        let meta=file.metadata()?;
+        require(meta.uid()==rustix::process::getuid().as_raw() && meta.mode()&0o077==0,"private owned journal required")?;
+        let mut reserved=protected.to_vec();
+        reserved.push(j.clone());
+        reserved.push(std::env::current_exe()?);
+        let personal=policy::PersonalPolicy::new(home,extra,&reserved)?;
+        let root=policy::normal_absolute(home)?;
+        let root_identity=dir_id(&policy::open_absolute_dir(&root)?)?;
+        Ok(Self{root,root_identity,journal:file,journal_path:j,personal:Some(personal)})
+    }
+    pub fn is_personal(&self)->bool{self.personal.is_some()}
+    fn check_journal(&self)->io::Result<()>{
+        let actual=policy::open_absolute_dir(&self.journal_path)?;
+        let m=actual.metadata()?;
+        require(dir_id(&actual)?==dir_id(&self.journal)? && m.uid()==rustix::process::getuid().as_raw() && m.mode()&0o077==0,"journal replaced or no longer private")
+    }
+    fn parent_for(&self,path:&Path)->io::Result<File>{
+        if let Some(p)=&self.personal {p.parent(path)}
+        else {policy::open_absolute_dir(path.parent().ok_or_else(||fail("missing parent"))?)}
+    }
+    fn check_parent(&self,path:&Path,pinned:&File)->io::Result<()>{
+        require(dir_id(&self.parent_for(path)?)?==dir_id(pinned)?,"parent changed or redirected")
     }
     fn path(&self, path: &Path) -> io::Result<PathBuf> {
+        if let Some(p)=&self.personal{return p.path(path);}
+
         require(dir_id(&open_dir(&self.root)?)? == self.root_identity, "workspace replaced")?;
         let name = path.file_name().ok_or_else(|| fail("missing filename"))?;
         one_name(name)?;
@@ -159,7 +192,7 @@ impl Engine {
     pub fn review(&self, path: &Path) -> io::Result<Review> {
         let path = self.path(path)?;
         reject_mounts(&path)?;
-        let parent = open_dir(path.parent().unwrap())?;
+        let parent = self.parent_for(&path)?;
         let m = fs::symlink_metadata(fd_path(&parent).join(path.file_name().unwrap()))?;
         let (manifest, snapshot) = manifest(&fd_path(&parent).join(path.file_name().unwrap()), false)?;
         let reviewed = Review { path, identity: identity(&m), parent: dir_id(&parent)?, snapshot, manifest };
@@ -170,7 +203,7 @@ impl Engine {
         let p = self.path(&review.path)?;
         require(p == review.path, "source path changed")?;
         reject_mounts(&p)?;
-        let parent = open_dir(p.parent().unwrap())?;
+        let parent = self.parent_for(&p)?;
         require(dir_id(&parent)? == review.parent, "source parent changed")?;
         let entry = fd_path(&parent).join(p.file_name().unwrap());
         require(identity(&fs::symlink_metadata(&entry)?) == review.identity, "source changed")?;
@@ -184,6 +217,7 @@ impl Engine {
         Ok(parent)
     }
     fn log(&self, id: &str, operation: &str, src: Option<&Path>, dst: Option<&Path>, stage: Option<&Path>) -> io::Result<()> {
+        self.check_journal()?;
         let hex = |p: &Path| p.as_os_str().as_bytes().iter().map(|b| format!("{b:02x}")).collect::<String>();
         let record = serde_json::json!({
             "id": id, "operation": operation,
@@ -201,13 +235,14 @@ impl Engine {
         self.journal.sync_all()
     }
     fn complete(&self, id: &str) -> io::Result<()> {
+        self.check_journal()?;
         rx::renameat_with(&self.journal, format!("{id}.pending.json"),
             &self.journal, format!("{id}.done.json"), RenameFlags::NOREPLACE)?;
         self.journal.sync_all()
     }
     pub fn destination(&self, path: &Path) -> io::Result<Destination> {
         let path = self.path(path)?;
-        let parent = open_dir(path.parent().unwrap())?;
+        let parent = self.parent_for(&path)?;
         no_conflict(&fd_path(&parent).join(path.file_name().unwrap()))?;
         Ok(Destination { path, parent: dir_id(&parent)? })
     }
@@ -228,7 +263,7 @@ impl Engine {
         let dst = self.path(&destination.path)?;
         require(dst == destination.path, "destination path changed")?;
         let src_parent = self.check_identity(review)?;
-        let dest_parent = open_dir(dst.parent().unwrap())?;
+        let dest_parent = self.parent_for(&dst)?;
         require(dir_id(&dest_parent)? == destination.parent, "reviewed destination replaced")?;
         let dest_name = dst.file_name().unwrap();
         let dest_entry = fd_path(&dest_parent).join(dest_name);
@@ -250,13 +285,14 @@ impl Engine {
             let payload = fd_path(&stage).join("payload");
             let staged = copy_tree(&src, &payload, &review.manifest, &review.snapshot, checkpoint)?;
             self.check_identity(review)?;
-            same_parent(dst.parent().unwrap(), &dest_parent)?;
+            self.check_parent(&dst, &dest_parent)?;
             reject_mounts(&stage_path)?;
             checkpoint("copy-before-publish")?;
+            self.check_journal()?;
             require(snapshot(&payload)? == staged, "verified payload changed before publish")?;
             self.check_identity(review)?;
-            same_parent(review.path.parent().unwrap(), &src_parent)?;
-            same_parent(dst.parent().unwrap(), &dest_parent)?;
+            self.check_parent(&review.path, &src_parent)?;
+            self.check_parent(&dst, &dest_parent)?;
             stage.sync_all()?; dest_parent.sync_all()?;
             rx::renameat_with(&stage, "payload", &dest_parent, dest_name, RenameFlags::NOREPLACE)?;
             checkpoint("copy-before-sync")?;
@@ -272,11 +308,12 @@ impl Engine {
             let (before, ids) = manifest(&src, true)?;
             require(before == review.manifest && ids == review.snapshot, "source changed while syncing")?;
             self.check_identity(review)?;
-            same_parent(review.path.parent().unwrap(), &src_parent)?;
-            same_parent(dst.parent().unwrap(), &dest_parent)?;
+            self.check_parent(&review.path, &src_parent)?;
+            self.check_parent(&dst, &dest_parent)?;
             src_parent.sync_all()?;
             let same_dir = dir_id(&src_parent)? == dir_id(&dest_parent)?;
             if !same_dir { dest_parent.sync_all()?; }
+            self.check_journal()?;
             rx::renameat_with(&src_parent, src_name, &dest_parent, dest_name, RenameFlags::NOREPLACE)?;
             checkpoint("move-before-sync")?;
             dest_parent.sync_all()?;
@@ -315,13 +352,14 @@ impl Engine {
     pub fn create_reviewed(&self, destination: &Destination, directory: bool) -> io::Result<()> {
         let dst = self.path(&destination.path)?;
         require(dst == destination.path, "destination changed")?;
-        let parent = open_dir(dst.parent().unwrap())?;
+        let parent = self.parent_for(&dst)?;
         require(dir_id(&parent)? == destination.parent, "reviewed destination replaced")?;
         let name = dst.file_name().unwrap();
         no_conflict(&fd_path(&parent).join(name))?;
         let id = unique()?;
         self.log(&id, if directory {"mkdir"} else {"create-file"}, None, Some(&dst), None)?;
-        same_parent(dst.parent().unwrap(), &parent)?;
+        self.check_parent(&dst, &parent)?;
+        self.check_journal()?;
         if directory { create_dir_at(&parent, name)?; }
         else {
             let f: File = rx::openat(&parent, name, OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL
@@ -332,6 +370,7 @@ impl Engine {
     }
     /// Read-only enumeration; malformed records are reported as errors.
     pub fn pending(&self) -> io::Result<Vec<serde_json::Value>> {
+        self.check_journal()?;
         let mut out = Vec::new();
         for e in fs::read_dir(fd_path(&self.journal))? {
             let name = e?.file_name();

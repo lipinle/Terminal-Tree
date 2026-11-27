@@ -150,6 +150,7 @@ fn erase(parent: &File, name: &std::ffi::OsStr, snapshot: &Snapshot, rel: &Path,
 
 impl<'a> Trash<'a> {
     pub fn new(engine: &'a Engine, data_home: &Path) -> io::Result<Self> {
+        require(!engine.is_personal(), "personal Trash not enabled; use Python until production adapter is validated")?;
         require(fs::symlink_metadata(data_home)?.is_dir(), "data home symlink refused")?;
         let data_home = data_home.canonicalize()?;
         require(data_home.starts_with(&engine.root), "Trash outside experimental workspace")?;
