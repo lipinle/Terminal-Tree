@@ -21,6 +21,10 @@ name = "tt-crash-probe"
 path = "src/bin/crash_probe.rs"
 required-features = ["crash-probe"]
 
+[[example]]
+name = "operation_benchmark"
+required-features = ["native-ops"]
+
 [dependencies.rustix]
 version = "=0.38.44"
 features = ["fs", "process"]
