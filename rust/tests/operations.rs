@@ -79,3 +79,22 @@ fn interrupted_copy_keeps_pending_record_and_source() {
     assert_eq!(fs::read(&src).unwrap(), b"content");
     assert_eq!(e.pending().unwrap().len(), 1);
 }
+
+#[test]
+fn reviewed_destination_directory_swap_is_refused() {
+    let f = Fixture::new(); let e = f.engine();
+    let src = f.root.join("source"); fs::write(&src, b"data").unwrap();
+    let parent = f.root.join("parent"); fs::create_dir(&parent).unwrap();
+    let destination = e.destination(&parent.join("dest")).unwrap();
+    fs::rename(&parent, f.root.join("old-parent")).unwrap();
+    fs::create_dir(&parent).unwrap();
+    assert!(e.transfer_reviewed(&e.review(&src).unwrap(), &destination, Transfer::Copy).is_err());
+    assert!(!parent.join("dest").exists()); assert!(src.exists());
+}
+#[test]
+fn journal_symlink_is_refused() {
+    let f = Fixture::new();
+    let symlink_path = f.base.join("journal-link");
+    symlink(&f.journal, &symlink_path).unwrap();
+    assert!(Engine::new(&f.root, &symlink_path).is_err());
+}

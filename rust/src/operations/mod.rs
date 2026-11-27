@@ -100,6 +100,11 @@ pub struct Review {
     parent: (u64,u64),
     snapshot: Snapshot,
 }
+#[derive(Debug, Clone)]
+pub struct Destination {
+    path: PathBuf,
+    parent: (u64,u64),
+}
 #[derive(Debug)]
 pub struct Undo {
     review: Review,
@@ -122,6 +127,7 @@ impl Engine {
         for sys in ["/bin","/boot","/dev","/etc","/lib","/lib64","/proc","/root","/run","/sbin","/sys","/usr","/var"] {
             require(!root.starts_with(sys), "system workspace refused")?;
         }
+        require(fs::symlink_metadata(journal)?.is_dir(), "journal symlink or non-directory refused")?;
         let j = journal.canonicalize()?;
         require(!j.starts_with(&root) && !root.starts_with(&j), "journal must be separate from workspace")?;
         let journal = open_dir(&j)?;
@@ -181,15 +187,31 @@ impl Engine {
             &self.journal, format!("{id}.done.json"), RenameFlags::NOREPLACE)?;
         self.journal.sync_all()
     }
+    pub fn destination(&self, path: &Path) -> io::Result<Destination> {
+        let path = self.path(path)?;
+        let parent = open_dir(path.parent().unwrap())?;
+        no_conflict(&fd_path(&parent).join(path.file_name().unwrap()))?;
+        Ok(Destination { path, parent: dir_id(&parent)? })
+    }
+    pub fn transfer_reviewed(&self, review: &Review, destination: &Destination, kind: Transfer) -> io::Result<Option<Undo>> {
+        self.transfer_reviewed_with(review, destination, kind, &mut |_| Ok(()))
+    }
     pub fn transfer(&self, review: &Review, destination: &Path, kind: Transfer) -> io::Result<Option<Undo>> {
         self.transfer_with(review, destination, kind, &mut |_| Ok(()))
     }
     #[doc(hidden)]
     pub fn transfer_with(&self, review: &Review, destination: &Path, kind: Transfer,
         checkpoint: &mut dyn FnMut(&str) -> io::Result<()>) -> io::Result<Option<Undo>> {
-        let dst = self.path(destination)?;
+        let reviewed = self.destination(destination)?;
+        self.transfer_reviewed_with(review, &reviewed, kind, checkpoint)
+    }
+    fn transfer_reviewed_with(&self, review: &Review, destination: &Destination, kind: Transfer,
+        checkpoint: &mut dyn FnMut(&str) -> io::Result<()>) -> io::Result<Option<Undo>> {
+        let dst = self.path(&destination.path)?;
+        require(dst == destination.path, "destination path changed")?;
         let src_parent = self.check(review)?;
         let dest_parent = open_dir(dst.parent().unwrap())?;
+        require(dir_id(&dest_parent)? == destination.parent, "reviewed destination replaced")?;
         let dest_name = dst.file_name().unwrap();
         let dest_entry = fd_path(&dest_parent).join(dest_name);
         no_conflict(&dest_entry)?;
@@ -225,7 +247,7 @@ impl Engine {
             checkpoint("copy-done")?;
             Ok(None)
         } else {
-            manifest(&src, true)?;
+            let before = manifest(&src, true)?.0;
             self.check(review)?;
             same_parent(review.path.parent().unwrap(), &src_parent)?;
             same_parent(dst.parent().unwrap(), &dest_parent)?;
@@ -237,7 +259,16 @@ impl Engine {
             self.complete(&id)?;
             checkpoint("move-done")?;
             // A failed post-move review must not cause a misleading retry.
-            Ok(self.review(&dst).ok().map(|after| Undo { review: after, original: review.path.clone() }))
+            // If another writer has already changed the result, do not grant Undo.
+            let after = self.review(&dst).and_then(|after| {
+                let (manifest_after, snapshot_after) = manifest(&dst, false)?;
+                require(manifest_after == before && snapshot_after == after.snapshot,
+                    "moved result changed before undo review")?;
+                require(after.identity.0 == review.identity.0 && after.identity.1 == review.identity.1,
+                    "moved inode replaced")?;
+                Ok(after)
+            });
+            Ok(after.ok().map(|after| Undo { review: after, original: review.path.clone() }))
         }
     }
     pub fn undo(&self, undo: &Undo) -> io::Result<()> {
