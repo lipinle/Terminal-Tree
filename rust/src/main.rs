@@ -336,7 +336,6 @@ fn browse(path: PathBuf, return_on_enter: bool, #[cfg(feature = "native-ops")] m
                             if let Some(w)=&mut workspace{
                                 match actions_menu(w,&mut model)?{Some(msg)=>{message=msg;Ok(())},None=>Ok(())}
                             }else{Ok(())}
-                            }else{Ok(())}
                         }
                         KeyCode::Char('i') => {
                             match model.entries.get(model.selected) {
