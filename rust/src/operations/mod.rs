@@ -14,6 +14,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use xattr::FileExt;
 
 mod manifest;
+mod trash;
+pub use trash::{Trash, RestoreReview, RestoreOutcome};
 use manifest::{fd_path, manifest, copy_tree, Snapshot, Identity};
 
 fn fail(message: &str) -> io::Error { io::Error::new(io::ErrorKind::InvalidData, message) }
@@ -165,13 +167,13 @@ impl Engine {
         require(manifest(&entry, false)?.1 == review.snapshot, "source tree changed")?;
         Ok(parent)
     }
-    fn log(&self, id: &str, operation: &str, src: Option<&Path>, dst: &Path, stage: Option<&Path>) -> io::Result<()> {
+    fn log(&self, id: &str, operation: &str, src: Option<&Path>, dst: Option<&Path>, stage: Option<&Path>) -> io::Result<()> {
         let hex = |p: &Path| p.as_os_str().as_bytes().iter().map(|b| format!("{b:02x}")).collect::<String>();
         let record = serde_json::json!({
             "id": id, "operation": operation,
-            "source": src.and_then(Path::to_str), "destination": dst.to_str(),
+            "source": src.and_then(Path::to_str), "destination": dst.and_then(Path::to_str),
             "stage": stage.and_then(Path::to_str),
-            "source_bytes_hex": src.map(hex), "destination_bytes_hex": hex(dst),
+            "source_bytes_hex": src.map(hex), "destination_bytes_hex": dst.map(hex),
             "stage_bytes_hex": stage.map(hex), "started": id,
         });
         let mut file: File = rx::openat(&self.journal, format!("{id}.pending.json"),
@@ -225,7 +227,7 @@ impl Engine {
         if !copy {
             require(fs::symlink_metadata(&src)?.dev() == dest_parent.metadata()?.dev(), "cross-device move refused")?;
         }
-        self.log(&id, if copy {"copy"} else {"move"}, Some(&review.path), &dst,
+        self.log(&id, if copy {"copy"} else {"move"}, Some(&review.path), Some(&dst),
             if copy {Some(&stage_path)} else {None})?;
         if copy {
             let stage = create_dir_at(&dest_parent, OsStr::new(&stage_name))?;
@@ -280,7 +282,7 @@ impl Engine {
         let name = dst.file_name().unwrap();
         no_conflict(&fd_path(&parent).join(name))?;
         let id = unique()?;
-        self.log(&id, if directory {"mkdir"} else {"create-file"}, None, &dst, None)?;
+        self.log(&id, if directory {"mkdir"} else {"create-file"}, None, Some(&dst), None)?;
         same_parent(dst.parent().unwrap(), &parent)?;
         if directory { create_dir_at(&parent, name)?; }
         else {

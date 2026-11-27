@@ -26,6 +26,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Build and test Rust read-only port
         run: |
+          command -v gio
           rustc --version
           cargo test --manifest-path rust/Cargo.toml --features native-ops
           cargo build --release --manifest-path rust/Cargo.toml

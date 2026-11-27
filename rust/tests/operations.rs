@@ -98,3 +98,61 @@ fn journal_symlink_is_refused() {
     symlink(&f.journal, &symlink_path).unwrap();
     assert!(Engine::new(&f.root, &symlink_path).is_err());
 }
+
+fn trash_fixture(f: &Fixture) -> (PathBuf, PathBuf, PathBuf) {
+    let data = f.root.join("data"); fs::create_dir(&data).unwrap();
+    let trash = data.join("Trash"); fs::create_dir(&trash).unwrap();
+    for p in [&trash, &trash.join("files"), &trash.join("info")] {
+        if !p.exists() { fs::create_dir(p).unwrap(); }
+        fs::set_permissions(p, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    (data, trash.join("files"), trash.join("info"))
+}
+#[test]
+fn restore_checked_trash_metadata_and_reject_collision() {
+    use terminal_tree::operations::{Trash, RestoreOutcome};
+    let f = Fixture::new(); let e = f.engine();
+    let (data, files, info) = trash_fixture(&f);
+    let p = files.join("sample"); let destination = f.root.join("original");
+    fs::write(&p, b"preserve").unwrap();
+    let meta = info.join("sample.trashinfo");
+    fs::write(&meta, format!("[Trash Info]\nPath={}\n", destination.display())).unwrap();
+    let trash = Trash::new(&e, &data).unwrap();
+    let review = trash.review_restore(&p).unwrap();
+    fs::write(&destination, b"collision").unwrap();
+    assert!(trash.restore(&review).is_err());
+    assert_eq!(fs::read(&destination).unwrap(), b"collision"); assert!(p.exists());
+    fs::remove_file(&destination).unwrap();
+    let review = trash.review_restore(&p).unwrap();
+    assert_eq!(trash.restore(&review).unwrap(), RestoreOutcome::Restored);
+    assert_eq!(fs::read(destination).unwrap(), b"preserve"); assert!(!meta.exists());
+}
+#[test]
+fn restore_refuses_changed_or_outside_metadata() {
+    use terminal_tree::operations::Trash;
+    let f = Fixture::new(); let e = f.engine();
+    let (data, files, info) = trash_fixture(&f);
+    let p = files.join("sample"); fs::write(&p, b"safe").unwrap();
+    let meta = info.join("sample.trashinfo");
+    let trash = Trash::new(&e, &data).unwrap();
+    fs::write(&meta, format!("[Trash Info]\nPath={}\n", f.base.join("outside").display())).unwrap();
+    assert!(trash.review_restore(&p).is_err());
+    fs::write(&meta, format!("[Trash Info]\nPath={}\n", f.root.join("inside").display())).unwrap();
+    let review = trash.review_restore(&p).unwrap();
+    fs::write(&meta, format!("[Trash Info]\nPath={}\n", f.root.join("other").display())).unwrap();
+    assert!(trash.restore(&review).is_err()); assert!(p.exists());
+}
+#[test]
+fn gio_trash_round_trip_in_private_workspace() {
+    use terminal_tree::operations::{Trash, RestoreOutcome};
+    let f = Fixture::new(); let e = f.engine();
+    let (data, files, _) = trash_fixture(&f);
+    let p = f.root.join("original"); fs::write(&p, b"gio fixture").unwrap();
+    let trash = Trash::new(&e, &data).unwrap();
+    trash.send(&e.review(&p).unwrap()).unwrap();
+    assert!(!p.exists());
+    let entry = fs::read_dir(files).unwrap().next().unwrap().unwrap().path();
+    let review = trash.review_restore(&entry).unwrap();
+    assert_eq!(trash.restore(&review).unwrap(), RestoreOutcome::Restored);
+    assert_eq!(fs::read(&p).unwrap(), b"gio fixture");
+}
