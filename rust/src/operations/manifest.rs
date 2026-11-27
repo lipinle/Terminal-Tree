@@ -90,7 +90,9 @@ fn collect(path: &Path, relative: &Path, device: u64, flush: bool,
             hash
         };
         require(identity(&file.metadata()?) == identity(&m), "file changed during traversal")?;
-        links.entry((m.dev(), m.ino())).or_default().push(relative.to_path_buf());
+        // Single-link files cannot contribute to a multi-name group.
+        // Still hash and verify every file and its identity independently.
+        if m.nlink()>1 {links.entry((m.dev(), m.ino())).or_default().push(relative.to_path_buf());}
         (Body::File(m.size(), hash), attrs)
     } else if m.file_type().is_symlink() {
         (Body::Link(fs::read_link(path)?), path_attrs(path)?)

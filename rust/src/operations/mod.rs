@@ -348,6 +348,7 @@ impl Engine {
             checkpoint("copy-done")?;
             Ok(None)
         } else {
+            checkpoint("move-verify-source")?;
             let (before, ids) = manifest_with(&src, true,checkpoint)?;
             require(before == review.manifest && ids == review.snapshot, "source changed while syncing")?;
             self.check_identity(review)?;
@@ -367,6 +368,7 @@ impl Engine {
             checkpoint("move-done")?;
             // A failed post-move review must not cause a misleading retry.
             // If another writer has already changed the result, do not grant Undo.
+            checkpoint("move-verify-result")?;
             let after = self.review(&dst).and_then(|after| {
                 require(after.manifest == before, "moved result changed before undo review")?;
                 require(after.snapshot.len() == review.snapshot.len() && review.snapshot.iter().all(|(p,id)| {

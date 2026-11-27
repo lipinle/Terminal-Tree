@@ -1,24 +1,24 @@
 //! Responsive modal worker. One operation at a time; never detach a writer.
 use std::io::{self,Write};
 use std::sync::{Mutex,atomic::{AtomicBool,Ordering}};
-use std::time::Duration;
+use std::time::{Duration,Instant};
 use crossterm::{cursor::MoveTo,event::{self,Event,KeyCode,KeyModifiers},queue,style::Print,terminal::{self,Clear,ClearType}};
 
 pub struct Progress {
     cancel:AtomicBool,
     state:Mutex<State>,
 }
-struct State { label:String, phase:String, done:usize,total:usize,committing:bool, copied:u64 }
+struct State { label:String, phase:&'static str, done:usize,total:usize,committing:bool, copied:u64 }
 impl Progress {
     fn new(total:usize)->Self{
-        Self{cancel:AtomicBool::new(false),state:Mutex::new(State{label:String::new(),phase:"Preparing".into(),done:0,total,committing:false,copied:0})}
+        Self{cancel:AtomicBool::new(false),state:Mutex::new(State{label:String::new(),phase:"Preparing",done:0,total,committing:false,copied:0})}
     }
     pub fn cancelled(&self)->io::Result<()>{
         if self.cancel.load(Ordering::Acquire){Err(io::Error::new(io::ErrorKind::Interrupted,"cancel requested; inspect pending journal/stage if present"))}else{Ok(())}
     }
     pub fn item(&self,label:String,done:usize)->io::Result<()>{
         self.cancelled()?;
-        let mut s=self.state.lock().unwrap();s.label=label;s.done=done;s.phase="Checking reviewed item".into();s.committing=false;s.copied=0;
+        let mut s=self.state.lock().unwrap();s.label=label;s.done=done;s.phase="Checking reviewed item";s.committing=false;s.copied=0;
         Ok(())
     }
     pub fn checkpoint(&self,point:&str)->io::Result<()>{
@@ -36,17 +36,18 @@ impl Progress {
             "copy-partial"|"copy-entry"=>"Copying into private staging",
             "copy-reflink"=>"Cloned; verification required",
             "copy-verify-stage"=>"Verifying and syncing staged data",
-            "copy-verify-source"=>"Rechecking original data",
+            "copy-verify-source"|"move-verify-source"=>"Rechecking original data",
+            "move-verify-result"=>"Verifying committed result",
             "copy-before-publish"=>"Checking verified payload",
             "hash-chunk"|"manifest-entry"=>return Ok(()),
             _ if s.committing=>"Committing / syncing; cancellation deferred",
             _=>"Preparing / verifying",
         };
-        s.phase=phase.into();
+        s.phase=phase;
         Ok(())
     }
     pub fn finished(&self,n:usize){
-        let mut s=self.state.lock().unwrap();s.done=n;s.committing=false;s.phase="Item committed".into();
+        let mut s=self.state.lock().unwrap();s.done=n;s.committing=false;s.phase="Item committed";
     }
     fn request_cancel(&self){
         let _state=self.state.lock().unwrap();
@@ -60,13 +61,16 @@ pub fn run<T:Send>(total:usize,job:impl FnOnce(&Progress)->io::Result<T>+Send)->
         let p=&progress;
         let handle=scope.spawn(move||job(p));
         let mut ui_error=None;
+        let mut last_draw:Option<Instant>=None;
         while !handle.is_finished(){
             let draw=(||->io::Result<()>{
+                if last_draw.map_or(true,|t|t.elapsed()>=Duration::from_millis(80)){
+                last_draw=Some(Instant::now());
                 let (w,h)=terminal::size()?;
                 let width=usize::from(w).saturating_sub(1);
                 let (label,phase,done,total,committing,copied)={
                     let s=p.state.lock().unwrap();
-                    (s.label.clone(),s.phase.clone(),s.done,s.total,s.committing,s.copied)
+                    (s.label.clone(),s.phase,s.done,s.total,s.committing,s.copied)
                 };
                 let mut out=io::stdout().lock();
                 queue!(out,MoveTo(0,0),Clear(ClearType::All),Print(super::clip("File operation in progress",width)))?;
@@ -79,7 +83,9 @@ pub fn run<T:Send>(total:usize,job:impl FnOnce(&Progress)->io::Result<T>+Send)->
                         }else{"Esc / Ctrl+C: request cancellation; commit cannot be interrupted"},width)))?;
                 }
                 out.flush()?;drop(out);
-                if event::poll(Duration::from_millis(80))?{
+                }
+                // Check completion frequently without redrawing the whole terminal.
+                if event::poll(Duration::from_millis(10))?{
                     if let Event::Key(k)=event::read()?{
                         if k.code==KeyCode::Esc||(k.code==KeyCode::Char('c')&&k.modifiers.contains(KeyModifiers::CONTROL)){p.request_cancel();}
                     }

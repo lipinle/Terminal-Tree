@@ -54,7 +54,12 @@ jobs:
       - name: Benchmark verified copy and move
         run: |
           cargo build --locked --release --manifest-path rust/Cargo.toml --features native-ops --example operation_benchmark
-          python3 tests/benchmark/operations.py rust/target/release/examples/operation_benchmark
+          # Compare against the last verified worker revision on the same runner.
+          git fetch --no-tags --depth=1 origin 4e9baa9807401367d6571c537be0c199b2fa117f
+          git worktree add --detach "$RUNNER_TEMP/tt-baseline" FETCH_HEAD
+          cargo build --locked --release --manifest-path "$RUNNER_TEMP/tt-baseline/rust/Cargo.toml" --features native-ops --example operation_benchmark
+          python3 tests/benchmark/operations.py rust/target/release/examples/operation_benchmark "$RUNNER_TEMP/tt-baseline/rust/target/release/examples/operation_benchmark"
+          git worktree remove --force "$RUNNER_TEMP/tt-baseline"
       - name: Verify experimental write commands are unavailable
         run: |
           if rust/target/release/terminal-tree --delete /tmp; then
