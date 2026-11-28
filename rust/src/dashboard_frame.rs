@@ -4,17 +4,23 @@ use crossterm::{cursor::MoveTo,queue,style::{Color,ResetColor,SetBackgroundColor
 use std::io::{self,Write};
 
 #[derive(Default)]
-pub struct FrameCache { last: Option<(u16,u16,Vec<u8>)> }
+pub struct FrameCache { last: Option<(u16,u16,Vec<u8>)>, #[cfg(target_os="linux")] rows: Option<(u16,u16,Color,Vec<Vec<u8>>)> }
 impl FrameCache {
-    pub fn invalidate(&mut self){self.last=None;}
+    pub fn invalidate(&mut self){self.last=None;#[cfg(target_os="linux")] {self.rows=None;}}
     pub fn present(&mut self,frame:Vec<u8>,width:u16,height:u16,background:Color)->io::Result<()>{
         if self.last.as_ref().is_some_and(|(w,h,old)|*w==width&&*h==height&&old==&frame){return Ok(());}
         #[cfg(target_os="linux")]
-        let output=compose(&frame,height,background)?;
+        let output={
+            let rows=collect_rows(&frame,height)?;
+            let previous=self.rows.as_ref().filter(|(w,h,bg,_)|*w==width&&*h==height&&*bg==background).map(|(_,_,_,r)|r.as_slice());
+            let output=paint(&rows,previous,background)?;
+            self.rows=Some((width,height,background,rows));
+            output
+        };
         #[cfg(not(target_os="linux"))]
         let output={let _=background;frame.clone()};
         let mut out=io::stdout().lock();
-        out.write_all(&output)?;
+        if !output.is_empty(){out.write_all(&output)?;}
         out.flush()?;
         self.last=Some((width,height,frame));
         Ok(())
@@ -22,7 +28,7 @@ impl FrameCache {
 }
 
 #[cfg(target_os="linux")]
-fn compose(frame:&[u8],height:u16,background:Color)->io::Result<Vec<u8>>{
+fn collect_rows(frame:&[u8],height:u16)->io::Result<Vec<Vec<u8>>>{
     let invalid=||io::Error::other("unexpected dashboard drawing command");
     let mut rows=vec![Vec::new();usize::from(height)];
     let mut row=None;
@@ -75,12 +81,18 @@ fn compose(frame:&[u8],height:u16,background:Color)->io::Result<Vec<u8>>{
             if let Some(n)=row{rows[n].extend_from_slice(&frame[start..i]);}
         }
     }
+    Ok(rows)
+}
+#[cfg(target_os="linux")]
+fn paint(rows:&[Vec<u8>],previous:Option<&[Vec<u8>]>,background:Color)->io::Result<Vec<u8>>{
     let mut out=Vec::new();
+    if previous==Some(rows){return Ok(out);}
     // Terminals without DEC synchronized-update support ignore these modes.
     out.extend_from_slice(b"\x1b[?2026h");
-    for (y,row) in rows.into_iter().enumerate(){
+    for (y,row) in rows.iter().enumerate(){
+        if previous.and_then(|p|p.get(y))==Some(row){continue;}
         queue!(out,MoveTo(0,y as u16),ResetColor,SetBackgroundColor(background),Clear(ClearType::CurrentLine))?;
-        out.extend(row);
+        out.extend_from_slice(row);
     }
     queue!(out,ResetColor)?;
     out.extend_from_slice(b"\x1b[?2026l");
@@ -91,11 +103,16 @@ mod tests{
     use super::*;
     #[test]fn no_full_clear_and_styles_survive_row_switches(){
         let frame=b"\x1b[1;1H\x1b[38;5;9m\x1b[2Jone\x1b[2;1Htwo\x1b[1;5Hthree";
-        let out=compose(frame,3,Color::Reset).unwrap();
+        let rows=collect_rows(frame,3).unwrap();
+        let out=paint(&rows,None,Color::Reset).unwrap();
+        assert!(paint(&rows,Some(&rows),Color::Reset).unwrap().is_empty());
+        let changed=collect_rows(b"\x1b[1;1H\x1b[38;5;9m\x1b[2Jone\x1b[2;1Hnew\x1b[1;5Hthree",3).unwrap();
+        let patch=paint(&changed,Some(&rows),Color::Reset).unwrap();
+        assert_eq!(patch.windows(4).filter(|w|*w==b"\x1b[2K").count(),1);
         assert!(!out.windows(4).any(|w|w==b"\x1b[2J"));
         assert_eq!(out.windows(4).filter(|w|*w==b"\x1b[2K").count(),3);
         assert!(out.windows(5).any(|w|w==b"three"));
         assert!(out.windows(9).filter(|w|*w==b"\x1b[38;5;9m").count()>=3);
-        assert!(compose(b"\x1b]0;bad\x07",3,Color::Reset).is_err());
+        assert!(collect_rows(b"\x1b]0;bad\x07",3).is_err());
     }
 }

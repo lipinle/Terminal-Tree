@@ -104,6 +104,10 @@ Alt+S starts or closes an explicitly approved interactive Bash session inside th
 
 The dashboard buffers frames and paints complete rows instead of clearing the whole display on Linux. Unchanged idle frames and passive mouse movement do not repaint the screen. Supported terminals also receive synchronized-update boundaries. Image and PDF Auto previews explain whether the optional helper is missing or disabled rather than silently displaying hex. Add-ons includes installation instructions; the helper is not bundled in the UX preview artifact. See [helper setup](visual-preview/README.md).
 
+### Add-ons and expanded visual preview
+
+The native Add-ons screen separates the four companion states from their descriptions, highlights the selected entry, and offers installation help with H. Click a row or use arrows and Enter to toggle; Esc closes. The dashboard compares rendered rows for idle and ordinary single-pane arrow navigation; other actions still repaint when necessary. Alt+V opens an expanded image/PDF preview, arrows or wheel change PDF pages, and O explicitly offers to open the original through the desktop file association (ordinary OS permissions, not a sandbox). The expanded preview still uses terminal half-blocks and the helper's 160-pixel bound; it is not native bitmap graphics. On text-only terminals the configured desktop viewer provides original-resolution display.
+
 ## Navigation and search
 
 Use the installed executable (examples below assume it is on your PATH), or substitute its full path.

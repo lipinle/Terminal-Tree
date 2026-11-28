@@ -22,6 +22,10 @@ mod app_settings;
 mod command_palette;
 mod dashboard;
 mod dashboard_frame;
+#[cfg(feature = "native-ops")]
+mod addons_ui;
+#[cfg(feature = "native-ops")]
+mod visual_ui;
 mod edition;
 mod file_icons;
 mod help;

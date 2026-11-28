@@ -189,6 +189,8 @@ def main(binary):
                 (b"\x1b[<65;100;8M",b"Page 2/2"),
                 (b"\x1b[<64;100;8M",b"Page 1/2"),
                 (b"\x1b[B",b"Thumbnail"),
+                (b"\x1bv",b"Expanded Preview"),
+                (b"\x1b",b"Thumbnail"),
             ])
     print("TT_APP dashboard, preview, menus, compact layout and shared clipboard passed")
 

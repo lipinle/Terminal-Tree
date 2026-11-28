@@ -700,31 +700,11 @@ impl State {
 
     fn integrations(&mut self) -> io::Result<()> {
         #[cfg(feature = "native-ops")]
-        loop {
-            use terminal_tree::external_tools::Tool;
-            let tools=[Tool::Eza,Tool::SevenZip,Tool::Git];
-            let mut labels:Vec<_>=tools.iter().enumerate().map(|(i,tool)| {
-                format!("{} | {} | {} | Idle",tool.label(),if tool.installed(){"Installed"}else{"Not installed"},
-                    if self.prefs.companions[i]{"Enabled"}else{"Disabled"})
-            }).collect();
-            labels.push(format!("Visual Preview | {} | {} | On selection",if terminal_tree::visual_preview::installed(){"Installed"}else{"Not installed"},if self.prefs.visual_preview{"Enabled"}else{"Disabled"}));
-            labels.push(format!("Last run: {}",self.last_tool.as_deref().unwrap_or("None")));
-            labels.push("Visual Preview installation help".into());
-            labels.push("Tools run on request; Visual Preview runs on selection when enabled.".into());
-            match super::choose("Add-ons / Integrations (Enter toggles enabled)",&labels)? {
-                Some(i @ 0..=2)=>self.prefs.companions[i]=!self.prefs.companions[i],
-                Some(3)=>{self.prefs.visual_preview=!self.prefs.visual_preview;self.preview_key=None;self.visual_frame=None;},
-                Some(5)=>super::page("Visual Preview installation", &[
-                    "Build the optional helper from the same source checkout.".into(),
-                    "Requires Rust 1.92 or newer:".into(),
-                    "rustup run stable cargo build --release --manifest-path visual-preview/Cargo.toml".into(),
-                    "sudo install -m 755 visual-preview/target/release/tt-visual-preview /usr/local/bin/tt-visual-preview".into(),
-                    "Return to Add-ons, enable Visual Preview, then select an image or PDF.".into(),
-                    "Helper is not bundled in the preview artifact; license audit pending.".into(),
-                ])?,
-                Some(_)=>(),
-                None=>return Ok(()),
-            }
+        {
+            super::addons_ui::show(&mut self.prefs,self.last_tool.as_deref())?;
+            self.preview_key=None;self.preview_lines.clear();self.visual_frame=None;
+            self.frame_cache.invalidate();
+            Ok(())
         }
         #[cfg(not(feature = "native-ops"))]
         super::page("Add-ons",&["Companion integrations require native Linux.".into()])
@@ -887,7 +867,7 @@ impl State {
                     let page=if terminal_tree::visual_preview::format(&e.path)==Some("pdf"){self.visual_page}else{1};
                     match terminal_tree::visual_preview::render(&e.path,page,self.visual_size.0,self.visual_size.1) {
                         Ok(frame)=>{
-                            let label=if terminal_tree::visual_preview::format(&e.path)==Some("pdf"){format!("Page {page}/{} | Scroll",frame.pages)}else{format!("Thumbnail {}x{}",frame.width,frame.height)};
+                            let label=if terminal_tree::visual_preview::format(&e.path)==Some("pdf"){format!("Page {page}/{} | Scroll | Alt+V",frame.pages)}else{format!("Thumbnail {}x{} | Alt+V",frame.width,frame.height)};
                             self.preview_lines=vec![e.name.clone(),label];
                             self.visual_frame=Some(frame);
                         }
@@ -1322,6 +1302,7 @@ impl State {
         if category == 2 && cfg!(feature = "native-ops") {
             commands.push(("Toggle terminal panel (Alt+H)",KeyCode::Char('h'),KeyModifiers::ALT));
             commands.push(("Focus terminal (Alt+T)",KeyCode::Char('t'),KeyModifiers::ALT));
+            commands.push(("Expand visual preview (Alt+V)",KeyCode::Char('v'),KeyModifiers::ALT));
             commands.push(("Start or close interactive shell (Alt+S)",KeyCode::Char('s'),KeyModifiers::ALT));
             commands.push(("Hex preview (Shift+F8)", KeyCode::F(8), KeyModifiers::SHIFT));
         }
@@ -1380,8 +1361,11 @@ impl State {
     /// Handle shell-only interactions; translate file-list coordinates back to
     /// the existing navigator so the original review and write engine is used.
     pub fn input(&mut self, mut event: Event, model: &mut Model, searching: bool, writable: bool) -> io::Result<Option<Event>> {
-        // Other views and modal dialogs may repaint the physical screen.
-        self.frame_cache.invalidate();
+        // Modal actions can repaint the physical screen. Plain navigation and
+        // passive mouse events cannot, so keep the row cache for those.
+        let passive=matches!(&event,Event::Mouse(mouse) if matches!(mouse.kind,MouseEventKind::Moved|MouseEventKind::Up(_)));
+        let arrow=matches!(&event,Event::Key(k) if k.modifiers==KeyModifiers::NONE && matches!(k.code,KeyCode::Up|KeyCode::Down));
+        if !passive && !(arrow&&!self.dual&&!searching&&self.location.is_none()&&self.expanded_tree.is_none()) {self.frame_cache.invalidate();}
         let (w,full_h) = terminal::size()?;
         let h=full_h-self.panel_rows(full_h);
         let l = self.layout(w,h);
@@ -1550,6 +1534,13 @@ impl State {
                 }
                 if k.code == KeyCode::F(11) && k.modifiers == KeyModifiers::SHIFT {
                     self.integrations()?;
+                    return Ok(None);
+                }
+                #[cfg(feature = "native-ops")]
+                if k.code == KeyCode::Char('v') && k.modifiers == KeyModifiers::ALT {
+                    if !self.prefs.visual_preview{return Err(io::Error::other("Enable Visual Preview in Add-ons first"));}
+                    let entry=if let Some(tree)=&self.expanded_tree{tree.rows().get(tree.selected()).map(|r|&r.entry)}else{model.entries.get(model.selected)};
+                    if let Some(e)=entry.filter(|e|!e.directory&&!e.symlink&&terminal_tree::visual_preview::format(&e.path).is_some()){super::visual_ui::show(&e.path)?;}
                     return Ok(None);
                 }
                 #[cfg(feature = "native-ops")]
