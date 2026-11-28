@@ -15,6 +15,8 @@ unicode-width = "=0.2.0"
 [features]
 native-ops = ["dep:rustix", "dep:sha2", "dep:serde_json", "dep:xattr"]
 crash-probe = ["native-ops"]
+# Build identity only; no additional safety guarantees are implied.
+paranoid-preview = []
 
 [[bin]]
 name = "tt-crash-probe"
