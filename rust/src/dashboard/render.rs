@@ -28,9 +28,9 @@ impl State {
         model: &Model,
     ) -> io::Result<()> {
         let (left, top, width, rows) = self.terminal_rect(h, l);
-        if rows > 0 && width > 0 {
+        if rows >= 3 && width >= 4 {
             self.terminal_panel
-                .resize_shell(width, rows.saturating_sub(3))?;
+                .resize_shell(crate::terminal_panel::content_width(width), rows.saturating_sub(3))?;
             self.terminal_panel.draw(
                 out,
                 crate::terminal_panel::PanelRect {
@@ -142,8 +142,9 @@ impl State {
             SetForegroundColor(self.prefs.foreground),
             SetBackgroundColor(self.prefs.background),
             Clear(ClearType::All),
-            SetForegroundColor(self.prefs.accent),
-            Print(crate::clip(
+            SetBackgroundColor(self.prefs.selection),
+            SetForegroundColor(self.prefs.foreground),
+            Print(pad_cell(
                 "Terminal Tree  File  Edit  View  Go  Tools  Settings  Add-ons",
                 usize::from(width)
             )),
@@ -344,8 +345,9 @@ impl State {
             SetForegroundColor(self.prefs.foreground),
             SetBackgroundColor(self.prefs.background),
             Clear(ClearType::All),
-            SetForegroundColor(self.prefs.accent),
-            Print(crate::clip(
+            SetBackgroundColor(self.prefs.selection),
+            SetForegroundColor(self.prefs.foreground),
+            Print(pad_cell(
                 "Terminal Tree  File  Edit  View  Go  Tools  Settings  Add-ons",
                 usize::from(l.width)
             )),

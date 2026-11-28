@@ -5,7 +5,7 @@ use crossterm::{
     cursor::MoveTo,
     event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     queue,
-    style::{Print, SetBackgroundColor, SetForegroundColor},
+    style::{Color, Print, SetBackgroundColor, SetForegroundColor},
 };
 use rustix::{
     fs::{fcntl_getfl, fcntl_setfl, OFlags},
@@ -128,6 +128,31 @@ pub struct PanelRect {
     pub top: u16,
     pub rows: u16,
     pub width: u16,
+}
+
+// Keep the terminal emulator and painted content on the same interior width.
+pub fn content_width(width: u16) -> u16 {
+    width.saturating_sub(2).max(1)
+}
+
+fn panel_background(background: Color) -> Color {
+    match background {
+        Color::Rgb { r, g, b } => {
+            let tint = |v: u8| {
+                if u16::from(r) + u16::from(g) + u16::from(b) < 384 {
+                    v.saturating_add(9)
+                } else {
+                    v.saturating_sub(12)
+                }
+            };
+            Color::Rgb {
+                r: tint(r),
+                g: tint(g),
+                b: tint(b),
+            }
+        }
+        other => other,
+    }
 }
 
 #[derive(Default)]
@@ -392,37 +417,79 @@ impl Panel {
             rows,
             width,
         } = rect;
-        if rows < 3 || width == 0 {
+        if rows < 3 || width < 4 {
             return Ok(());
         }
         if top.checked_add(rows - 1).is_none() || left.checked_add(width - 1).is_none() {
             return Err(io::Error::other("terminal panel coordinates out of bounds"));
         }
-        let width = usize::from(width);
+        let right = left + width - 1;
+        let inner = left + 1;
+        let width = usize::from(content_width(width));
+        let background = panel_background(prefs.background);
+        let border = if self.focused {
+            prefs.accent
+        } else {
+            prefs.foreground
+        };
+        let header_bg = if self.focused {
+            prefs.selection
+        } else {
+            background
+        };
+        // Paint every row, including blank output, so the console never
+        // blends into the file list or looks like unoccupied dashboard space.
+        let blank = " ".repeat(width);
+        for row in 0..rows {
+            let (first, last) = if row == 0 {
+                ("╭", "╮")
+            } else if row == rows - 1 {
+                ("╰", "╯")
+            } else {
+                ("│", "│")
+            };
+            let bg = if row == 0 || row == rows - 1 {
+                header_bg
+            } else {
+                background
+            };
+            queue!(
+                out,
+                MoveTo(left, top + row),
+                SetBackgroundColor(bg),
+                SetForegroundColor(border),
+                Print(first),
+                Print(&blank),
+                Print(last)
+            )?;
+        }
         let header = format!(
-            "[Hide] Terminal / {}{} | OS permissions (not scoped)",
+            "[Hide] Terminal / {}{} | {} | OS permissions",
             if self.interactive() { "PTY" } else { "Bash" },
-            if self.focused { " *" } else { "" }
+            if self.focused { " *" } else { "" },
+            if self.focused { "INPUT ACTIVE" } else { "Click to focus" }
         );
         queue!(
             out,
-            MoveTo(left, top),
-            SetForegroundColor(prefs.accent),
+            MoveTo(inner, top),
+            SetBackgroundColor(header_bg),
+            SetForegroundColor(border),
             Print(super::clip(
                 &header,
-                width.saturating_sub(if width >= 48 { 9 } else { 0 })
+                width.saturating_sub(if width >= 46 { 9 } else { 0 })
             )),
             SetForegroundColor(prefs.foreground)
         )?;
-        if width >= 48 {
+        if width >= 46 {
             queue!(
                 out,
-                MoveTo(left + (width - 8) as u16, top),
-                SetForegroundColor(prefs.accent),
+                MoveTo(right - 8, top),
+                SetForegroundColor(border),
                 Print("[Resize]"),
                 SetForegroundColor(prefs.foreground)
             )?;
         }
+        queue!(out, SetBackgroundColor(background))?;
         let directory = self
             .job
             .as_ref()
@@ -438,7 +505,7 @@ impl Panel {
                 terminal_tree::display_name(directory.as_os_str())
             )
         };
-        queue!(out, MoveTo(left, top + 1), Print(super::clip(&cwd, width)))?;
+        queue!(out, MoveTo(inner, top + 1), Print(super::clip(&cwd, width)))?;
         let live;
         let alternate = self.shell.as_ref().is_some_and(|s| s.alternate());
         let scroll = if alternate { 0 } else { self.scroll };
@@ -464,8 +531,8 @@ impl Panel {
         let end = lines.len().saturating_sub(scroll.min(lines.len()));
         let start = end.saturating_sub(capacity);
         for (row, line) in lines[start..end].iter().enumerate() {
-            queue!(out, MoveTo(left, top + 2 + row as u16))?;
-            line.draw(out, width, prefs.foreground, prefs.background)?;
+            queue!(out, MoveTo(inner, top + 2 + row as u16))?;
+            line.draw(out, width, prefs.foreground, background)?;
         }
         let prompt = if alternate {
             "Alternate screen | Alt+T file manager | Alt+S close".into()
@@ -478,10 +545,12 @@ impl Panel {
         } else {
             "$ (click or Alt+T to type; Alt+S interactive; Alt+H hide)".into()
         };
-        queue!(out, MoveTo(left, top + (rows - 1)))?;
-        if self.focused {
-            queue!(out, SetBackgroundColor(prefs.selection))?;
-        }
+        queue!(
+            out,
+            MoveTo(inner, top + (rows - 1)),
+            SetBackgroundColor(header_bg),
+            SetForegroundColor(prefs.foreground)
+        )?;
         queue!(
             out,
             Print(super::clip(&prompt, width)),
@@ -494,6 +563,31 @@ impl Panel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn panel_frame_marks_bounds_and_focus() {
+        let mut panel = Panel::default();
+        let prefs = crate::app_settings::Preferences::default();
+        let rect = || PanelRect {
+            left: 20,
+            top: 16,
+            rows: 7,
+            width: 90,
+        };
+        let mut out = Vec::new();
+        panel.draw(&mut out, rect(), Path::new("/tmp"), &prefs).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("╭"));
+        assert!(text.contains("╮"));
+        assert!(text.contains("╰"));
+        assert!(text.contains("╯"));
+        assert!(text.contains("Click to focus"));
+        panel.focused = true;
+        let mut out = Vec::new();
+        panel.draw(&mut out, rect(), Path::new("/tmp"), &prefs).unwrap();
+        assert!(String::from_utf8(out).unwrap().contains("INPUT ACTIVE"));
+        assert_eq!(content_width(90), 88);
+    }
+
     #[test]
     fn edit_unicode_and_preserve_scrollback() {
         let mut panel = Panel::default();

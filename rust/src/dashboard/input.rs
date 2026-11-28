@@ -532,7 +532,7 @@ impl State {
                 if terminal_rows > 0
                     && mouse.row == terminal_top
                     && terminal_width >= 48
-                    && mouse.column >= l.width - 8
+                    && mouse.column >= l.width - 9
                     && mouse.column < l.width
                 {
                     self.dragging = Some(Divider::Terminal);
@@ -574,7 +574,7 @@ impl State {
                                     );
                                     self.terminal_panel.start_shell(
                                         &model.directory,
-                                        width,
+                                        crate::terminal_panel::content_width(width),
                                         rows.saturating_sub(3),
                                     )?;
                                     self.side_focus = false;
@@ -615,7 +615,7 @@ impl State {
                 {
                     match mouse.kind {
                         MouseEventKind::Down(MouseButton::Left)
-                            if mouse.row == terminal_top && mouse.column < terminal_left + 6 =>
+                            if mouse.row == terminal_top && mouse.column < terminal_left + 7 =>
                         {
                             self.prefs.terminal_visible = false;
                             self.terminal_panel.focused = false;
