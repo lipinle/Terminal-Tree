@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 const MAX_ENTRIES: usize = 16_384;
 const MAX_DEPTH: usize = 16;
+const MAX_QUERY_BYTES: usize = 4096;
 
 #[derive(Clone, Copy, Debug)]
 pub struct SearchLimits {
@@ -85,6 +86,12 @@ pub fn filenames(
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "invalid search limits",
+        ));
+    }
+    if query.len() > MAX_QUERY_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "search query exceeds byte limit",
         ));
     }
     check_cancel(cancel)?;

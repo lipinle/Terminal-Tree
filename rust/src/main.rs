@@ -779,6 +779,50 @@ fn result_channel(path: PathBuf) -> io::Result<()> {
     file.flush()
 }
 
+fn find(mut args: impl Iterator<Item = OsString>) -> io::Result<()> {
+    use std::sync::atomic::AtomicBool;
+    use terminal_tree::search::{filenames, SearchLimits};
+
+    let invalid = |message| io::Error::new(io::ErrorKind::InvalidInput, message);
+    let root = path_arg(Some(args.next().ok_or_else(|| invalid("search path required"))?))?;
+    let query = args
+        .next()
+        .ok_or_else(|| invalid("search query required"))?
+        .into_string()
+        .map_err(|_| invalid("search query must be UTF-8"))?;
+    if query.is_empty() {
+        return Err(invalid("search query must not be empty"));
+    }
+    let mut hidden = false;
+    let mut depth = None;
+    while let Some(arg) = args.next() {
+        match arg.to_str() {
+            Some("--hidden") if !hidden => hidden = true,
+            Some("--depth") if depth.is_none() => {
+                depth = Some(
+                    args.next()
+                        .and_then(|value| value.to_str()?.parse::<usize>().ok())
+                        .filter(|value| (1..=16).contains(value))
+                        .ok_or_else(|| invalid("search depth must be 1..=16"))?,
+                );
+            }
+            _ => return Err(invalid("unknown or duplicate search option")),
+        }
+    }
+    let limits = SearchLimits {
+        entries: 16_384,
+        depth: depth.unwrap_or(8),
+        matches: 4096,
+    };
+    // Produce no result lines if traversal fails or exhausts a budget.
+    let entries = filenames(&root, &query, hidden, limits, &AtomicBool::new(false))?;
+    let mut out = io::BufWriter::new(io::stdout().lock());
+    for entry in entries {
+        writeln!(out, "{}", display_name(entry.path.as_os_str()))?;
+    }
+    out.flush()
+}
+
 fn run() -> io::Result<()> {
     let mut args = env::args_os().skip(1);
     match args.next().as_deref().and_then(|x| x.to_str()) {
@@ -805,6 +849,7 @@ fn run() -> io::Result<()> {
             let path = path_arg(if hidden { args.next() } else { first })?;
             list(&path, hidden)
         }
+        Some("--find") => find(args),
         Some("--panes") => {
             let left = path_arg(args.next())?;
             let right = match args.next() {
@@ -950,7 +995,7 @@ fn run() -> io::Result<()> {
             Ok(())
         }
         _ => {
-            eprintln!("Experimental read-only Rust port\nUsage: terminal-tree --list [-a] [PATH] | --browse [PATH] | --tree [PATH] | --panes [LEFT] [RIGHT] | --scan-count PATH [REPEATS] | --version | --edition");
+            eprintln!("Experimental read-only Rust port\nUsage: terminal-tree --list [-a] [PATH] | --browse [PATH] | --tree [PATH] | --panes [LEFT] [RIGHT] | --find PATH QUERY [--hidden] [--depth N] | --scan-count PATH [REPEATS] | --version | --edition");
             Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "unsupported or missing command",
