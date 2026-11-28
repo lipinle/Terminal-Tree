@@ -16,7 +16,9 @@ pub struct Preferences {
     pub show_icons: bool,
     pub file_colors: bool,
     pub status_details: bool,
+    #[cfg(feature = "native-ops")]
     pub companions: [bool; 3],
+    #[cfg(feature = "native-ops")]
     pub visual_preview: bool,
     pub list_details: bool,
     pub custom: BTreeMap<String, String>,
@@ -57,7 +59,9 @@ impl Default for Preferences {
             show_icons: true,
             file_colors: true,
             status_details: true,
+            #[cfg(feature = "native-ops")]
             companions: [true; 3],
+            #[cfg(feature = "native-ops")]
             visual_preview: false,
             list_details: true,
             custom: BTreeMap::new(),

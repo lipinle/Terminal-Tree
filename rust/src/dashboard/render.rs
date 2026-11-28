@@ -7,11 +7,13 @@ use super::geometry::{dual_split, Layout};
 use super::markdown::PreviewStyle;
 use super::view::{draw_toolbar, Cells, View};
 use super::{DrawStatus, State};
+#[cfg(feature = "native-ops")]
+use crossterm::style::Color;
 use crossterm::{
     cursor::MoveTo,
     queue,
     style::{
-        Attribute, Color, Print, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor,
+        Attribute, Print, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor,
     },
     terminal::{self, Clear, ClearType},
 };
@@ -295,9 +297,9 @@ impl State {
                 if searching {
                     "Filter: type text | Enter accept | Esc cancel"
                 } else if writable {
-                    "F8 Single  Tab Switch  Ctrl+C/X/V Transfer  F4 Actions  F10 Menu"
+                    "0 Reset  F8 Single  Tab Switch  Ctrl+C/X/V Transfer  F10 Menu"
                 } else {
-                    "F8 Single  Tab Switch  F10 Menu  Ctrl+F Filter  q Exit"
+                    "0 Reset  F8 Single  Tab Switch  F10 Menu  Ctrl+F Filter  q Exit"
                 },
                 usize::from(width)
             ))
@@ -540,9 +542,9 @@ impl State {
                 if searching {
                     "Filter: type text | Enter accept | Esc cancel"
                 } else if writable {
-                    "F1 Help  F2 Rename  F3 Preview  F8 Dual  Ctrl+T Tab  Ctrl+K Commands"
+                    "1 Grid  2 List  3 Tree  0 Reset  F10 Menu  F1 Help  F2 Rename  F8 Dual"
                 } else {
-                    "F1 Help  F3 Preview  F8 Dual  Ctrl+T Tab  Ctrl+K Commands  q Exit"
+                    "1 Grid  2 List  3 Tree  0 Reset  F10 Menu  F1 Help  F8 Dual  q Exit"
                 },
                 usize::from(l.width)
             ))
@@ -684,12 +686,15 @@ impl State {
                         .unwrap_or_default();
                     queue!(out, MoveTo(l.end() + 1, y))?;
                     match style {
+                        #[cfg(feature = "native-ops")]
                         PreviewStyle::Heading => queue!(
                             out,
                             SetAttribute(Attribute::Bold),
                             SetForegroundColor(self.prefs.accent)
                         )?,
+                        #[cfg(feature = "native-ops")]
                         PreviewStyle::Code => queue!(out, SetForegroundColor(Color::Yellow))?,
+                        #[cfg(feature = "native-ops")]
                         PreviewStyle::Quote => queue!(out, SetForegroundColor(self.prefs.accent))?,
                         PreviewStyle::Plain => (),
                     }
@@ -952,7 +957,9 @@ mod tests {
         let l = Layout::new(120, 26, true);
         let cells = Cells::new(l.end() - l.first(), l.capacity(), state.view, state.zoom);
         let mut out = Vec::new();
-        state.draw_file_rows(&mut out, &model, l, cells, 0..1, &|_| true).unwrap();
+        state
+            .draw_file_rows(&mut out, &model, l, cells, 0..1, &|_| true)
+            .unwrap();
         let text = String::from_utf8(out).unwrap();
         assert!(text.contains("alpha.txt"));
         assert!(text.contains("[x]"));
@@ -971,7 +978,9 @@ mod tests {
         assert!(text.contains("second-marker"));
         assert!(!text.contains("first-marker"));
         let mut out = Vec::new();
-        state.draw_preview_rows(&mut out, Layout::new(45, 26, true), 1).unwrap();
+        state
+            .draw_preview_rows(&mut out, Layout::new(45, 26, true), 1)
+            .unwrap();
         assert!(out.is_empty());
     }
 
@@ -984,10 +993,14 @@ mod tests {
         state.side_cursor = 0;
         state.side_top = 0;
         let mut out = Vec::new();
-        state.draw_sidebar(&mut out, &model, 26, Layout::new(120, 26, true)).unwrap();
+        state
+            .draw_sidebar(&mut out, &model, 26, Layout::new(120, 26, true))
+            .unwrap();
         assert!(String::from_utf8(out).unwrap().contains("fixture-marker"));
         let mut out = Vec::new();
-        state.draw_sidebar(&mut out, &model, 26, Layout::new(45, 26, true)).unwrap();
+        state
+            .draw_sidebar(&mut out, &model, 26, Layout::new(45, 26, true))
+            .unwrap();
         assert!(out.is_empty());
     }
 }

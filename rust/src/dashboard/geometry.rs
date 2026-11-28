@@ -58,6 +58,7 @@ pub(super) enum Divider {
     Sidebar,
     Preview,
     Dual,
+    #[cfg(feature = "native-ops")]
     Terminal,
 }
 
@@ -79,6 +80,7 @@ impl State {
 
     // Single-pane layout keeps the status strip at the bottom, and the
     // sidebar beside the shell. Dual pane retains its full-width console.
+    #[cfg(feature = "native-ops")]
     pub(super) fn terminal_rect(&self, full_h: u16, l: Layout) -> (u16, u16, u16, u16) {
         let rows = self.panel_rows(full_h);
         let left = if self.dual { 0 } else { l.first() };
@@ -111,6 +113,8 @@ impl State {
         y: u16,
         height: u16,
     ) {
+        #[cfg(not(feature = "native-ops"))]
+        let _ = (y, height);
         let ratio = if width == 0 {
             50
         } else {
@@ -120,6 +124,7 @@ impl State {
             Divider::Sidebar => self.prefs.sidebar_width = x.clamp(12, 48),
             Divider::Preview => self.prefs.preview_percent = (100 - ratio).clamp(18, 45),
             Divider::Dual => self.prefs.dual_percent = ratio.clamp(25, 75),
+            #[cfg(feature = "native-ops")]
             Divider::Terminal => {
                 if height > 0 {
                     let top = if self.dual { y } else { y.saturating_add(3) };

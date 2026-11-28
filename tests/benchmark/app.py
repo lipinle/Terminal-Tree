@@ -112,6 +112,14 @@ def main(binary):
             (b"\x1b[B\r", b"Terminal / Bash |"),
         ])
         session(binary, ["--app", str(root)], root, b"Files *", [], width=45)
+        session(binary, ["--app", str(root)], root, b"Tree View", [
+            (b"1", b"Grid View"),
+            (b"2", b"List View"),
+            (b"3", b"Tree View"),
+            (b"\x1b[19~", b"Dual Pane"),
+            (b"0", b"Tree View"),
+            (b"1", b"Grid View"),
+        ])
         # At 120x26 the sidebar is 19 cells; the console begins at x=20,
         # y=16 and ends above the three-line global status strip.
         session(binary, ["--app", str(root)], root, b"Terminal / Bash |", [

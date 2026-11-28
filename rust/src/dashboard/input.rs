@@ -84,6 +84,11 @@ impl State {
         if self.handle_location_input(&event, model, l)? {
             return Ok(None);
         }
+        if let Event::Key(key) = &event {
+            if self.handle_view_shortcut(*key) {
+                return Ok(None);
+            }
+        }
         if let Event::Mouse(mouse) = &event {
             if !self.dual && mouse.modifiers.contains(KeyModifiers::CONTROL) {
                 match mouse.kind {
@@ -160,18 +165,6 @@ impl State {
                 && matches!(k.kind, KeyEventKind::Press | KeyEventKind::Repeat)
             {
                 match k.code {
-                    KeyCode::Char('1') => {
-                        self.choose_view(View::Grid);
-                        return Ok(None);
-                    }
-                    KeyCode::Char('2') => {
-                        self.choose_view(View::List);
-                        return Ok(None);
-                    }
-                    KeyCode::Char('3') => {
-                        self.choose_view(View::Tree);
-                        return Ok(None);
-                    }
                     KeyCode::Char('l') if !self.dual => {
                         self.start_location(model);
                         return Ok(None);
@@ -455,6 +448,22 @@ impl State {
             Event::Key(key) => self.handle_key_input(key, model, l, writable),
             other => Ok(Some(other)),
         }
+    }
+
+    fn handle_view_shortcut(&mut self, key: KeyEvent) -> bool {
+        if key.kind != KeyEventKind::Press
+            || (key.modifiers != KeyModifiers::NONE && key.modifiers != KeyModifiers::CONTROL)
+        {
+            return false;
+        }
+        match key.code {
+            KeyCode::Char('1') => self.choose_view(View::Grid),
+            KeyCode::Char('2') => self.choose_view(View::List),
+            KeyCode::Char('3') => self.choose_view(View::Tree),
+            KeyCode::Char('0') if key.modifiers == KeyModifiers::NONE => self.reset_layout(),
+            _ => return false,
+        }
+        true
     }
 
     #[cfg(feature = "native-ops")]
@@ -1002,6 +1011,33 @@ mod tests {
     use crate::dashboard::tests::Fixture;
 
     #[test]
+    fn terminal_compatible_view_keys_and_reset() {
+        let mut state = State::new(None);
+        for (digit, view) in [('1', View::Grid), ('2', View::List), ('3', View::Tree)] {
+            assert!(state.handle_view_shortcut(KeyEvent::new(
+                KeyCode::Char(digit),
+                KeyModifiers::NONE
+            )));
+            assert_eq!(state.view, view);
+        }
+        state.zoom = 3;
+        state.prefs.sidebar = false;
+        state.dual = true;
+        state.dragging = Some(Divider::Dual);
+        assert!(state.handle_view_shortcut(KeyEvent::new(
+            KeyCode::Char('0'),
+            KeyModifiers::NONE
+        )));
+        assert_eq!(state.zoom, 1);
+        assert_eq!(state.view, View::Tree);
+        assert!(!state.dual);
+        assert!(state.dragging.is_none());
+        assert!(state.prefs.sidebar);
+        assert!(!state.preview_enabled);
+        assert!(!state.prefs.terminal_visible);
+    }
+
+    #[test]
     fn modified_write_shortcuts_remain_scoped() {
         let f = Fixture::new();
         let mut model = Model::new(f.0.clone()).unwrap();
@@ -1024,13 +1060,12 @@ mod tests {
             state.handle_key_input(delete, &mut model, l, true).unwrap(),
             None
         );
-        let release = KeyEvent::new_with_kind(
-            KeyCode::Delete,
-            KeyModifiers::NONE,
-            KeyEventKind::Release,
-        );
+        let release =
+            KeyEvent::new_with_kind(KeyCode::Delete, KeyModifiers::NONE, KeyEventKind::Release);
         assert_eq!(
-            state.handle_key_input(release, &mut model, l, true).unwrap(),
+            state
+                .handle_key_input(release, &mut model, l, true)
+                .unwrap(),
             None
         );
     }
@@ -1067,19 +1102,25 @@ mod tests {
             modifiers: KeyModifiers::CONTROL,
         };
         assert_eq!(
-            state.handle_mouse_input(click, &mut model, 26, l, true).unwrap(),
+            state
+                .handle_mouse_input(click, &mut model, 26, l, true)
+                .unwrap(),
             None
         );
         assert_eq!(model.selected, 0);
         click.column = l.first();
         click.row = 5;
         assert_eq!(
-            state.handle_mouse_input(click, &mut model, 26, l, false).unwrap(),
+            state
+                .handle_mouse_input(click, &mut model, 26, l, false)
+                .unwrap(),
             None
         );
         assert_eq!(model.selected, 1);
         assert_eq!(
-            state.handle_mouse_input(click, &mut model, 26, l, true).unwrap(),
+            state
+                .handle_mouse_input(click, &mut model, 26, l, true)
+                .unwrap(),
             Some(Event::Key(KeyEvent::new(
                 KeyCode::Char(' '),
                 KeyModifiers::NONE

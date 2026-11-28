@@ -280,7 +280,7 @@ impl State {
                 format!("Hidden files: {}", model.hidden),
                 format!("Layout zoom: {}", self.zoom),
                 format!("File view: {}", self.view.name()),
-                "Reset panel sizes".into(),
+                "Reset layout / hide preview and terminal".into(),
                 format!("Terminal panel: {}", self.prefs.terminal_visible),
                 format!("List type column: {}", self.prefs.list_details),
             ];
@@ -314,12 +314,7 @@ impl State {
                     View::Grid => View::List,
                     View::List => View::Tree,
                 }),
-                Some(9) => {
-                    self.prefs.sidebar_width = 19;
-                    self.prefs.preview_percent = 33;
-                    self.prefs.dual_percent = 50;
-                    self.prefs.terminal_percent = 28;
-                }
+                Some(9) => self.reset_layout(),
                 Some(10) => {
                     self.prefs.terminal_visible = !self.prefs.terminal_visible;
                     #[cfg(feature = "native-ops")]

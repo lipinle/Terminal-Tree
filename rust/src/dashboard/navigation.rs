@@ -14,6 +14,30 @@ impl State {
         self.side_focus = false;
     }
 
+    // Restore a usable, lightweight view without touching files or closing shells.
+    pub(super) fn reset_layout(&mut self) {
+        self.choose_view(View::Tree);
+        self.zoom = 1;
+        self.location = None;
+        self.dragging = None;
+        self.prefs.sidebar = true;
+        self.prefs.toolbar = true;
+        self.prefs.sidebar_width = 19;
+        self.prefs.preview_percent = 33;
+        self.prefs.dual_percent = 50;
+        self.prefs.terminal_percent = 28;
+        self.prefs.terminal_visible = false;
+        self.preview_enabled = false;
+        self.preview_key = None;
+        self.preview_scroll = 0;
+        self.frame_cache.invalidate();
+        #[cfg(feature = "native-ops")]
+        {
+            self.terminal_panel.focused = false;
+            self.suspend_visual_preview();
+        }
+    }
+
     pub(super) fn start_location(&mut self, model: &Model) {
         self.expanded_tree = None;
         self.side_focus = false;

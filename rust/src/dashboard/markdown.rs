@@ -3,8 +3,11 @@
 pub(super) enum PreviewStyle {
     #[default]
     Plain,
+    #[cfg(feature = "native-ops")]
     Heading,
+    #[cfg(feature = "native-ops")]
     Code,
+    #[cfg(feature = "native-ops")]
     Quote,
 }
 #[cfg(feature = "native-ops")]
