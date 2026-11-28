@@ -17,7 +17,10 @@ fn workspace_refuses_directory_only_suffixes_without_mutation() {
     let _cleanup = Cleanup(root.clone());
     let workspace = root.join("workspace");
     let journal = root.join("journal");
-    fs::DirBuilder::new().mode(0o700).create(&workspace).unwrap();
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&workspace)
+        .unwrap();
     fs::DirBuilder::new().mode(0o700).create(&journal).unwrap();
     let file = workspace.join("file");
     fs::write(&file, b"keep").unwrap();

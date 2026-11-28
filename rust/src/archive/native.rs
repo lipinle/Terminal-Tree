@@ -1,7 +1,7 @@
 //! Descriptor-based read-only access to strict USTAR files on Linux.
 use super::{
-    invalid, layout_preview, list, member_payload, portable_layout_preview, LayoutPreview,
-    Member, MAX_ARCHIVE_BYTES,
+    invalid, layout_preview, list, member_payload, portable_layout_preview, LayoutPreview, Member,
+    MAX_ARCHIVE_BYTES,
 };
 use crate::readonly_file::ReadSession;
 use std::io::{self, BufReader, Read};
