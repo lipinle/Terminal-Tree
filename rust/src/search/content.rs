@@ -1,6 +1,6 @@
 //! Native Linux text search with explicit resource budgets and omissions.
 use super::{check_cancel, check_directory, filenames, SearchLimits, MAX_QUERY_BYTES};
-use rustix::fs::{self as rx, Mode, OFlags};
+use crate::readonly_file::ReadSession;
 use std::fs;
 use std::io::{self, Read};
 use std::os::unix::fs::MetadataExt;
@@ -107,24 +107,22 @@ pub fn text(
         if before.len() >= remaining as u64 {
             return Err(io::Error::other("content search byte budget exhausted"));
         }
-        let file: fs::File = rx::open(
-            &entry.path,
-            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
-            Mode::empty(),
-        )?
-        .into();
-        let opened = file.metadata()?;
+        let session = ReadSession::open(&entry.path)?;
+        let opened = session.file().metadata()?;
         if !unchanged(&before, &opened) {
             return Err(io::Error::other("file changed before content search"));
         }
         let read_cap = (limits.file_bytes + 1).min(remaining);
         let mut bytes = Vec::new();
-        (&file).take(read_cap as u64).read_to_end(&mut bytes)?;
+        session
+            .file()
+            .take(read_cap as u64)
+            .read_to_end(&mut bytes)?;
         report.bytes_read += bytes.len();
         check_cancel(cancel)?;
         check_directory(&root, parent)?;
-        if !unchanged(&opened, &file.metadata()?)
-            || !unchanged(&opened, &fs::symlink_metadata(&entry.path)?)
+        session.verify()?;
+        if !unchanged(&opened, &fs::symlink_metadata(&entry.path)?)
             || bytes.len() as u64 != opened.len()
         {
             return Err(io::Error::other("file changed during content search"));

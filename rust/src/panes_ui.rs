@@ -193,9 +193,9 @@ fn draw(
         MoveTo(0, height - 1),
         Print(clip(
             if snapshot_enabled {
-                "Tab focus | n new | [ ] switch | w close | b/B bookmarks | p/F8/I/A preview | S export snapshot | ? keys | t theme | q exit"
+                "Tab focus | n new | [ ] switch | w close | b/B bookmarks | p/F8/I/A preview | S export snapshot | ? keys | F1 help | t theme | q exit"
             } else {
-                "Tab focus | n new | [ ] switch | w close | b/B bookmarks | p/F8/I/A preview | ? keys | t theme | q exit"
+                "Tab focus | n new | [ ] switch | w close | b/B bookmarks | p/F8/I/A preview | ? keys | F1 help | t theme | q exit"
             },
             limit
         )),
@@ -354,6 +354,24 @@ fn open_location(model: &mut TreeModel, marks: &Bookmarks, index: usize) -> io::
     Ok(())
 }
 
+fn pane_help(keymap: &Keymap, snapshot_enabled: bool) -> io::Result<bool> {
+    let mut lines = vec![
+        "Navigation: use the configured bindings below.".into(),
+        keymap.summary(),
+        "Tab: change focus | n: new tab | [ / ]: switch tabs | w: close tab".into(),
+        "b: save bookmark | B: open bookmark menu".into(),
+        "t: cycle theme | ?: show configured keys | F1: this guide".into(),
+        "p / F3: text or automatic hex | F8: forced hex".into(),
+        "I: PPM image | A: USTAR listing (native Linux only)".into(),
+        "Previews require regular non-link files. No file mutations.".into(),
+        "q / Esc: close this page | Ctrl+C: exit navigator".into(),
+    ];
+    if snapshot_enabled {
+        lines.push("S: explicitly export a new bookmark snapshot; never overwrite.".into());
+    }
+    crate::page_with_interrupt("Pane help", &lines, true)
+}
+
 /// Preview the focused row without changing its selection or granting writes.
 fn show_preview(model: &TreeModel, code: KeyCode) -> io::Result<bool> {
     #[cfg(all(feature = "native-ops", target_os = "linux"))]
@@ -499,6 +517,13 @@ pub(crate) fn browse(
                     continue;
                 }
                 match key.code {
+                    KeyCode::F(1) if key.modifiers == KeyModifiers::NONE => {
+                        match pane_help(keymap, snapshot_out.is_some()) {
+                            Ok(true) => break,
+                            Ok(false) => Ok(()),
+                            Err(error) => Err(error),
+                        }
+                    }
                     code @ (KeyCode::Char('p' | 'I' | 'A') | KeyCode::F(3 | 8))
                         if key.kind == KeyEventKind::Press
                             && (key.modifiers == KeyModifiers::NONE

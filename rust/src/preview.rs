@@ -1,12 +1,10 @@
 //! Native, bounded read-only previews. No path grants write authorization.
 use crate::display_name;
-use rustix::fs::{self as rx, Mode as OpenMode, OFlags};
+use crate::readonly_file::ReadSession;
 use std::ffi::OsStr;
 use std::fmt::Write as _;
-use std::fs;
 use std::io::{self, Read};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 pub const MAX_BYTES: usize = 65_536;
@@ -46,25 +44,30 @@ fn hex_lines(bytes: &[u8]) -> Vec<String> {
 }
 
 /// Read at most 64 KiB and one truncation sentinel from a regular non-link file.
-/// Keep the previous preview's no-follow, nonblocking and inode checks.
+/// Reject symlinked ancestors and recheck observed identity and metadata.
+/// Not an atomic snapshot or a guarantee of bounded blocking-I/O time.
 /// The returned text is escaped for terminal display, never used as a path.
 pub fn read_lines(path: &Path, mode: Mode) -> io::Result<Vec<String>> {
-    let before = fs::symlink_metadata(path)?;
-    if !before.is_file() {
-        return Err(io::Error::other("preview requires a regular non-link file"));
+    // Preserve relative-path input without canonicalizing away symlink components.
+    // Keep the declared Rust 1.75 minimum; std::path::absolute is newer.
+    if path.as_os_str().is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "empty preview path",
+        ));
     }
-    let file: fs::File = rx::open(
-        path,
-        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
-        OpenMode::empty(),
-    )?
-    .into();
-    let metadata = file.metadata()?;
-    if !metadata.is_file() || (metadata.dev(), metadata.ino()) != (before.dev(), before.ino()) {
-        return Err(io::Error::other("file changed before preview"));
-    }
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let session = ReadSession::open(&absolute)?;
     let mut bytes = Vec::new();
-    file.take((MAX_BYTES + 1) as u64).read_to_end(&mut bytes)?;
+    session
+        .file()
+        .take((MAX_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)?;
+    session.verify()?;
     let truncated = bytes.len() > MAX_BYTES;
     bytes.truncate(MAX_BYTES);
     let mut lines = vec![display_name(path.as_os_str())];
@@ -85,6 +88,7 @@ pub fn read_lines(path: &Path, mode: Mode) -> io::Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -161,5 +165,22 @@ mod tests {
         assert!(read_lines(&link, Mode::Hex).is_err());
         assert!(read_lines(&f.0, Mode::Auto).is_err());
         assert_eq!(fs::read(path).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn rejects_symlinked_ancestor_and_parent_traversal() {
+        use std::os::unix::fs::symlink;
+        let f = Fixture::new();
+        let real = f.0.join("real");
+        fs::create_dir(&real).unwrap();
+        let file = real.join("file");
+        fs::write(&file, b"keep").unwrap();
+        symlink(&real, f.0.join("alias")).unwrap();
+        for mode in [Mode::Auto, Mode::Hex] {
+            assert!(read_lines(&f.0.join("alias/file"), mode).is_err());
+            assert!(read_lines(&real.join("../real/file"), mode).is_err());
+            assert!(read_lines(&file, mode).is_ok());
+        }
+        assert_eq!(fs::read(&file).unwrap(), b"keep");
     }
 }

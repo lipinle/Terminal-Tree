@@ -93,7 +93,7 @@ def main(binary):
         ])
         for directory in (link_dir, folder_dir):
             session(binary, directory, [
-                (b"p", BROWSE_END, [b"preview requires a regular non-link file"], [b"File preview"]),
+                (b"p", BROWSE_END, [b"read requires a regular non-link file"], [b"File preview"]),
             ])
         assert text_file.read_bytes() == text_data
         assert binary_file.read_bytes() == binary_data

@@ -135,6 +135,47 @@ pub fn replace_literal(
     Ok(plan)
 }
 
+/// Suggest a free numbered sibling name from an observed directory snapshot.
+/// Never reserve a name, overwrite a target or authorize a transfer. Exact raw
+/// name equality only; the native destination check must still reject aliases.
+pub fn suggest_available_name(
+    existing: &[OsString],
+    requested: &OsStr,
+) -> Result<OsString, PlanError> {
+    if existing.len() > MAX_DIRECTORY_NAMES {
+        return Err(PlanError::Limit);
+    }
+    if !single_name(requested) {
+        return Err(PlanError::InvalidName);
+    }
+    let mut occupied = BTreeSet::new();
+    for name in existing {
+        if !single_name(name) {
+            return Err(PlanError::InvalidName);
+        }
+        if !occupied.insert(name.as_os_str()) {
+            return Err(PlanError::DuplicateSource);
+        }
+    }
+    if !occupied.contains(requested) {
+        return Ok(requested.to_os_string());
+    }
+    for index in 1..=MAX_DIRECTORY_NAMES {
+        let suffix = format!(" ({index})");
+        let raw = requested.as_bytes();
+        if raw.len() + suffix.len() > MAX_NAME_BYTES {
+            return Err(PlanError::InvalidName);
+        }
+        let mut name = raw.to_vec();
+        name.extend_from_slice(suffix.as_bytes());
+        let name = OsString::from_vec(name);
+        if !occupied.contains(name.as_os_str()) {
+            return Ok(name);
+        }
+    }
+    Err(PlanError::Limit)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,6 +185,32 @@ mod tests {
             source: source.into(),
             destination: destination.into(),
         }
+    }
+
+    #[test]
+    fn suggests_only_unoccupied_names_without_changing_raw_bytes() {
+        let raw = OsString::from_vec(b"file-\xff".to_vec());
+        let occupied = [
+            raw.clone(),
+            OsString::from_vec(b"file-\xff (1)".to_vec()),
+        ];
+        assert_eq!(
+            suggest_available_name(&occupied, &raw).unwrap().as_bytes(),
+            b"file-\xff (2)"
+        );
+        assert_eq!(
+            suggest_available_name(&occupied, OsStr::new("free")).unwrap(),
+            "free"
+        );
+        assert_eq!(
+            suggest_available_name(&occupied, OsStr::new("../bad")),
+            Err(PlanError::InvalidName)
+        );
+        let long = OsString::from("a".repeat(MAX_NAME_BYTES));
+        assert_eq!(
+            suggest_available_name(std::slice::from_ref(&long), &long),
+            Err(PlanError::InvalidName)
+        );
     }
 
     #[test]

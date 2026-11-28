@@ -143,3 +143,23 @@ fn cli_content_results_and_omissions_are_separate() {
     assert!(duplicate.stdout.is_empty());
     assert_eq!(fs::read(f.0.join("sub/hit")).unwrap(), b"needle");
 }
+
+#[test]
+fn exact_file_and_aggregate_byte_boundaries() {
+    let f = Fixture::new();
+    fs::write(f.0.join("a"), b"needle").unwrap();
+    fs::write(f.0.join("b"), b"needle!").unwrap();
+    let cancel = AtomicBool::new(false);
+    let mut budget = limits();
+    budget.file_bytes = 6;
+    budget.total_bytes = 7;
+    let report = text(&f.0, "needle", false, budget, &cancel).unwrap();
+    assert_eq!(report.files_read, 1);
+    assert_eq!(report.bytes_read, 6);
+    assert_eq!(report.skipped_large, 1);
+    assert_eq!(report.matches.len(), 1);
+    budget.total_bytes = 6;
+    assert!(text(&f.0, "needle", false, budget, &cancel).is_err());
+    assert_eq!(fs::read(f.0.join("a")).unwrap(), b"needle");
+    assert_eq!(fs::read(f.0.join("b")).unwrap(), b"needle!");
+}

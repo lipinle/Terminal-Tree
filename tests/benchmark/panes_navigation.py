@@ -43,6 +43,8 @@ def main(binary):
                 wait(marker)
 
             wait(b"Tab 1/1 | Focus: Left | Row: 1 | Theme: terminal")
+            step(b"\x1bOP", b"Pane help")
+            step(b"\x1b", b"Tab 1/1 | Focus: Left | Row: 1 | Theme: terminal")
             for theme in (b"dark", b"light", b"monochrome", b"terminal"):
                 step(b"t", b"Theme: " + theme)
             step(b"\x1b[C", b"left-leaf")
