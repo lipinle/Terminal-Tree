@@ -19,6 +19,7 @@ use terminal_tree::{display_name, scan, KindFilter, Model, Order};
 use unicode_width::UnicodeWidthChar;
 mod edition;
 mod help;
+mod panes_ui;
 mod places;
 mod platform;
 #[cfg(feature = "native-ops")]
@@ -804,6 +805,17 @@ fn run() -> io::Result<()> {
             let path = path_arg(if hidden { args.next() } else { first })?;
             list(&path, hidden)
         }
+        Some("--panes") => {
+            let left = path_arg(args.next())?;
+            let right = match args.next() {
+                Some(path) => path_arg(Some(path))?,
+                None => left.clone(),
+            };
+            if args.next().is_some() {
+                return Err(io::Error::other("unexpected argument"));
+            }
+            panes_ui::browse(&left, &right)
+        }
         Some("--tree") => {
             let path = path_arg(args.next())?;
             if args.next().is_some() {
@@ -938,7 +950,7 @@ fn run() -> io::Result<()> {
             Ok(())
         }
         _ => {
-            eprintln!("Experimental read-only Rust port\nUsage: terminal-tree --list [-a] [PATH] | --browse [PATH] | --tree [PATH] | --scan-count PATH [REPEATS] | --version | --edition");
+            eprintln!("Experimental read-only Rust port\nUsage: terminal-tree --list [-a] [PATH] | --browse [PATH] | --tree [PATH] | --panes [LEFT] [RIGHT] | --scan-count PATH [REPEATS] | --version | --edition");
             Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "unsupported or missing command",
