@@ -40,7 +40,9 @@ def main(binary):
                 os.write(master, keys)
                 wait(marker)
 
-            wait(b"Tab 1/1 | Focus: Left | Row: 1")
+            wait(b"Tab 1/1 | Focus: Left | Row: 1 | Theme: terminal")
+            for theme in (b"dark", b"light", b"monochrome", b"terminal"):
+                step(b"t", b"Theme: " + theme)
             step(b"\x1b[C", b"left-leaf")
             step(b"\x1b[B", b"Tab 1/1 | Focus: Left | Row: 2")
             step(b"\t", b"Tab 1/1 | Focus: Right | Row: 1")

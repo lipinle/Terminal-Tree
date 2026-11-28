@@ -4,7 +4,7 @@ use crossterm::{
     cursor::MoveTo,
     event::{self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind},
     queue,
-    style::{Color, Print, ResetColor, SetBackgroundColor, SetForegroundColor},
+    style::{Print, ResetColor, SetBackgroundColor, SetForegroundColor},
     terminal::{self, Clear, ClearType},
 };
 use std::ffi::OsStr;
@@ -13,6 +13,7 @@ use std::path::Path;
 use terminal_tree::{
     display_name,
     layout::{Layout, Pane},
+    theme::Theme,
     tree::TreeModel,
     Order,
 };
@@ -75,12 +76,24 @@ fn draw(
     message: &str,
     width: u16,
     height: u16,
+    theme: Theme,
 ) -> io::Result<Option<[Region; 2]>> {
     let mut out = io::stdout().lock();
     let limit = usize::from(width.saturating_sub(1));
-    queue!(out, MoveTo(0, 0), Clear(ClearType::All))?;
+    let palette = theme.palette();
+    queue!(
+        out,
+        SetBackgroundColor(palette.background),
+        SetForegroundColor(palette.text),
+        MoveTo(0, 0),
+        Clear(ClearType::All)
+    )?;
     let Some(mut regions) = regions(width, height) else {
-        queue!(out, Print(clip("Resize to at least 40x7; q exits", limit)))?;
+        queue!(
+            out,
+            Print(clip("Resize to at least 40x7; q exits", limit)),
+            ResetColor
+        )?;
         out.flush()?;
         return Ok(None);
     };
@@ -89,7 +102,7 @@ fn draw(
         out,
         Print(clip(
             &format!(
-                "Terminal Tree [panes / read-only] | Tab {}/{} | Focus: {:?} | Row: {}",
+                "Terminal Tree [panes / read-only] | Tab {}/{} | Focus: {:?} | Row: {} | Theme: {}",
                 layout.active() + 1,
                 layout.tab_count(),
                 focus,
@@ -97,7 +110,8 @@ fn draw(
                     0
                 } else {
                     layout.focused().selected() + 1
-                }
+                },
+                theme.name()
             ),
             limit
         ))
@@ -109,12 +123,16 @@ fn draw(
         queue!(
             out,
             MoveTo(region.x, 1),
-            SetForegroundColor(if active { Color::Cyan } else { Color::White }),
+            SetForegroundColor(if active {
+                palette.heading
+            } else {
+                palette.text
+            }),
             Print(clip(
                 &format!("{:?}: {}", region.pane, display_name(model.root().as_os_str())),
                 width
             )),
-            ResetColor
+            SetForegroundColor(palette.text)
         )?;
         (region.start, region.end) = model.viewport(usize::from(height - 4));
         for (row, index) in (region.start..region.end).enumerate() {
@@ -132,9 +150,18 @@ fn draw(
             if index == model.selected() {
                 queue!(
                     out,
-                    SetBackgroundColor(if active { Color::DarkGrey } else { Color::Black }),
-                    SetForegroundColor(Color::White)
+                    SetBackgroundColor(palette.selected_background),
+                    SetForegroundColor(palette.selected_text)
                 )?;
+            } else {
+                let color = if item.entry.symlink {
+                    palette.link
+                } else if item.entry.directory {
+                    palette.directory
+                } else {
+                    palette.text
+                };
+                queue!(out, SetForegroundColor(color))?;
             }
             queue!(
                 out,
@@ -147,7 +174,8 @@ fn draw(
                     ),
                     width
                 )),
-                ResetColor
+                SetBackgroundColor(palette.background),
+                SetForegroundColor(palette.text)
             )?;
         }
     }
@@ -157,9 +185,10 @@ fn draw(
         Print(clip(message, limit)),
         MoveTo(0, height - 1),
         Print(clip(
-            "Tab focus | n new | [ ] switch | w close | arrows navigate | F5 refresh | q exit",
+            "Tab focus | n new | [ ] switch | w close | arrows | F5 refresh | t theme | q exit",
             limit
-        ))
+        )),
+        ResetColor
     )?;
     out.flush()?;
     Ok(Some(regions))
@@ -215,9 +244,10 @@ pub(crate) fn browse(left: &Path, right: &Path) -> io::Result<()> {
         .ok_or_else(|| io::Error::other("invalid tab limit"))?;
     let _terminal = Terminal::enter()?;
     let mut message = String::from("Read-only panes. File mutations disabled.");
+    let mut theme = Theme::default();
     loop {
         let (width, height) = terminal::size()?;
-        let regions = draw(&mut layout, &message, width, height)?;
+        let regions = draw(&mut layout, &message, width, height, theme)?;
         let result = match event::read()? {
             Event::Key(key) if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
                 if key.code == KeyCode::Esc
@@ -236,6 +266,10 @@ pub(crate) fn browse(left: &Path, right: &Path) -> io::Result<()> {
                         Ok(())
                     }
                     KeyCode::Char('n') => new_tab(&mut layout),
+                    KeyCode::Char('t') => {
+                        theme = theme.next();
+                        Ok(())
+                    }
                     KeyCode::Char('[') | KeyCode::Char(']') => {
                         let count = layout.tab_count();
                         let offset = if key.code == KeyCode::Char('[') {

@@ -43,6 +43,15 @@ impl Theme {
         }
     }
 
+    pub fn next(self) -> Self {
+        match self {
+            Self::Terminal => Self::Dark,
+            Self::Dark => Self::Light,
+            Self::Light => Self::Monochrome,
+            Self::Monochrome => Self::Terminal,
+        }
+    }
+
     pub fn palette(self) -> Palette {
         match self {
             Self::Terminal => Palette {
@@ -105,6 +114,15 @@ mod tests {
         }
         assert_eq!(Theme::parse("unknown"), None);
         assert_eq!(Theme::default(), Theme::Terminal);
+    }
+
+    #[test]
+    fn cycling_returns_to_terminal_defaults() {
+        let mut theme = Theme::default();
+        for expected in [Theme::Dark, Theme::Light, Theme::Monochrome, Theme::Terminal] {
+            theme = theme.next();
+            assert_eq!(theme, expected);
+        }
     }
 
     #[test]
