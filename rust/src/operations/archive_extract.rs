@@ -5,7 +5,7 @@ use super::{
     Destination, Engine,
 };
 use crate::archive::{list, portable_layout_preview, Kind};
-use crate::readonly_file::ReadSession;
+use crate::archive::native::read_archive_bytes;
 use rustix::fs::{self as rx, AtFlags, Mode, OFlags, RenameFlags};
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
@@ -50,14 +50,8 @@ impl Engine {
     pub fn read_archive_for_extraction(&self, path: &Path) -> io::Result<Vec<u8>> {
         let path = self.path(path)?;
         reject_mounts(&path)?;
-        let session = ReadSession::open(&path)?;
-        let len = session.len();
-        require(len <= 64 * 1024 * 1024, "archive byte budget exceeded")?;
-        let mut bytes = Vec::with_capacity(len as usize);
-        session.file().take(len + 1).read_to_end(&mut bytes)?;
-        require(bytes.len() as u64 == len, "archive input length changed")?;
+        let bytes = read_archive_bytes(&path)?;
         portable_layout_preview(bytes.as_slice())?;
-        session.verify()?;
         Ok(bytes)
     }
 

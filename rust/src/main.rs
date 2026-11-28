@@ -1036,7 +1036,10 @@ fn run() -> io::Result<()> {
         Some("--archive-build") => {
             #[cfg(all(feature = "native-ops", target_os = "linux"))]
             {
-                if args.next().as_deref() != Some(std::ffi::OsStr::new("--stdout"))
+                let first = args.next();
+                let gzip = first.as_deref() == Some(std::ffi::OsStr::new("--gzip"));
+                let output_flag = if gzip { args.next() } else { first };
+                if output_flag.as_deref() != Some(std::ffi::OsStr::new("--stdout"))
                     || io::stdout().is_terminal()
                 {
                     return Err(io::Error::other(
@@ -1058,6 +1061,11 @@ fn run() -> io::Result<()> {
                     files.push((name, path));
                 }
                 let archive = terminal_tree::archive_build::native::build_files(&files)?;
+                let archive = if gzip {
+                    terminal_tree::archive::native::compress_archive(&archive)?
+                } else {
+                    archive
+                };
                 let mut out = io::stdout().lock();
                 out.write_all(&archive)?;
                 out.flush()
@@ -1336,7 +1344,7 @@ fn run() -> io::Result<()> {
             Ok(())
         }
         _ => {
-            eprintln!("Experimental read-only Rust port\nUsage: terminal-tree --list [-a] [PATH] | --browse [PATH] | --tree [PATH] | --panes [LEFT] [RIGHT] [--keys SPEC] [--bookmarks-in PATH] [--bookmarks-out PATH] | --find PATH QUERY [--content] [--hidden] [--depth N] | --archive-list PATH | --archive-layout PATH [--portable] | --archive-member PATH NAME --stdout | --archive-build --stdout NAME PATH ... | --suggest-name DIRECTORY NAME | --image-preview PATH | --rename-plan DIRECTORY NEEDLE REPLACEMENT NAME... | --scan-count PATH [REPEATS] | --version | --edition");
+            eprintln!("Experimental read-only Rust port\nUsage: terminal-tree --list [-a] [PATH] | --browse [PATH] | --tree [PATH] | --panes [LEFT] [RIGHT] [--keys SPEC] [--bookmarks-in PATH] [--bookmarks-out PATH] | --find PATH QUERY [--content] [--hidden] [--depth N] | --archive-list PATH | --archive-layout PATH [--portable] | --archive-member PATH NAME --stdout | --archive-build [--gzip] --stdout NAME PATH ... | --suggest-name DIRECTORY NAME | --image-preview PATH | --rename-plan DIRECTORY NEEDLE REPLACEMENT NAME... | --scan-count PATH [REPEATS] | --version | --edition");
             Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "unsupported or missing command",

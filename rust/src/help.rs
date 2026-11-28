@@ -61,7 +61,7 @@ const TOPICS:&[Topic]=&[
         ("Actions: Keep both","For one clipboard item, choose Paste one item (keep both) in F6. Review the suggested unoccupied name and type yes. Never overwrites."),
         ("n","Create a directory: enter one name, review and type yes."),
         ("t","Create an empty file: enter one name, review and type yes."),
-        ("Actions: Extract archive","Select one supported USTAR archive, review the layout, enter a new directory name and type yes. No overwrite or metadata restoration."),
+        ("Actions: Extract archive","Select one supported USTAR or gzip-compressed USTAR archive, review the layout, enter a new directory name and type yes. No overwrite or metadata restoration."),
         ("u","Undo the most recent eligible move/rename in this session. Review and type yes; changed results or occupied destinations are refused."),
         ("Example: copy","Select a file (or mark several), press c, navigate to the target, press v, review paths, then type yes."),
         ("Example: move","Use x instead of c. Normal paste refuses cross-filesystem moves. Existing destinations are never overwritten."),
