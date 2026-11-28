@@ -1028,6 +1028,43 @@ fn run() -> io::Result<()> {
                 ))
             }
         }
+        Some("--archive-build") => {
+            #[cfg(all(feature = "native-ops", target_os = "linux"))]
+            {
+                if args.next().as_deref() != Some(std::ffi::OsStr::new("--stdout"))
+                    || io::stdout().is_terminal()
+                {
+                    return Err(io::Error::other(
+                        "archive build requires --stdout and non-terminal output",
+                    ));
+                }
+                let mut files = Vec::new();
+                while let Some(name) = args.next() {
+                    if files.len() >= 4096 {
+                        return Err(io::Error::other("archive input count exceeded"));
+                    }
+                    let name = name
+                        .into_string()
+                        .map_err(|_| io::Error::other("archive member name must be UTF-8"))?;
+                    let path = path_arg(Some(
+                        args.next()
+                            .ok_or_else(|| io::Error::other("archive input path required"))?,
+                    ))?;
+                    files.push((name, path));
+                }
+                let archive = terminal_tree::archive_build::native::build_files(&files)?;
+                let mut out = io::stdout().lock();
+                out.write_all(&archive)?;
+                out.flush()
+            }
+            #[cfg(not(all(feature = "native-ops", target_os = "linux")))]
+            {
+                Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "archive construction requires the native Linux build",
+                ))
+            }
+        }
         Some("--archive-layout") => {
             let path = path_arg(Some(
                 args.next()
@@ -1261,7 +1298,7 @@ fn run() -> io::Result<()> {
             Ok(())
         }
         _ => {
-            eprintln!("Experimental read-only Rust port\nUsage: terminal-tree --list [-a] [PATH] | --browse [PATH] | --tree [PATH] | --panes [LEFT] [RIGHT] [--keys SPEC] [--bookmarks-in PATH] [--bookmarks-out PATH] | --find PATH QUERY [--content] [--hidden] [--depth N] | --archive-list PATH | --archive-layout PATH [--portable] | --suggest-name DIRECTORY NAME | --image-preview PATH | --rename-plan DIRECTORY NEEDLE REPLACEMENT NAME... | --scan-count PATH [REPEATS] | --version | --edition");
+            eprintln!("Experimental read-only Rust port\nUsage: terminal-tree --list [-a] [PATH] | --browse [PATH] | --tree [PATH] | --panes [LEFT] [RIGHT] [--keys SPEC] [--bookmarks-in PATH] [--bookmarks-out PATH] | --find PATH QUERY [--content] [--hidden] [--depth N] | --archive-list PATH | --archive-layout PATH [--portable] | --archive-build --stdout NAME PATH ... | --suggest-name DIRECTORY NAME | --image-preview PATH | --rename-plan DIRECTORY NEEDLE REPLACEMENT NAME... | --scan-count PATH [REPEATS] | --version | --edition");
             Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "unsupported or missing command",

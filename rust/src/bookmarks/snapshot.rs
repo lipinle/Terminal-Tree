@@ -108,11 +108,7 @@ fn parts(path: &Path) -> io::Result<(&Path, &OsStr)> {
         .file_name()
         .ok_or_else(|| invalid("snapshot filename required"))?;
     let raw = path.as_os_str().as_bytes();
-    if !path.is_absolute()
-        || raw.contains(&0)
-        || raw.ends_with(b"/")
-        || raw.ends_with(b"/.")
-    {
+    if !path.is_absolute() || raw.contains(&0) || raw.ends_with(b"/") || raw.ends_with(b"/.") {
         return Err(invalid("invalid snapshot path"));
     }
     Ok((parent, name))
