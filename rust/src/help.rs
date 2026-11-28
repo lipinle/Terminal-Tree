@@ -80,6 +80,7 @@ const TOPICS:&[Topic]=&[
     ]},
     Topic{title:"Review, recovery and safety",rows:&[
         ("j","Open the read-only pending journal. Inspect source, destination and staging/metadata; pending does not mean failed."),
+        ("O","Select the existing published copy, enter the original absolute path and retained-move transaction ID from inspected evidence, then a new filename. Review and type recover. Requires matching current manifests; preserves both copies and original journal."),
         ("Review paths","Up / Down scroll one line; PgUp / PgDn scroll a page. Enter advances to the end, then opens the confirmation prompt."),
         ("Confirmation","Type yes (or round-time for opt-in timestamp rounding, DELETE for permanent deletion). Enter submits, Backspace edits, Esc / Ctrl+C cancels. Anything other than the required word declines the operation."),
         ("During worker","Esc / Ctrl+C requests cancellation. It may wait for a safe checkpoint. Once commit begins, the current item must finish safely."),

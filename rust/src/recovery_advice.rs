@@ -17,7 +17,7 @@ pub enum Advice {
     MalformedRecord,
 }
 
-fn id_valid(id: &str) -> bool {
+pub(crate) fn id_valid(id: &str) -> bool {
     let mut parts = id.split('-');
     for length in [32, 8, 16] {
         let Some(part) = parts.next() else {
@@ -80,7 +80,7 @@ pub fn classify(filename: &OsStr, record: &Value) -> Advice {
         return Advice::MalformedRecord;
     };
     match record.get("operation").and_then(Value::as_str) {
-        Some("copy" | "copy-time-tolerance") if source && destination && stage => Advice::InspectTransfer,
+        Some("copy" | "copy-time-tolerance" | "retained-recovery-copy") if source && destination && stage => Advice::InspectTransfer,
         Some("retained-move" | "retained-move-time-tolerance") if source && destination && stage => {
             Advice::InspectRetainedMove
         }
@@ -96,7 +96,7 @@ pub fn classify(filename: &OsStr, record: &Value) -> Advice {
         Some(
             "copy" | "move" | "mkdir" | "create-file" | "native-trash" | "restore"
             | "permanent-delete" | "archive-extract" | "retained-move"
-            | "copy-time-tolerance" | "retained-move-time-tolerance",
+            | "copy-time-tolerance" | "retained-move-time-tolerance" | "retained-recovery-copy",
         )
         | None => Advice::MalformedRecord,
         Some(_) => Advice::UnrecognizedOperation,
@@ -110,7 +110,7 @@ impl Advice {
                 "Inspect source, destination and any staging data; do not retry blindly."
             }
             Self::InspectRetainedMove => {
-                "Retained move: preserve all copies. Inspect the original path, destination and retained original (stage). If the original is absent, independently verify the retained file and copy it to a new unoccupied recovery path. Never overwrite, purge or replay from journal evidence."
+                "Retained move: preserve all copies. Inspect the original path, destination and retained original (stage). Use the explicit retained recovery action to compare against an existing published copy and recover to a new unoccupied path, or inspect independently if evidence is missing. Never overwrite, purge or replay from journal evidence."
             }
             Self::InspectCreation => {
                 "Inspect the destination and any staging data; verify identity before any retry."

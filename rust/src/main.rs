@@ -604,7 +604,7 @@ fn browse(
                         }
                         KeyCode::Char(
                             'x' | 'v' | 'c' | 'd' | 'D' | 'r' | 'n' | 't' | 'R' | 'u' | 'j' | ' '
-                            | 'a' | 'A' | 'S',
+                            | 'a' | 'A' | 'S' | 'O',
                         )
                         | KeyCode::Delete
                         | KeyCode::F(2) => {
