@@ -91,6 +91,8 @@ jobs:
           cargo build --locked --release --manifest-path "$RUNNER_TEMP/tt-baseline/rust/Cargo.toml" --features native-ops --example operation_benchmark
           python3 tests/benchmark/operations.py rust/target/release/examples/operation_benchmark "$RUNNER_TEMP/tt-baseline/rust/target/release/examples/operation_benchmark"
           git worktree remove --force "$RUNNER_TEMP/tt-baseline"
+      - name: Measure native resources and navigation on synthetic fixtures
+        run: python3 tests/benchmark/resources.py rust/target/release/terminal-tree rust/target/release/examples/operation_benchmark
       - name: Verify experimental write commands are unavailable
         run: |
           if rust/target/release/terminal-tree --delete /tmp; then
