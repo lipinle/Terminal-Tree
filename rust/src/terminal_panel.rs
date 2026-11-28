@@ -225,14 +225,14 @@ impl Panel {
         if up {self.scroll=(self.scroll+1).min(len.saturating_sub(1));}
         else {self.scroll=self.scroll.saturating_sub(1);}
     }
-    pub fn draw(&self,out:&mut impl Write,top:u16,rows:u16,width:u16,directory:&Path,prefs:&super::app_settings::Preferences)->io::Result<()> {
+    pub fn draw(&self,out:&mut impl Write,left:u16,top:u16,rows:u16,width:u16,directory:&Path,prefs:&super::app_settings::Preferences)->io::Result<()> {
         let width=usize::from(width);
         let header=format!("[Hide] Terminal / {}{} | OS permissions (not scoped)",if self.interactive(){"PTY"}else{"Bash"},if self.focused{" *"}else{""});
-        queue!(out,MoveTo(0,top),SetForegroundColor(prefs.accent),Print(super::clip(&header,width)),SetForegroundColor(prefs.foreground))?;
-        if width>=84 {queue!(out,MoveTo((width-8) as u16,top),SetForegroundColor(prefs.accent),Print("[Resize]"),SetForegroundColor(prefs.foreground))?;}
+        queue!(out,MoveTo(left,top),SetForegroundColor(prefs.accent),Print(super::clip(&header,width.saturating_sub(if width>=48{9}else{0}))),SetForegroundColor(prefs.foreground))?;
+        if width>=48 {queue!(out,MoveTo(left+(width-8) as u16,top),SetForegroundColor(prefs.accent),Print("[Resize]"),SetForegroundColor(prefs.foreground))?;}
         let directory=self.job.as_ref().map_or(directory,|job|job.directory.as_path());
         let cwd=if let Some(shell)=&self.shell {format!("Started in: {} | Alt+T focus | Alt+S close",terminal_tree::display_name(shell.initial_directory().as_os_str()))}else{format!("cwd: {}",terminal_tree::display_name(directory.as_os_str()))};
-        queue!(out,MoveTo(0,top+1),Print(super::clip(&cwd,width)))?;
+        queue!(out,MoveTo(left,top+1),Print(super::clip(&cwd,width)))?;
         let live;
         let lines=if let Some(shell)=&self.shell{live=shell.lines();&live}else if let Some(job)=&self.job {
             let mut current=self.output.clone();
@@ -245,13 +245,13 @@ impl Panel {
         let end=lines.len().saturating_sub(self.scroll.min(lines.len()));
         let start=end.saturating_sub(capacity);
         for (row,line) in lines[start..end].iter().enumerate(){
-            queue!(out,MoveTo(0,top+2+row as u16),Print(super::clip(line,width)))?;
+            queue!(out,MoveTo(left,top+2+row as u16),Print(super::clip(line,width)))?;
         }
         let prompt=if self.interactive(){"Interactive Bash (TERM=dumb) | Alt+T file manager | Alt+S close".into()}
         else if self.running(){"Running Bash... Ctrl+C to stop".into()}
         else if self.focused{self.prompt_text(width)}
         else {"$ (click or Alt+T to type; Alt+S interactive; Alt+H hide)".into()};
-        queue!(out,MoveTo(0,top+rows-1))?;
+        queue!(out,MoveTo(left,top+rows-1))?;
         if self.focused {queue!(out,SetBackgroundColor(prefs.selection))?;}
         queue!(out,Print(super::clip(&prompt,width)),SetBackgroundColor(prefs.background))?;
         Ok(())

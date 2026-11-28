@@ -169,7 +169,7 @@ The script removes only the verified, managed installation files. It leaves the 
 
 ## 🚀 Getting started
 
-The UX preview opens in Tree view. Use the toolbar to switch views, click folders in Places, and select a file to preview it. Drag panel dividers to resize them. Open **Settings** to customize the layout and save preferences.
+The UX preview opens in Tree view. Use the toolbar to switch views, click folders in Places, and select a file to preview it. Drag panel dividers to resize them. The sidebar extends alongside the bottom Bash panel; the global status bar stays at the bottom. Open **Settings** to customize the layout and save preferences.
 
 ### File operations
 

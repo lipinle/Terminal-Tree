@@ -480,10 +480,18 @@ impl State {
         if finished {self.expanded_tree=None;self.preview_key=None;}
         Ok(finished)
     }
+    // Single-pane layout keeps the status strip at the bottom, and the
+    // sidebar beside the shell. Dual pane retains its full-width console.
+    fn terminal_rect(&self,full_h:u16,l:Layout)->(u16,u16,u16,u16){
+        let rows=self.panel_rows(full_h);
+        let left=if self.dual{0}else{l.first()};
+        let top=if self.dual||rows==0{full_h-rows}else{full_h-rows-3};
+        (left,top,l.width.saturating_sub(left),rows)
+    }
     #[cfg(feature = "native-ops")]
-    fn draw_terminal(&mut self,out:&mut impl Write,h:u16,width:u16,model:&Model)->io::Result<()> {
-        let rows=self.panel_rows(h);
-        if rows>0 {self.terminal_panel.resize_shell(width,rows.saturating_sub(3))?;self.terminal_panel.draw(out,h-rows,rows,width,&model.directory,&self.prefs)?;}
+    fn draw_terminal(&mut self,out:&mut impl Write,h:u16,l:Layout,model:&Model)->io::Result<()> {
+        let (left,top,width,rows)=self.terminal_rect(h,l);
+        if rows>0 && width>0 {self.terminal_panel.resize_shell(width,rows.saturating_sub(3))?;self.terminal_panel.draw(out,left,top,rows,width,&model.directory,&self.prefs)?;}
         Ok(())
     }
     #[cfg(feature = "native-ops")]
@@ -644,7 +652,7 @@ impl State {
             Divider::Sidebar=>self.prefs.sidebar_width=x.clamp(12,48),
             Divider::Preview=>self.prefs.preview_percent=(100-ratio).clamp(18,45),
             Divider::Dual=>self.prefs.dual_percent=ratio.clamp(25,75),
-            Divider::Terminal=>if height>0 {self.prefs.terminal_percent=(u32::from(height.saturating_sub(y))*100/u32::from(height)).clamp(20,60) as u16;},
+            Divider::Terminal=>if height>0 {let top=if self.dual{y}else{y.saturating_add(3)};self.prefs.terminal_percent=(u32::from(height.saturating_sub(top))*100/u32::from(height)).clamp(20,60) as u16;},
         }
     }
 
@@ -1203,7 +1211,7 @@ impl State {
                 "F8 Single  Tab Switch  F10 Menu  Ctrl+F Filter  q Exit"
             }, usize::from(width))))?;
         #[cfg(feature = "native-ops")]
-        self.draw_terminal(&mut out,full_h,w.saturating_sub(1),model)?;
+        self.draw_terminal(&mut out,full_h,self.layout(w,h),model)?;
         queue!(out,ResetColor)?;
         self.frame_cache.present(out,w,full_h,self.prefs.background)
     }
@@ -1262,10 +1270,11 @@ impl State {
         let (start,end) = if let Some(tree) = &mut self.expanded_tree {
             tree.viewport(cells.capacity())
         } else { model.viewport(cells.capacity()) };
+        let side_cap=usize::from(full_h.saturating_sub(7)).max(1);
         if self.side_cursor < self.side_top { self.side_top = self.side_cursor; }
-        if self.side_cursor >= self.side_top + cap { self.side_top = self.side_cursor + 1 - cap; }
-        self.side_top = self.side_top.min(self.places.len().saturating_sub(cap));
-        for row in 0..cap {
+        if self.side_cursor >= self.side_top + side_cap { self.side_top = self.side_cursor + 1 - side_cap; }
+        self.side_top = self.side_top.min(self.places.len().saturating_sub(side_cap));
+        for row in 0..side_cap {
             let y = row as u16 + 4;
             if l.sidebar > 0 {
                 if let Some((label,path)) = self.places.get(self.side_top+row) {
@@ -1283,6 +1292,9 @@ impl State {
                 }
                 queue!(out, MoveTo(l.sidebar,y), Print("│"))?;
             }
+        }
+        for row in 0..cap {
+            let y=row as u16+4;
             if l.preview > 0 {
                 queue!(out, MoveTo(l.end(),y), Print("│"))?;
                 if let Some(line) = self.preview_lines.get(row+self.preview_scroll) {
@@ -1359,9 +1371,9 @@ impl State {
         } else if searching || !model.query.is_empty() {
             format!("Search: {} | {message}", display_name(std::ffi::OsStr::new(&model.query)))
         } else { format!("[{} / {mode}] Icons: {} | {message}",super::edition::NAME,self.icons.name()) };
-        queue!(out, MoveTo(0,h-3), Print(super::clip(&status,usize::from(l.width))),
-            MoveTo(0,h-2), Print(super::clip(&detail,usize::from(l.width))),
-            MoveTo(0,h-1), Print(super::clip(if searching {
+        queue!(out, MoveTo(0,full_h-3), Print(super::clip(&status,usize::from(l.width))),
+            MoveTo(0,full_h-2), Print(super::clip(&detail,usize::from(l.width))),
+            MoveTo(0,full_h-1), Print(super::clip(if searching {
                 "Filter: type text | Enter accept | Esc cancel"
             } else if writable {
                 "F1 Help  F2 Rename  F3 Preview  F8 Dual  Ctrl+T Tab  Ctrl+K Commands"
@@ -1369,7 +1381,7 @@ impl State {
                 "F1 Help  F3 Preview  F8 Dual  Ctrl+T Tab  Ctrl+K Commands  q Exit"
             },usize::from(l.width))))?;
         #[cfg(feature = "native-ops")]
-        self.draw_terminal(&mut out,full_h,w.saturating_sub(1),model)?;
+        self.draw_terminal(&mut out,full_h,l,model)?;
         queue!(out,ResetColor)?;
         #[cfg(feature = "native-ops")]
         if l.preview==0||!self.visual_bitmap||self.visual_frame.is_none()||!self.graphics_placed{self.graphics_slot.clear()?;self.graphics_placed=false;}
@@ -1508,6 +1520,8 @@ impl State {
         let (w,full_h) = terminal::size()?;
         let h=full_h-self.panel_rows(full_h);
         let l = self.layout(w,h);
+        #[cfg(feature = "native-ops")]
+        let (terminal_left,terminal_top,terminal_width,terminal_rows)=self.terminal_rect(full_h,l);
         if searching { return Ok(Some(event)); }
         #[cfg(feature = "native-ops")]
         {
@@ -1530,7 +1544,7 @@ impl State {
                     if mouse.row==0 && l.width>=75 && mouse.column>=63 && mouse.column<75 {
                         self.prefs.terminal_visible=!self.prefs.terminal_visible;self.terminal_panel.focused=false;return Ok(None);
                     }
-                    if self.panel_rows(full_h)>0 && mouse.row==h && l.width>=84 && mouse.column>=l.width-8 && mouse.column<l.width {
+                    if terminal_rows>0 && mouse.row==terminal_top && terminal_width>=48 && mouse.column>=l.width-8 && mouse.column<l.width {
                         self.dragging=Some(Divider::Terminal);return Ok(None);
                     }
                 }
@@ -1548,7 +1562,8 @@ impl State {
                                     if full_h<16{return Err(io::Error::other("terminal panel needs at least 16 rows"));}
                                     if super::choose("Interactive shell uses OS permissions, outside file journal",&["Cancel".into(),"Start Bash PTY".into()])?==Some(1){
                                         self.prefs.terminal_visible=true;
-                                        self.terminal_panel.start_shell(&model.directory,l.width,self.panel_rows(full_h).saturating_sub(3))?;
+                                        let (_,_,width,rows)=self.terminal_rect(full_h,self.layout(w,full_h-self.panel_rows(full_h)));
+                                        self.terminal_panel.start_shell(&model.directory,width,rows.saturating_sub(3))?;
                                         self.side_focus=false;
                                     }
                                 }
@@ -1565,9 +1580,9 @@ impl State {
                     }
                 }
                 if let Event::Mouse(mouse)=&event {
-                    if self.panel_rows(full_h)>0 && mouse.row>=h {
+                    if terminal_rows>0 && mouse.column>=terminal_left && mouse.column<terminal_left+terminal_width && mouse.row>=terminal_top && mouse.row<terminal_top+terminal_rows {
                         match mouse.kind {
-                            MouseEventKind::Down(MouseButton::Left) if mouse.row==h && mouse.column<6=>{self.prefs.terminal_visible=false;self.terminal_panel.focused=false;}
+                            MouseEventKind::Down(MouseButton::Left) if mouse.row==terminal_top && mouse.column<terminal_left+6=>{self.prefs.terminal_visible=false;self.terminal_panel.focused=false;}
                             MouseEventKind::Down(MouseButton::Left)=>{self.terminal_panel.focused=true;self.side_focus=false;}
                             MouseEventKind::ScrollUp=>self.terminal_panel.scroll(true),
                             MouseEventKind::ScrollDown=>self.terminal_panel.scroll(false),
@@ -1844,7 +1859,7 @@ impl State {
                 }
                 return Ok(None);
             }
-            if l.sidebar > 0 && mouse.column < l.sidebar && mouse.row >= 4 && h >= 8 && mouse.row < h-3 {
+            if l.sidebar > 0 && mouse.column < l.sidebar && mouse.row >= 4 && h >= 8 && mouse.row < full_h-3 {
                 self.side_focus = true;
                 match mouse.kind {
                     MouseEventKind::ScrollUp => self.move_side(false),

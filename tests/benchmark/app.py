@@ -112,6 +112,14 @@ def main(binary):
             (b"\x1b[B\r", b"Terminal / Bash |"),
         ])
         session(binary, ["--app", str(root)], root, b"Files *", [], width=45)
+        # At 120x26 the sidebar is 19 cells; the console begins at x=20,
+        # y=16 and ends above the three-line global status strip.
+        session(binary, ["--app", str(root)], root, b"Terminal / Bash |", [
+            (b"\x1b[<0;21;17M",b"[Terminal +]"),
+            (b"\x1bh",b"Terminal / Bash |"),
+            (b"\x1b[<0;21;18M",b"Terminal / Bash *"),
+            (b"\x1b",b"Terminal / Bash |"),
+        ])
         session(binary, ["--app", str(root)], root, b"Modified (UTC)", [
             (b"\x14",b"[2 "),
             (b"\x1b[<0;34;3M",b"[1 "),
