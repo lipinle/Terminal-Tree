@@ -215,9 +215,9 @@ def bookmark_snapshots(binary):
         old = snapshot.read_bytes()
         assert snapshot.stat().st_mode & 0o777 == 0o600
         session(["--bookmarks-in", str(snapshot), "--bookmarks-out", str(snapshot)], [
-            (b"\\t", b"Focus: Right | Row: 0"),
+            (b"\t", b"Focus: Right | Row: 0"),
             (b"B", b"Bookmarks - session only"),
-            (b"\\r", b"saved-leaf"),
+            (b"\r", b"saved-leaf"),
             (b"S", b"bookmark snapshot already exists"),
         ])
         assert snapshot.read_bytes() == old
