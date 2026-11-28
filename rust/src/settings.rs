@@ -9,6 +9,7 @@ use std::{
 use terminal_tree::{keymap::Keymap, theme::Theme, KindFilter, Model, Order};
 const NAME: &str = "rust-view-settings.json";
 const PANE_NAME: &str = "rust-pane-settings.json";
+const APP_NAME: &str = "rust-app-settings.json";
 fn error(s: &str) -> io::Error {
     io::Error::other(s)
 }
@@ -149,6 +150,15 @@ impl Store {
         self.save_named(PANE_NAME, &v)
     }
 
+    pub fn load_app(&self) -> io::Result<Option<serde_json::Value>> {
+        self.read_named(APP_NAME)
+    }
+    pub fn save_app(&self, value: &serde_json::Value) -> io::Result<()> {
+        if serde_json::to_vec(value).map_err(io::Error::other)?.len() >= 4096 {
+            return Err(error("application settings too large"));
+        }
+        self.save_named(APP_NAME, value)
+    }
     fn save_named(&self, target: &str, v: &serde_json::Value) -> io::Result<()> {
         self.read_named(target)?; // refuse preexisting unsafe file before replacement
         let mut random = [0u8; 16];

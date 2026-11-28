@@ -54,6 +54,16 @@ The application starts in Tree view. Use the clickable Path, Search, Grid, List 
 
 Icons and colors are built into the application (Grid, List, Tree, Sidebar and Dual Pane). The program classifies native paths by filename and extension, never by running eza or reading file content. F11 or Settings > Icon style switches between Unicode (default), Seti and ASCII. For a preferred startup style, use `TT_ICON_STYLE=seti terminal-tree` or `TT_ICON_STYLE=ascii terminal-tree`. Seti mode expects a compatible Nerd Font Mono selected in the terminal; the application cannot detect the active font reliably. Switch to Unicode or ASCII if glyphs are missing or misaligned. No font or third-party artwork is distributed. See [icon attribution and compatibility](ICON-NOTICES.md).
 
+### Settings Center and Add-ons
+
+Click Settings or press Ctrl+, to open grouped Appearance, Icons, Display, Add-ons, Save and Reset options. Appearance controls text/background/accent/selection colors, dark/light presets and custom RGB; actual terminal font family and point size are managed by the terminal emulator. Display toggles sidebar, preview, toolbar, icons, type colors, hidden files, extra status details, view and layout zoom. Safety status is always shown.
+
+Import a local, regular, non-link JSON icon mapping in Icons (native Linux), e.g. `{"rs":"R","zip":"Z"}`. Maximum 4 KiB, 48 lowercase extension keys, visible one- or two-cell glyphs only. No code, fonts or SVGs are installed; use only icons you have permission to use. ASCII mode ignores custom glyphs. Remove mappings to restore built-in icons.
+
+Add-ons lists installed/enabled/idle status for eza, 7-Zip and Git. Toggle each integration with Enter. The application Tools menu refuses disabled integrations; explicitly invoked CLI and legacy views are independent. Foreground execution displays the tool name and records the last result. There are no background companion jobs or services to terminate.
+
+For persistence on native Linux, create a private directory with `mkdir -m 700 ~/.config/terminal-tree` (if its parent already exists), or provide an existing owned mode-0700 directory through `TT_APP_CONFIG_DIR`. Settings > Save application preferences writes a separate bounded settings file atomically; it does not change shell settings or safety policy. Without an approved directory, preferences are session-only. Hidden-file state continues to use existing scoped view settings rather than application preferences.
+
 ## Navigation and search
 
 Use the installed executable (examples below assume it is on your PATH), or substitute its full path.

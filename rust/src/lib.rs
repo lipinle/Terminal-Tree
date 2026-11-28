@@ -17,6 +17,17 @@ pub mod preview;
 #[cfg(all(feature = "native-ops", target_os = "linux"))]
 mod readonly_file;
 #[cfg(all(feature = "native-ops", target_os = "linux"))]
+pub fn read_icon_pack(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let session = readonly_file::ReadSession::open(path)?;
+    if session.len() > 4096 { return Err(std::io::Error::other("icon pack exceeds 4096 bytes")); }
+    let mut bytes = Vec::new();
+    session.file().take(4097).read_to_end(&mut bytes)?;
+    if bytes.len() > 4096 { return Err(std::io::Error::other("icon pack exceeds 4096 bytes")); }
+    session.verify()?;
+    Ok(bytes)
+}
+#[cfg(all(feature = "native-ops", target_os = "linux"))]
 pub mod recovery_advice;
 #[cfg(all(feature = "native-ops", target_os = "linux"))]
 pub mod rename_plan;

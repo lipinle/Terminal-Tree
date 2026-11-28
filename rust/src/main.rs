@@ -18,6 +18,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use terminal_tree::{display_name, scan, KindFilter, Model, Order};
 use unicode_width::UnicodeWidthChar;
+mod app_settings;
 mod dashboard;
 mod edition;
 mod file_icons;
@@ -430,6 +431,12 @@ fn browse_with_layout(
     #[cfg(not(feature = "native-ops"))]
     let trash = None;
     let mut dashboard = application.then(|| dashboard::State::new(trash));
+    #[cfg(feature = "native-ops")]
+    if let Some(ui) = &mut dashboard {
+        if let Err(error) = ui.load_preferences() {
+            message = display_name(std::ffi::OsStr::new(&error.to_string()));
+        }
+    }
     loop {
         if let Some(ui) = &mut dashboard {
             #[cfg(feature = "native-ops")]
