@@ -233,7 +233,7 @@ impl State {
             MoveTo(0,h-1), Print(super::clip(if searching {
                 "Filter: type text | Enter accept | Esc cancel"
             } else if writable {
-                "F1 Help  F2 Rename  F3 Preview  F4 Actions  F10 Menu  Tab Focus  Ctrl+P Tools"
+                "F1 Help  F2 Rename  F3 Preview  F4 Actions  F10 Menu  Ctrl+C/X/V  F12 Clipboard"
             } else {
                 "F1 Help  F3 Preview  F10 Menu  Tab Focus  / Filter  Ctrl+P Tools  q Exit"
             },usize::from(l.width))))?;
@@ -251,7 +251,7 @@ impl State {
         let plain = KeyModifiers::NONE;
         let mut commands = match category {
             0 => vec![("Open",KeyCode::Enter,plain),("Properties",KeyCode::Char('i'),plain),("Exit",KeyCode::Char('q'),plain)],
-            1 if writable => vec![("Copy",KeyCode::Char('c'),plain),("Cut",KeyCode::Char('x'),plain),("Paste",KeyCode::Char('v'),plain),("Rename",KeyCode::F(2),plain),("New folder",KeyCode::Char('n'),plain),("New file",KeyCode::Char('t'),plain),("Trash",KeyCode::Delete,plain),("Undo",KeyCode::Char('u'),plain)],
+            1 if writable => vec![("Copy (Ctrl+C)",KeyCode::Char('c'),plain),("Cut (Ctrl+X)",KeyCode::Char('x'),plain),("Paste (Ctrl+V)",KeyCode::Char('v'),plain),("View clipboard",KeyCode::F(12),plain),("Rename",KeyCode::F(2),plain),("New folder",KeyCode::Char('n'),plain),("New file",KeyCode::Char('t'),plain),("Trash",KeyCode::Delete,plain),("Undo",KeyCode::Char('u'),plain)],
             1 => vec![("Select a scoped workspace to enable file operations",KeyCode::Null,plain)],
             2 => vec![("Toggle live preview",KeyCode::F(9),plain),("Open preview",KeyCode::F(3),plain),("Hidden files",KeyCode::Char('h'),plain),("Sort",KeyCode::Char('s'),plain),("Refresh",KeyCode::F(5),plain),("Filter",KeyCode::Char('/'),plain)],
             3 => vec![("Parent",KeyCode::Left,plain),("Back",KeyCode::Char('['),plain),("Forward",KeyCode::Char(']'),plain),("Locations",KeyCode::Char('m'),plain),("Bookmark current directory",KeyCode::Char('b'),plain),("Bookmarks",KeyCode::Char('B'),plain)],
@@ -270,6 +270,31 @@ impl State {
         Ok(super::choose(MENUS[category].0,&labels)?.map(|i| {
             let (_,key,modifiers) = commands[i];
             Event::Key(KeyEvent::new(key,modifiers))
+        }))
+    }
+
+    fn context_menu(&self, writable: bool) -> io::Result<Option<Event>> {
+        let mut actions = vec![
+            ("Open", KeyCode::Enter),
+            ("Properties", KeyCode::Char('i')),
+        ];
+        if cfg!(feature = "native-ops") {
+            actions.push(("Preview", KeyCode::F(3)));
+        }
+        if writable {
+            actions.extend([
+                ("Copy", KeyCode::Char('c')),
+                ("Cut", KeyCode::Char('x')),
+                ("Paste", KeyCode::Char('v')),
+                ("Rename", KeyCode::F(2)),
+                ("Select / deselect", KeyCode::Char(' ')),
+                ("Move to Trash", KeyCode::Delete),
+                ("More actions", KeyCode::F(6)),
+            ]);
+        }
+        let labels: Vec<_> = actions.iter().map(|(label, _)| label.to_string()).collect();
+        Ok(super::choose("File context menu", &labels)?.map(|i| {
+            Event::Key(KeyEvent::new(actions[i].1, KeyModifiers::NONE))
         }))
     }
 
@@ -308,6 +333,14 @@ impl State {
                 self.side_focus = false;
                 mouse.row = row;
                 mouse.column = 0;
+                if mouse.kind == MouseEventKind::Down(MouseButton::Right) && mouse.modifiers == KeyModifiers::NONE {
+                    let index = model.top + usize::from(row - 1);
+                    if index >= model.entries.len() {
+                        return Ok(None);
+                    }
+                    model.selected = index;
+                    return self.context_menu(writable);
+                }
                 if mouse.kind == MouseEventKind::Down(MouseButton::Left) && mouse.modifiers == KeyModifiers::NONE {
                     mouse.kind = MouseEventKind::Down(MouseButton::Right);
                 }
@@ -318,6 +351,38 @@ impl State {
         if let Event::Key(key) = event {
             if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) { return Ok(None); }
             let code = key.code;
+            // Modified keys must never accidentally dispatch a plain destructive shortcut.
+            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                let mapped = match code {
+                    KeyCode::Char('q') => Some(KeyCode::Char('q')),
+                    KeyCode::Char('c') if writable => Some(KeyCode::Char('c')),
+                    KeyCode::Char('x') if writable => Some(KeyCode::Char('x')),
+                    KeyCode::Char('v') if writable => Some(KeyCode::Char('v')),
+                    KeyCode::Char('a') if writable => Some(KeyCode::Char('a')),
+                    KeyCode::Char('z') if writable => Some(KeyCode::Char('u')),
+                    KeyCode::Char('f') => Some(KeyCode::Char('/')),
+                    KeyCode::Char('l') if cfg!(feature = "native-ops") => Some(KeyCode::Char('g')),
+                    KeyCode::Char('c') | KeyCode::Char('p') => {
+                        self.side_focus = false;
+                        return Ok(Some(Event::Key(key)));
+                    }
+                    _ => None,
+                };
+                if let Some(code) = mapped {
+                    self.side_focus = false;
+                    return Ok(Some(Event::Key(KeyEvent::new(code, KeyModifiers::NONE))));
+                }
+                return Ok(None);
+            }
+            if key.modifiers.contains(KeyModifiers::ALT) {
+                let mapped = match code {
+                    KeyCode::Left => Some(KeyCode::Char('[')),
+                    KeyCode::Right => Some(KeyCode::Char(']')),
+                    _ => None,
+                };
+                self.side_focus = false;
+                return Ok(mapped.map(|code| Event::Key(KeyEvent::new(code, KeyModifiers::NONE))));
+            }
             if code == KeyCode::F(10) {
                 self.side_focus = false;
                 let Some(selected) = self.menu(None,writable)? else { return Ok(None); };
@@ -359,8 +424,7 @@ impl State {
             }
             let replacement = match code {
                 KeyCode::F(4) if writable => Some(KeyCode::F(6)),
-                KeyCode::Char('l') if key.modifiers == KeyModifiers::CONTROL && cfg!(feature = "native-ops") => Some(KeyCode::Char('g')),
-                KeyCode::Char('f') if key.modifiers == KeyModifiers::CONTROL => Some(KeyCode::Char('/')),
+                KeyCode::Backspace => Some(KeyCode::Left),
                 KeyCode::Null => return Ok(None),
                 _ => None,
             };

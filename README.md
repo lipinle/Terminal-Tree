@@ -44,6 +44,8 @@ Run `terminal-tree` or `terminal-tree --app PATH` to open the responsive applica
 
 For writes, explicitly start `terminal-tree --app-workspace ROOT JOURNAL DATA` or `terminal-tree --app-personal JOURNAL [MOUNT ...]`. File and Edit menus use the existing reviewed operations and clipboard; F4 opens the existing action menu. The sidebar does not grant write authorization. Task status is idle while browsing; operations still show their existing progress dialog. Bookmarks are session-local.
 
+The application supports Ctrl+C/X/V (copy/cut/paste), Ctrl+A (mark all), Ctrl+Z (eligible undo), Ctrl+Q (exit), Alt+Left/Right (history), Backspace (parent), F12 (clipboard details) and a right-click context menu. Ctrl+C still cancels prompts and workers and exits the read-only view. In scoped application mode only, creating a new item, renaming one item and copying one item use a complete path review followed by Enter instead of typing yes. Move, Trash, batch and recovery confirmations remain unchanged, as do the underlying identity and no-overwrite checks. Legacy CLI views retain their previous behavior.
+
 ## Navigation and search
 
 Use the installed executable (examples below assume it is on your PATH), or substitute its full path.
