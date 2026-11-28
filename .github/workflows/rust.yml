@@ -65,6 +65,8 @@ jobs:
       - name: Cross-language scan parity and terminal smoke test
         run: |
           python3 tests/benchmark/parity.py --binary rust/target/release/terminal-tree
+      - name: Exercise read-only tree navigation through PTY
+        run: python3 tests/benchmark/tree_navigation.py rust/target/release/terminal-tree
       - name: Exercise scoped write UI through PTY
         run: python3 tests/benchmark/workspace.py rust/target/release/terminal-tree
       - name: Exercise copy, move, preview and Trash through PTY

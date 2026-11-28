@@ -4,6 +4,7 @@
 compile_error!("native-ops requires the Linux safety backend; use the default read-only build on other platforms");
 #[cfg(all(feature = "native-ops", target_os = "linux"))]
 pub mod operations;
+pub mod tree;
 
 use std::ffi::OsStr;
 use std::fs;
