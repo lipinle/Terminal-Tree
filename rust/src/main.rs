@@ -21,6 +21,7 @@ mod edition;
 mod help;
 mod places;
 mod platform;
+mod tree_ui;
 #[cfg(feature = "native-ops")]
 mod recovery;
 #[cfg(feature = "native-ops")]
@@ -829,6 +830,13 @@ fn run() -> io::Result<()> {
             let path = path_arg(if hidden { args.next() } else { first })?;
             list(&path, hidden)
         }
+        Some("--tree") => {
+            let path = path_arg(args.next())?;
+            if args.next().is_some() {
+                return Err(io::Error::other("unexpected argument"));
+            }
+            tree_ui::browse(&path)
+        }
         Some("--browse") => {
             let p = path_arg(args.next())?;
             #[cfg(feature = "native-ops")]
@@ -956,7 +964,7 @@ fn run() -> io::Result<()> {
             Ok(())
         }
         _ => {
-            eprintln!("Experimental read-only Rust port\nUsage: terminal-tree --list [-a] [PATH] | --browse [PATH] | --scan-count PATH [REPEATS] | --version | --edition");
+            eprintln!("Experimental read-only Rust port\nUsage: terminal-tree --list [-a] [PATH] | --browse [PATH] | --tree [PATH] | --scan-count PATH [REPEATS] | --version | --edition");
             Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "unsupported or missing command",

@@ -159,10 +159,7 @@ impl TreeModel {
             depth,
             expanded: false,
         });
-        drop(
-            self.rows
-                .splice(self.selected + 1..self.selected + 1, children),
-        );
+        drop(self.rows.splice(self.selected + 1..self.selected + 1, children));
         self.rows[self.selected].expanded = true;
         Ok(())
     }
