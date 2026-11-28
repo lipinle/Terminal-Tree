@@ -511,7 +511,7 @@ impl Workspace {
                                     undos.push(u);
                                 }
                                 done += 1;
-                                progress.finished(done);
+                                progress.finished(done)?;
                             }
                             Err(e) => {
                                 failure = Some((review.path().to_path_buf(), e));
@@ -579,7 +579,7 @@ impl Workspace {
                         allow_time_rounding,
                         &mut |point| progress.checkpoint(point),
                     )?;
-                    progress.finished(1);
+                    progress.finished(1)?;
                     Ok(retained)
                 });
                 self.clipboard = None;
@@ -636,7 +636,7 @@ impl Workspace {
                         }
                         progress.checkpoint(point)
                     })?;
-                    progress.finished(outcome.completed);
+                    progress.finished(outcome.completed)?;
                     Ok(outcome)
                 })?;
                 self.undo.extend(outcome.undos);
@@ -795,7 +795,7 @@ impl Workspace {
                         &bytes,
                         &mut |point| progress.checkpoint(point),
                     )?;
-                    progress.finished(1);
+                    progress.finished(1)?;
                     Ok(())
                 })?;
                 "Archive extracted"
@@ -848,7 +848,7 @@ impl Workspace {
                         .copy_retained_recovery(&review, &target, &mut |point| {
                             progress.checkpoint(point)
                         })?;
-                    progress.finished(1);
+                    progress.finished(1)?;
                     Ok(())
                 })?;
                 "Recovery copy created; retained and published files preserved"
@@ -898,7 +898,7 @@ impl Workspace {
                             {
                                 Ok(()) => {
                                     done += 1;
-                                    p.finished(done);
+                                    p.finished(done)?;
                                 }
                                 Err(e) => {
                                     failure = Some((r.path().to_path_buf(), e));
@@ -947,7 +947,7 @@ impl Workspace {
                             {
                                 Ok(terminal_tree::operations::RestoreOutcome::Restored) => {
                                     done += 1;
-                                    p.finished(done);
+                                    p.finished(done)?;
                                 }
                                 Ok(_) => {
                                     failure = Some((
@@ -993,7 +993,7 @@ impl Workspace {
                             }) {
                                 Ok(terminal_tree::operations::PurgeOutcome::Deleted) => {
                                     done += 1;
-                                    p.finished(done);
+                                    p.finished(done)?;
                                 }
                                 Ok(_) => {
                                     failure = Some((
