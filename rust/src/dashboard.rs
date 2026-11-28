@@ -258,6 +258,12 @@ pub struct State {
     #[cfg(feature = "native-ops")]
     visual_frame: Option<terminal_tree::visual_preview::Frame>,
     #[cfg(feature = "native-ops")]
+    visual_bitmap: bool,
+    #[cfg(feature = "native-ops")]
+    graphics_slot: super::native_graphics::Slot,
+    #[cfg(feature = "native-ops")]
+    graphics_placed: bool,
+    #[cfg(feature = "native-ops")]
     visual_size: (u32,u32),
     #[cfg(feature = "native-ops")]
     visual_page: u32,
@@ -295,6 +301,12 @@ impl State {
             preview_key: None, preview_lines: Vec::new(), preview_scroll: 0, preview_styles: Vec::new(), preview_mode: 0,
             #[cfg(feature = "native-ops")]
             visual_frame: None,
+            #[cfg(feature = "native-ops")]
+            visual_bitmap: false,
+            #[cfg(feature = "native-ops")]
+            graphics_slot: super::native_graphics::Slot::new(1),
+            #[cfg(feature = "native-ops")]
+            graphics_placed: false,
             #[cfg(feature = "native-ops")]
             visual_size: (0,0),
             #[cfg(feature = "native-ops")]
@@ -846,7 +858,7 @@ impl State {
         if key!=self.preview_key {self.preview_scroll=0;}
         #[cfg(feature = "native-ops")]
         {
-            let size=(u32::from(width).clamp(1,160),(rows.saturating_sub(2)*2).clamp(1,160) as u32);
+            let size=if super::native_graphics::supported(){super::native_graphics::pixel_bounds(width,rows.saturating_sub(2).min(u16::MAX as usize) as u16)}else{(u32::from(width).clamp(1,160),(rows.saturating_sub(2)*2).clamp(1,160) as u32)};
             if key != self.preview_key {self.visual_page=1;}
             if size!=self.visual_size {self.visual_size=size;self.preview_lines.clear();self.preview_scroll=0;}
         }
@@ -857,7 +869,7 @@ impl State {
         self.preview_styles.clear();
         #[cfg(feature = "native-ops")]
         {
-            self.visual_frame=None;
+            self.visual_frame=None;self.visual_bitmap=false;self.graphics_placed=false;
             if let Some(e)=entry.filter(|e|self.preview_mode==0&&!e.directory&&!e.symlink&&terminal_tree::visual_preview::format(&e.path).is_some()) {
                 if !self.prefs.visual_preview || !terminal_tree::visual_preview::installed() {
                     self.preview_lines=vec![e.name.clone(),if !terminal_tree::visual_preview::installed(){"Visual Preview: not installed".into()}else{"Visual Preview: disabled".into()}, "Open Add-ons (Shift+F11)".into(), "Visual Preview installation help".into(), "Alt+P for Info / Hex".into()];
@@ -865,9 +877,12 @@ impl State {
                 }
                 if self.prefs.visual_preview {
                     let page=if terminal_tree::visual_preview::format(&e.path)==Some("pdf"){self.visual_page}else{1};
-                    match terminal_tree::visual_preview::render(&e.path,page,self.visual_size.0,self.visual_size.1) {
+                    let hd=if super::native_graphics::supported(){terminal_tree::visual_preview::render_hd(&e.path,page,self.visual_size.0,self.visual_size.1).ok()}else{None};
+                    self.visual_bitmap=hd.is_some();
+                    let result=match hd{Some(f)=>Ok(f),None=>terminal_tree::visual_preview::render(&e.path,page,u32::from(width).clamp(1,160),(rows.saturating_sub(2)*2).clamp(1,160) as u32)};
+                    match result {
                         Ok(frame)=>{
-                            let label=if terminal_tree::visual_preview::format(&e.path)==Some("pdf"){format!("Page {page}/{} | Scroll | Alt+V",frame.pages)}else{format!("Thumbnail {}x{} | Alt+V",frame.width,frame.height)};
+                            let label=if terminal_tree::visual_preview::format(&e.path)==Some("pdf"){format!("Page {page}/{} | Scroll | Alt+V",frame.pages)}else{format!("Thumbnail {}x{} {} | Alt+V",frame.width,frame.height,if self.visual_bitmap{"RGB"}else{""})};
                             self.preview_lines=vec![e.name.clone(),label];
                             self.visual_frame=Some(frame);
                         }
@@ -1127,6 +1142,8 @@ impl State {
         writable: bool, personal: bool, clipboard: usize, marked: impl Fn(&std::path::Path) -> bool,
     ) -> io::Result<()> {
         if self.dual {
+            #[cfg(feature = "native-ops")]
+            {self.graphics_slot.clear()?;self.graphics_placed=false;}
             return self.draw_dual(model, message, searching, writable, personal, clipboard, &marked);
         }
         let (w,full_h) = terminal::size()?;
@@ -1138,7 +1155,7 @@ impl State {
             SetForegroundColor(self.prefs.accent), Print(super::clip("Terminal Tree  File  Edit  View  Go  Tools  Settings  Add-ons", usize::from(l.width))), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
         #[cfg(feature = "native-ops")]
         self.terminal_button(&mut out,l.width)?;
-        if h < 8 { queue!(out,ResetColor)?; return self.frame_cache.present(out,w,full_h,self.prefs.background); }
+        if h < 8 { #[cfg(feature = "native-ops")] {self.graphics_slot.clear()?;self.graphics_placed=false;} queue!(out,ResetColor)?; return self.frame_cache.present(out,w,full_h,self.prefs.background); }
         let mode = if personal { "Personal" } else if writable { "Workspace" } else { "Read-only" };
         let path_width = if self.prefs.toolbar { draw_toolbar(&mut out,l.width,self.view,&self.prefs)? } else { l.width };
         let path = if let Some(input) = &self.location {
@@ -1200,7 +1217,7 @@ impl State {
                     queue!(out,Print(super::clip(line,usize::from(l.preview))),SetAttribute(Attribute::NormalIntensity),SetForegroundColor(self.prefs.foreground))?;
                 } else {
                     #[cfg(feature = "native-ops")]
-                    if let Some(frame)=&self.visual_frame {
+                    if let Some(frame)=self.visual_frame.as_ref().filter(|_|!self.visual_bitmap) {
                         let py=row.saturating_sub(2)*2;
                         if py<frame.height {
                             queue!(out,MoveTo(l.end()+1,y))?;
@@ -1263,7 +1280,18 @@ impl State {
         #[cfg(feature = "native-ops")]
         self.draw_terminal(&mut out,full_h,w.saturating_sub(1),model)?;
         queue!(out,ResetColor)?;
-        self.frame_cache.present(out,w,full_h,self.prefs.background)
+        #[cfg(feature = "native-ops")]
+        if l.preview==0||!self.visual_bitmap||self.visual_frame.is_none()||!self.graphics_placed{self.graphics_slot.clear()?;self.graphics_placed=false;}
+        self.frame_cache.present(out,w,full_h,self.prefs.background)?;
+        #[cfg(feature = "native-ops")]
+        if l.preview>0 && self.visual_bitmap && !self.graphics_placed && cap>2 {
+            if let Some(frame)=&self.visual_frame{
+                let (cols,rows)=super::native_graphics::fit(frame,l.preview,(cap-2).min(u16::MAX as usize) as u16);
+                self.graphics_slot.show(frame,l.end()+1+(l.preview-cols)/2,6,cols,rows)?;
+                self.graphics_placed=true;
+            }
+        }
+        Ok(())
     }
 
     fn menu(&mut self, category: Option<usize>, writable: bool) -> io::Result<Option<Event>> {
@@ -1365,7 +1393,10 @@ impl State {
         // passive mouse events cannot, so keep the row cache for those.
         let passive=matches!(&event,Event::Mouse(mouse) if matches!(mouse.kind,MouseEventKind::Moved|MouseEventKind::Up(_)));
         let arrow=matches!(&event,Event::Key(k) if k.modifiers==KeyModifiers::NONE && matches!(k.code,KeyCode::Up|KeyCode::Down));
-        if !passive && !(arrow&&!self.dual&&!searching&&self.location.is_none()&&self.expanded_tree.is_none()) {self.frame_cache.invalidate();}
+        if !passive && !(arrow&&!self.dual&&!searching&&self.location.is_none()&&self.expanded_tree.is_none()) {self.frame_cache.invalidate();
+            #[cfg(feature = "native-ops")]
+            {self.graphics_slot.clear()?;self.graphics_placed=false;}
+        }
         let (w,full_h) = terminal::size()?;
         let h=full_h-self.panel_rows(full_h);
         let l = self.layout(w,h);

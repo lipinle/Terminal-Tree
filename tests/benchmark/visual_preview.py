@@ -24,6 +24,10 @@ def main():
             center=result[20+((h//2)*w+w//2)*3:][:3]
             assert center == (b"\xff\x00\x00" if page=="1" else b"\x00\x00\xff"),center
     assert subprocess.run([sys.argv[1],"rgb-v1","image","1","40","40"],input=b"invalid",capture_output=True,timeout=10).returncode!=0
+    result=subprocess.run([sys.argv[1],"rgb-v2","pdf","1","640","640"],input=pdf,capture_output=True,check=True,timeout=10).stdout
+    w,h,pages=struct.unpack("<III",result[8:20])
+    assert result[:8]==b"TTVRGB01" and w>160 and h>160 and pages==2 and len(result)==20+w*h*3
+    assert subprocess.run([sys.argv[1],"rgb-v2","image","1","1025","1024"],input=png,capture_output=True,timeout=10).returncode!=0
     print("Visual preview PNG and two-page PDF fixtures passed")
 
 if __name__=="__main__":

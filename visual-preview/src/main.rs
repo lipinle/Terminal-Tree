@@ -29,11 +29,12 @@ fn pdf(data:Vec<u8>,page:usize,width:u32,height:u32)->Result<(DynamicImage,u32),
 }
 fn run()->Result<(),Box<dyn std::error::Error>> {
     let args:Vec<_>=std::env::args().skip(1).collect();
-    if args.len()!=5||args[0]!="rgb-v1" {return Err("usage: tt-visual-preview rgb-v1 image|pdf PAGE WIDTH HEIGHT < file".into());}
+    if args.len()!=5||!matches!(args[0].as_str(),"rgb-v1"|"rgb-v2") {return Err("usage: tt-visual-preview rgb-v1|rgb-v2 image|pdf PAGE WIDTH HEIGHT < file".into());}
+    let max=if args[0]=="rgb-v2"{1024}else{160};
     let page:usize=args[2].parse()?;
     let w:u32=args[3].parse()?;
     let h:u32=args[4].parse()?;
-    if !(1..=160).contains(&w)||!(1..=160).contains(&h)||page==0 {return Err("invalid preview bounds".into());}
+    if !(1..=max).contains(&w)||!(1..=max).contains(&h)||page==0 {return Err("invalid preview bounds".into());}
     let mut data=Vec::new();
     io::stdin().take((MAX_INPUT+1) as u64).read_to_end(&mut data)?;
     if data.len()>MAX_INPUT {return Err("input exceeds 16 MiB".into());}
@@ -42,7 +43,7 @@ fn run()->Result<(),Box<dyn std::error::Error>> {
         "pdf"=>pdf(data,page,w,h)?,
         _=>return Err("unsupported input type".into()),
     };
-    let image=image.thumbnail(w,h).to_rgba8();
+    let image=if args[0]=="rgb-v2"{image.resize(w,h,image::imageops::FilterType::Lanczos3)}else{image.thumbnail(w,h)}.to_rgba8();
     let mut output=io::stdout().lock();
     output.write_all(b"TTVRGB01")?;
     for n in [image.width(),image.height(),pages] {output.write_all(&n.to_le_bytes())?;}

@@ -26,6 +26,8 @@ mod dashboard_frame;
 mod addons_ui;
 #[cfg(feature = "native-ops")]
 mod visual_ui;
+#[cfg(feature = "native-ops")]
+mod native_graphics;
 mod edition;
 mod file_icons;
 mod help;

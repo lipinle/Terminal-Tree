@@ -108,6 +108,10 @@ The dashboard buffers frames and paints complete rows instead of clearing the wh
 
 The native Add-ons screen separates the four companion states from their descriptions, highlights the selected entry, and offers installation help with H. Click a row or use arrows and Enter to toggle; Esc closes. The dashboard compares rendered rows for idle and ordinary single-pane arrow navigation; other actions still repaint when necessary. Alt+V opens an expanded image/PDF preview, arrows or wheel change PDF pages, and O explicitly offers to open the original through the desktop file association (ordinary OS permissions, not a sandbox). The expanded preview still uses terminal half-blocks and the helper's 160-pixel bound; it is not native bitmap graphics. On text-only terminals the configured desktop viewer provides original-resolution display.
 
+### Native Kitty graphics (experimental)
+
+The optional visual helper supports RGB v2 up to 1024 pixels per side. In a direct Kitty session (TERM=xterm-kitty and KITTY_WINDOW_ID), the dashboard and expanded viewer use native RGB bitmap placement. Set TT_GRAPHICS=unicode to force the existing half-block renderer, or TT_GRAPHICS=kitty only when you know your terminal supports the Kitty protocol. tmux/screen are excluded. Old helpers or failed HD decodes fall back to v1. Rebuild the helper as well as the core. The core generates the graphics commands itself, chunks bounded pixel data, suppresses terminal replies, and deletes its own placement when leaving the view. GNOME Terminal/VTE and other non-Kitty terminals continue to use the half-block preview or the original-resolution desktop viewer. No Sixel support yet. See https://sw.kovidgoyal.net/kitty/graphics-protocol.html.
+
 ## Navigation and search
 
 Use the installed executable (examples below assume it is on your PATH), or substitute its full path.
