@@ -162,6 +162,12 @@ pub struct State {
     preview_enabled: bool,
     preview_key: Option<PreviewKey>,
     preview_lines: Vec<String>,
+    #[cfg(feature = "native-ops")]
+    visual_frame: Option<terminal_tree::visual_preview::Frame>,
+    #[cfg(feature = "native-ops")]
+    visual_size: (u32,u32),
+    #[cfg(feature = "native-ops")]
+    visual_page: u32,
     dual: bool,
     active_right: bool,
     other: Option<Model>,
@@ -191,6 +197,12 @@ impl State {
             places: Vec::new(), bookmarks: Vec::new(), trash,
             side_focus: false, side_cursor: 0, side_top: 0, preview_enabled: true,
             preview_key: None, preview_lines: Vec::new(),
+            #[cfg(feature = "native-ops")]
+            visual_frame: None,
+            #[cfg(feature = "native-ops")]
+            visual_size: (0,0),
+            #[cfg(feature = "native-ops")]
+            visual_page: 1,
             dual: false, active_right: false, other: None, pane_switched: false,
             view: View::Tree, zoom: 1, location: None, expanded_tree: None,
             tabs: vec![None], active_tab: 0, dragging: None,
@@ -571,10 +583,12 @@ impl State {
                 format!("{} | {} | {} | Idle",tool.label(),if tool.installed(){"Installed"}else{"Not installed"},
                     if self.prefs.companions[i]{"Enabled"}else{"Disabled"})
             }).collect();
+            labels.push(format!("Visual Preview | {} | {} | On selection",if terminal_tree::visual_preview::installed(){"Installed"}else{"Not installed"},if self.prefs.visual_preview{"Enabled"}else{"Disabled"}));
             labels.push(format!("Last run: {}",self.last_tool.as_deref().unwrap_or("None")));
             labels.push("All companions run only when requested; no background services.".into());
             match super::choose("Add-ons / Integrations (Enter toggles enabled)",&labels)? {
                 Some(i @ 0..=2)=>self.prefs.companions[i]=!self.prefs.companions[i],
+                Some(3)=>{self.prefs.visual_preview=!self.prefs.visual_preview;self.preview_key=None;self.visual_frame=None;},
                 Some(_)=>(),
                 None=>return Ok(()),
             }
@@ -714,10 +728,35 @@ impl State {
         Ok(())
     }
 
-    fn preview(&mut self, entry: Option<&Entry>) {
+    fn preview(&mut self, entry: Option<&Entry>, width:u16, rows:usize) {
         let key = entry.map(|e| (e.path.clone(), e.size, e.modified));
+        #[cfg(feature = "native-ops")]
+        {
+            let size=(u32::from(width).clamp(1,160),(rows.saturating_sub(2)*2).clamp(1,160) as u32);
+            if key != self.preview_key && self.preview_key.is_some() {self.visual_page=1;}
+            if size!=self.visual_size {self.visual_size=size;self.preview_lines.clear();}
+        }
+        #[cfg(not(feature = "native-ops"))]
+        let _=(width,rows);
         if key == self.preview_key && !self.preview_lines.is_empty() { return; }
         self.preview_key = key;
+        #[cfg(feature = "native-ops")]
+        {
+            self.visual_frame=None;
+            if let Some(e)=entry.filter(|e|!e.directory&&!e.symlink&&terminal_tree::visual_preview::format(&e.path).is_some()) {
+                if self.prefs.visual_preview {
+                    let page=if terminal_tree::visual_preview::format(&e.path)==Some("pdf"){self.visual_page}else{1};
+                    match terminal_tree::visual_preview::render(&e.path,page,self.visual_size.0,self.visual_size.1) {
+                        Ok(frame)=>{
+                            self.preview_lines=vec![e.name.clone(),format!("Page {page}/{} | {}x{}",frame.pages,frame.width,frame.height)];
+                            self.visual_frame=Some(frame);
+                        }
+                        Err(error)=>self.preview_lines=vec![e.name.clone(),display_name(std::ffi::OsStr::new(&error.to_string()))],
+                    }
+                    return;
+                }
+            }
+        }
         self.preview_lines = match entry {
             None => vec!["No selection".into()],
             Some(e) if e.directory => vec![e.name.clone(), "Folder".into(), "Enter to open".into()],
@@ -989,7 +1028,7 @@ impl State {
             let entry = if let Some(tree) = &self.expanded_tree {
                 tree.rows().get(tree.selected()).map(|r| r.entry.clone())
             } else { model.entries.get(model.selected).cloned() };
-            self.preview(entry.as_ref());
+            self.preview(entry.as_ref(),l.preview,l.capacity());
         }
         let cap = l.capacity();
         let cells = Cells::new(l.end()-l.first(), cap, self.view, self.zoom);
@@ -1020,6 +1059,20 @@ impl State {
                 queue!(out, MoveTo(l.end(),y), Print("│"))?;
                 if let Some(line) = self.preview_lines.get(row) {
                     queue!(out, MoveTo(l.end()+1,y), Print(super::clip(line,usize::from(l.preview))))?;
+                } else {
+                    #[cfg(feature = "native-ops")]
+                    if let Some(frame)=&self.visual_frame {
+                        let py=row.saturating_sub(2)*2;
+                        if py<frame.height {
+                            queue!(out,MoveTo(l.end()+1,y))?;
+                            for x in 0..frame.width.min(usize::from(l.preview)) {
+                                let [r,g,b]=frame.pixel(x,py);
+                                let [r2,g2,b2]=frame.pixel(x,py+1);
+                                queue!(out,SetForegroundColor(Color::Rgb{r,g,b}),SetBackgroundColor(Color::Rgb{r:r2,g:g2,b:b2}),Print("▀"))?;
+                            }
+                            queue!(out,SetForegroundColor(self.prefs.foreground),SetBackgroundColor(self.prefs.background))?;
+                        }
+                    }
                 }
             }
         }
@@ -1354,6 +1407,16 @@ impl State {
                     else if l.preview>0&&mouse.column==l.end(){Some(Divider::Preview)}else{None};
                     if self.dragging.is_some(){return Ok(None);}
                 }
+            }
+        }
+        #[cfg(feature = "native-ops")]
+        if let Event::Mouse(mouse)=&event {
+            if !self.dual && l.preview>0 && mouse.column>l.end() && mouse.row>=4 && mouse.row<h-3 {
+                if let Some(frame)=&self.visual_frame {
+                    let page=match mouse.kind {MouseEventKind::ScrollDown=>self.visual_page.saturating_add(1).min(frame.pages),MouseEventKind::ScrollUp=>self.visual_page.saturating_sub(1).max(1),_=>self.visual_page};
+                    if page!=self.visual_page {self.visual_page=page;self.preview_lines.clear();}
+                }
+                return Ok(None);
             }
         }
         if self.expanded_input(&event, model, l)? { return Ok(None); }

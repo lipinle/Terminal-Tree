@@ -1,0 +1,11 @@
+[package]
+name = "tt-visual-preview"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+license = "MIT"
+publish = false
+
+[dependencies]
+image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }
+hayro = { version = "=0.9.0", default-features = false }

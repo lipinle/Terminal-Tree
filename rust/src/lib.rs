@@ -15,6 +15,8 @@ pub mod operations;
 #[cfg(all(feature = "native-ops", target_os = "linux"))]
 pub mod preview;
 #[cfg(all(feature = "native-ops", target_os = "linux"))]
+pub mod visual_preview;
+#[cfg(all(feature = "native-ops", target_os = "linux"))]
 mod readonly_file;
 #[cfg(all(feature = "native-ops", target_os = "linux"))]
 pub fn read_icon_pack(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
