@@ -59,8 +59,10 @@ impl Job {
             .current_dir(directory)
             .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped())
             .process_group(0).spawn()?;
-        let result=nonblocking(child.stdout.as_ref().expect("piped stdout"))
-            .and_then(|_|nonblocking(child.stderr.as_ref().expect("piped stderr")));
+        let result=match (child.stdout.as_ref(),child.stderr.as_ref()) {
+            (Some(stdout),Some(stderr))=>nonblocking(stdout).and_then(|_|nonblocking(stderr)),
+            _=>Err(io::Error::other("command output pipe unavailable")),
+        };
         if let Err(error)=result {
             if let Some(pid)=Pid::from_raw(child.id() as i32) { let _=kill_process_group(pid,Signal::Kill); }
             let _=child.kill(); let _=child.wait(); return Err(error);
@@ -157,7 +159,7 @@ impl Panel {
         let Some(status)=job.child.try_wait()? else{return Ok(false);};
         // Drain already queued data, without blocking on a detached writer.
         job.collect()?;
-        let job=self.job.take().expect("running job");
+        let job=self.job.take().ok_or_else(||io::Error::other("running command state unavailable"))?;
         self.output.push(Line::plain(format!("$ {}",visible(job.command.as_bytes()))));
         self.output.extend(shell_text::parse(&job.bytes));
         if job.truncated {self.output.push(Line::plain("[Output truncated at 32 KiB]".into()));}
@@ -228,6 +230,10 @@ impl Panel {
         else {self.scroll=self.scroll.saturating_sub(1);}
     }
     pub fn draw(&self,out:&mut impl Write,left:u16,top:u16,rows:u16,width:u16,directory:&Path,prefs:&super::app_settings::Preferences)->io::Result<()> {
+        if rows<3 || width==0 { return Ok(()); }
+        if top.checked_add(rows-1).is_none() || left.checked_add(width-1).is_none() {
+            return Err(io::Error::other("terminal panel coordinates out of bounds"));
+        }
         let width=usize::from(width);
         let header=format!("[Hide] Terminal / {}{} | OS permissions (not scoped)",if self.interactive(){"PTY"}else{"Bash"},if self.focused{" *"}else{""});
         queue!(out,MoveTo(left,top),SetForegroundColor(prefs.accent),Print(super::clip(&header,width.saturating_sub(if width>=48{9}else{0}))),SetForegroundColor(prefs.foreground))?;
@@ -257,7 +263,7 @@ impl Panel {
         else if self.running(){"Running Bash... Ctrl+C to stop".into()}
         else if self.focused{self.prompt_text(width)}
         else {"$ (click or Alt+T to type; Alt+S interactive; Alt+H hide)".into()};
-        queue!(out,MoveTo(left,top+rows-1))?;
+        queue!(out,MoveTo(left,top+(rows-1)))?;
         if self.focused {queue!(out,SetBackgroundColor(prefs.selection))?;}
         queue!(out,Print(super::clip(&prompt,width)),SetBackgroundColor(prefs.background))?;
         Ok(())

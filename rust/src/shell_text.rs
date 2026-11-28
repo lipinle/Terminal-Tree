@@ -452,6 +452,26 @@ pub fn parse(bytes:&[u8])->Vec<Line>{
         s.feed("\x1b[3;1H日Z\x1b[3;2H\x1b[P".as_bytes());
         assert!(s.grid[2].iter().all(|c|c.wide!=2&&c.wide!=3));
     }
+    #[test]fn adversarial_sequences_and_repeated_resize_keep_screen_invariants(){
+        let mut screen=Screen::new(80,24);
+        let sequences: &[&[u8]]=&[
+            b"\x1b[65535;65535H\x1b[65535P\x1b[65535@",
+            b"\x1b[65535S\x1b[65535T\x1b[65535X",
+            b"\x1b[?1049h\x1b[1;2r\x1b[?6h\x1b[999999999999H",
+            b"\x1b[?1049l\x1b[?7l\x1b[4h\xff\xf0\x80\x1b[2J",
+            "ไทย界🙂".as_bytes(),
+        ];
+        for (cols,rows) in [(0,0),(1,1),(2,2),(80,24),(512,128),(1,1)] {
+            screen.resize(cols,rows);
+            for sequence in sequences {
+                for byte in *sequence {screen.feed(&[*byte]);}
+                assert_eq!(screen.grid.len(),screen.rows);
+                assert!(screen.grid.iter().all(|r|r.len()==screen.cols));
+                assert!(screen.x<=screen.cols&&screen.y<screen.rows);
+                let _=screen.display_lines(Some((Color::White,Color::Black)));
+            }
+        }
+    }
     #[test]fn malformed_and_wide_text_are_bounded(){
         let lines=parse("ไทย\x1b[32m日\x1b[0mZ".as_bytes());let mut out=Vec::new();
         lines[0].draw(&mut out,2,Color::White,Color::Black).unwrap();

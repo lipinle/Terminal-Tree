@@ -755,7 +755,7 @@ pub(crate) fn browse(
                         modifiers: key.modifiers,
                     }) {
                         Some(action) => {
-                            navigate(layout.focused_mut(), action, usize::from(height - 4))
+                            navigate(layout.focused_mut(), action, usize::from(height.saturating_sub(4)).max(1))
                         }
                         None => Ok(()),
                     },

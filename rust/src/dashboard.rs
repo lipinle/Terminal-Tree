@@ -32,6 +32,10 @@ const TOOLBAR: [(&str, &str); 5] = [
     ("List", "[List]"), ("Tree", "[Tree]"),
 ];
 
+fn preview_hit_row(height: u16, row: u16) -> bool {
+    height >= 8 && row >= 3 && row < height.saturating_sub(3)
+}
+
 fn toolbar_start(width: u16) -> Option<u16> {
     let length = TOOLBAR.iter().map(|(_, s)| s.len() + 1).sum::<usize>() as u16;
     (width >= length + 10).then(|| width - length)
@@ -66,7 +70,9 @@ impl Cells {
         if self.width == 0 { return None; }
         let col = usize::from(x / self.width);
         let row = y / self.stride;
-        (col < self.columns && row < self.groups).then_some(row * self.columns + col)
+        if col < self.columns && row < self.groups {
+            row.checked_mul(self.columns)?.checked_add(col)
+        } else { None }
     }
 }
 
@@ -573,7 +579,7 @@ impl State {
         // Keep the active tab visible even on a compact terminal.
         let cell=18u16.min(width.saturating_sub(4).max(4));
         let count=usize::from(width.saturating_sub(4)/cell).max(1).min(self.tabs.len());
-        let first=self.active_tab.saturating_sub(count-1).min(self.tabs.len()-count);
+        let first=self.active_tab.saturating_sub(count.saturating_sub(1)).min(self.tabs.len().saturating_sub(count));
         (first,cell,count)
     }
 
@@ -1786,7 +1792,7 @@ impl State {
                 }
             }
             if let Event::Mouse(mouse)=&event {
-                if mouse.column>l.end() && mouse.column<l.width && mouse.row>=3 && mouse.row<h-3 {
+                if mouse.column>l.end() && mouse.column<l.width && preview_hit_row(h,mouse.row) {
                     if mouse.row==3 && mouse.kind==MouseEventKind::Down(MouseButton::Left) && mouse.modifiers==KeyModifiers::NONE {
                         let pos=mouse.column.saturating_sub(l.end()+1);
                         if l.preview>=46&&pos>=37 {
@@ -2096,6 +2102,18 @@ mod tests {
             assert!(table_columns("ภาษาไทย name","1.0 MiB","Rust","2026-11-28 12:00",width,true).width()<=usize::from(width));
         }
     }
+    #[test]
+    fn short_preview_and_unbounded_hit_coordinates_are_rejected() {
+        for height in 0..8 {
+            assert!(!preview_hit_row(height, 3));
+            assert!(!preview_hit_row(height, u16::MAX));
+        }
+        assert!(preview_hit_row(8, 4));
+        assert!(!preview_hit_row(8, 5));
+        let cells = Cells::new(120, 20, View::Grid, 1);
+        assert_eq!(cells.hit(0, usize::MAX), None);
+    }
+
     #[test]
     fn view_cells_and_toolbar_hit_testing() {
         assert_eq!(View::default(), View::Tree);
