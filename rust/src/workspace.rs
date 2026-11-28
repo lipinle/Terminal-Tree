@@ -402,7 +402,7 @@ impl Workspace {
                 self.clear_marks();
                 return Ok("Clipboard ready; v to review and paste".into());
             }
-            'v' => {
+            'v' | 'V' => {
                 let (reviews, kind) = self
                     .clipboard
                     .as_ref()
@@ -410,7 +410,17 @@ impl Workspace {
                 let kind = *kind;
                 let mut items = Vec::with_capacity(reviews.len());
                 for review in reviews {
-                    let dst = model.directory.join(review.path().file_name().unwrap());
+                    let name = review.path().file_name().unwrap();
+                    let dst = if key == 'V' {
+                        if reviews.len() != 1 {
+                            return Err(error("keep both requires one clipboard item"));
+                        }
+                        let candidate =
+                            terminal_tree::rename_plan::native::suggest(&model.directory, name)?;
+                        model.directory.join(candidate)
+                    } else {
+                        model.directory.join(name)
+                    };
                     self.ordinary(review.path())?;
                     self.ordinary(&dst)?;
                     items.push((review.clone(), self.engine.destination(&dst)?));
@@ -481,6 +491,57 @@ impl Workspace {
                 } else {
                     return self.finish_batch(model, done, total, "Transfer", failure);
                 }
+            }
+            'N' => {
+                use terminal_tree::rename_plan::native::reviewed::Batch;
+
+                if self.marks.is_empty() {
+                    return Err(error("mark files before bulk rename"));
+                }
+                let sources = self.reviews(model)?;
+                let Some(needle) = prompt("Replace text:")? else {
+                    return Ok("Cancelled".into());
+                };
+                let Some(replacement) = prompt("With text (empty removes):")? else {
+                    return Ok("Cancelled".into());
+                };
+                let batch = Batch::prepare(
+                    &self.engine,
+                    &model.directory,
+                    &sources,
+                    OsStr::new(&needle),
+                    OsStr::new(&replacement),
+                )?;
+                let paths: Vec<_> = batch.paths().flat_map(|(a, b)| [a, b]).collect();
+                for path in &paths {
+                    self.ordinary(path)?;
+                }
+                let total = sources.len();
+                if !confirm(
+                    &format!("Rename {total} items - each committed separately"),
+                    &paths,
+                    "yes",
+                )? {
+                    return Ok("Cancelled".into());
+                }
+                let outcome = worker::run(total, |progress| {
+                    let outcome = batch.execute(&self.engine, &mut |index, path, point| {
+                        if point == "rename-item" {
+                            progress.item(path_text(path), index)?;
+                        }
+                        progress.checkpoint(point)
+                    })?;
+                    progress.finished(outcome.completed);
+                    Ok(outcome)
+                })?;
+                self.undo.extend(outcome.undos);
+                return self.finish_batch(
+                    model,
+                    outcome.completed,
+                    total,
+                    "Rename",
+                    outcome.failure,
+                );
             }
             'r' => {
                 let review = self.review(model)?;

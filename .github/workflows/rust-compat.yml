@@ -1,18 +1,7 @@
 name: Rust compatibility
 on:
   push:
-    branches: [main]
-    paths:
-      - 'rust/**'
-      - 'tests/compat/**'
-      - 'tests/benchmark/**'
-      - '.github/workflows/rust-compat.yml'
-  pull_request:
-    paths:
-      - 'rust/**'
-      - 'tests/compat/**'
-      - 'tests/benchmark/**'
-      - '.github/workflows/rust-compat.yml'
+    branches: ['release-candidate/**']
   workflow_dispatch:
 
 concurrency:
