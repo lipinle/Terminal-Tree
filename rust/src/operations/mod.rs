@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use xattr::FileExt;
 
+mod archive_extract;
 mod cross_device;
 mod manifest;
 mod policy;
