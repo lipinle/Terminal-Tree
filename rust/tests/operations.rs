@@ -809,3 +809,29 @@ fn recovery_report_refuses_unsafe_records_without_mutation() {
     assert_eq!(fs::read(&alias).unwrap(), b"{}");
     assert!(directory.is_dir());
 }
+
+#[test]
+fn recovery_report_distinguishes_exact_record_limit_from_truncation() {
+    let f = Fixture::new();
+    let e = f.engine();
+    for index in 0..128 {
+        let path = f.journal.join(format!("record-{index:03}.pending.json"));
+        fs::write(&path, b"{}").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let (rows, truncated) = e.recovery_report().unwrap();
+    assert_eq!(rows.len(), 128);
+    assert!(!truncated);
+    assert!(rows.iter().all(|(_, result)| result.is_ok()));
+    assert!(rows.windows(2).all(|pair| pair[0].0 < pair[1].0));
+
+    let extra = f.journal.join("record-128.pending.json");
+    fs::write(&extra, b"{}").unwrap();
+    fs::set_permissions(&extra, fs::Permissions::from_mode(0o600)).unwrap();
+    let (rows, truncated) = e.recovery_report().unwrap();
+    assert_eq!(rows.len(), 128);
+    assert!(truncated);
+    assert!(rows.iter().all(|(_, result)| result.is_ok()));
+    assert_eq!(fs::read_dir(&f.journal).unwrap().count(), 129);
+    assert_eq!(fs::read(extra).unwrap(), b"{}");
+}
