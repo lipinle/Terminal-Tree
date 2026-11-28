@@ -193,9 +193,9 @@ fn draw(
         MoveTo(0, height - 1),
         Print(clip(
             if snapshot_enabled {
-                "Tab focus | n new | [ ] switch | w close | b/B bookmarks | p/F8/I/A preview | S export snapshot | ? keys | F1 help | t theme | q exit"
+                "Tab focus | n new | [ ] switch | w close | b/B bookmarks | f/F find | p/F8/I/A preview | S export snapshot | ? keys | F1 help | t theme | q exit"
             } else {
-                "Tab focus | n new | [ ] switch | w close | b/B bookmarks | p/F8/I/A preview | ? keys | F1 help | t theme | q exit"
+                "Tab focus | n new | [ ] switch | w close | b/B bookmarks | f/F find | p/F8/I/A preview | ? keys | F1 help | t theme | q exit"
             },
             limit
         )),
@@ -309,7 +309,7 @@ fn bookmark_menu(marks: &mut Bookmarks) -> io::Result<BookmarkChoice> {
                 out,
                 MoveTo(0, height - 1),
                 Print(clip(
-                    "Up/Down | Enter open | x remove bookmark | Esc back",
+                    "Up/Down | Enter open | J/K reorder | x remove | Esc back",
                     limit
                 ))
             )?;
@@ -330,6 +330,16 @@ fn bookmark_menu(marks: &mut Bookmarks) -> io::Result<BookmarkChoice> {
                     marks
                         .remove(selected)
                         .map_err(|_| io::Error::other("invalid bookmark selection"))?;
+                }
+                KeyCode::Char('K') if selected > 0 => {
+                    marks.move_to(selected, selected - 1)
+                        .map_err(|_| io::Error::other("invalid bookmark selection"))?;
+                    selected -= 1;
+                }
+                KeyCode::Char('J') if selected + 1 < marks.paths().len() => {
+                    marks.move_to(selected, selected + 1)
+                        .map_err(|_| io::Error::other("invalid bookmark selection"))?;
+                    selected += 1;
                 }
                 KeyCode::Up => selected = selected.saturating_sub(1),
                 KeyCode::Down => selected = (selected + 1).min(marks.paths().len() - 1),
@@ -354,12 +364,89 @@ fn open_location(model: &mut TreeModel, marks: &Bookmarks, index: usize) -> io::
     Ok(())
 }
 
+#[cfg(all(feature = "native-ops", target_os = "linux"))]
+fn find_location(model: &mut TreeModel, content: bool) -> io::Result<()> {
+    use terminal_tree::search::{content::{text, ContentLimits}, filenames, SearchLimits};
+
+    let label = if content {
+        "Find text (case-sensitive):"
+    } else {
+        "Find filename:"
+    };
+    let Some(query) = crate::workspace::prompt(label)? else {
+        return Ok(());
+    };
+    if query.is_empty() {
+        return Err(io::Error::other("search query must not be empty"));
+    }
+    let root = model.root().to_path_buf();
+    let limits = SearchLimits {
+        entries: 16_384,
+        depth: 16,
+        matches: 4096,
+    };
+    let (paths, title) = crate::worker::run_search(|progress| {
+        progress.item(display_name(root.as_os_str()), 0)?;
+        let result = if content {
+            let report = text(
+                &root,
+                &query,
+                false,
+                ContentLimits {
+                    traversal: limits,
+                    file_bytes: 1_048_576,
+                    total_bytes: 64 * 1_048_576,
+                },
+                progress.cancellation_flag(),
+            )?;
+            let title = format!(
+                "Text search: {} matches; skipped {} large, {} binary, {} nonregular",
+                report.matches.len(),
+                report.skipped_large,
+                report.skipped_binary,
+                report.skipped_nonregular
+            );
+            (report.matches, title)
+        } else {
+            let entries = filenames(&root, &query, false, limits, progress.cancellation_flag())?;
+            let title = format!("Filename search: {} matches", entries.len());
+            (entries.into_iter().map(|entry| entry.path).collect(), title)
+        };
+        progress.cancelled()?;
+        Ok(result)
+    })?;
+    if paths.is_empty() {
+        return crate::page(&title, &["No matching entries".into()]);
+    }
+    let labels: Vec<_> = paths.iter().map(|path| display_name(path.as_os_str())).collect();
+    if let Some(index) = crate::choose(&title, &labels)? {
+        let path = &paths[index];
+        let metadata = std::fs::symlink_metadata(path)?;
+        let directory = if metadata.is_dir() && !metadata.file_type().is_symlink() {
+            path.as_path()
+        } else {
+            path.parent().ok_or_else(|| io::Error::other("missing result parent"))?
+        };
+        if !directory.starts_with(&root) || directory.canonicalize()? != directory {
+            return Err(io::Error::other("search result location changed"));
+        }
+        let mut replacement = tree(directory)?;
+        if let Some(index) = replacement.rows().iter().position(|row| row.entry.path == *path) {
+            replacement.select(index);
+        }
+        *model = replacement;
+    }
+    Ok(())
+}
+
 fn pane_help(keymap: &Keymap, snapshot_enabled: bool) -> io::Result<bool> {
     let mut lines = vec![
         "Navigation: use the configured bindings below.".into(),
         keymap.summary(),
         "Tab: change focus | n: new tab | [ / ]: switch tabs | w: close tab".into(),
-        "b: save bookmark | B: open bookmark menu".into(),
+        "b: save bookmark | B: open bookmark menu | J/K reorder within menu".into(),
+        "f: recursive filename search | F: recursive text search (native Linux)".into(),
+        "Esc / Ctrl+C cancels a running search; select a result to open its location.".into(),
         "t: cycle theme | ?: show configured keys | F1: this guide".into(),
         "p / F3: text or automatic hex | F8: forced hex".into(),
         "I: PPM image | A: USTAR listing (native Linux only)".into(),
@@ -540,6 +627,10 @@ pub(crate) fn browse(
                         Ok(())
                     }
                     KeyCode::Char('n') => new_tab(&mut layout),
+                    #[cfg(all(feature = "native-ops", target_os = "linux"))]
+                    KeyCode::Char('f' | 'F') if key.kind == KeyEventKind::Press => {
+                        find_location(layout.focused_mut(), key.code == KeyCode::Char('F'))
+                    }
                     KeyCode::Char('b') => match save_location(layout.focused(), &mut marks) {
                         Ok(()) => {
                             message = format!("Bookmark saved | {} locations", marks.paths().len());

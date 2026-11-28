@@ -39,6 +39,9 @@ impl Progress {
             }),
         }
     }
+    pub fn cancellation_flag(&self) -> &AtomicBool {
+        &self.cancel
+    }
     pub fn cancelled(&self) -> io::Result<()> {
         if self.cancel.load(Ordering::Acquire) {
             Err(io::Error::new(
@@ -118,6 +121,21 @@ pub fn run<T: Send>(
     total: usize,
     job: impl FnOnce(&Progress) -> io::Result<T> + Send,
 ) -> io::Result<T> {
+    run_modal(total, "File operation in progress", false, job)
+}
+
+pub fn run_search<T: Send>(
+    job: impl FnOnce(&Progress) -> io::Result<T> + Send,
+) -> io::Result<T> {
+    run_modal(1, "Search in progress", true, job)
+}
+
+fn run_modal<T: Send>(
+    total: usize,
+    title: &str,
+    read_only: bool,
+    job: impl FnOnce(&Progress) -> io::Result<T> + Send,
+) -> io::Result<T> {
     let progress = Progress::new(total);
     std::thread::scope(|scope| {
         let p = &progress;
@@ -146,7 +164,7 @@ pub fn run<T: Send>(
                         out,
                         MoveTo(0, 0),
                         Clear(ClearType::All),
-                        Print(super::clip("File operation in progress", width))
+                        Print(super::clip(title, width))
                     )?;
                     let (summary, item, bytes, footer) = progress_rows(h);
                     if summary {
@@ -162,7 +180,7 @@ pub fn run<T: Send>(
                     if item {
                         queue!(out, MoveTo(0, 2), Print(super::clip(&label, width)))?;
                     }
-                    if bytes {
+                    if bytes && !read_only {
                         queue!(out,MoveTo(0,3),Print(super::clip(&format!("Current item: {copied} logical bytes copied (not yet committed)"),width)))?;
                     }
                     if let Some(row) = footer {
@@ -177,7 +195,11 @@ pub fn run<T: Send>(
                                         "Cancel requested; waiting for safe checkpoint"
                                     }
                                 } else {
-                                    "Esc / Ctrl+C: request cancellation; commit cannot be interrupted"
+                                    if read_only {
+                                        "Esc / Ctrl+C: cancel search"
+                                    } else {
+                                        "Esc / Ctrl+C: request cancellation; commit cannot be interrupted"
+                                    }
                                 },
                                 width
                             ))

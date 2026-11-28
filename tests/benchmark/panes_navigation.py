@@ -297,6 +297,51 @@ def pane_previews(binary):
             os.close(slave)
 
 
+def pane_search(binary):
+    with tempfile.TemporaryDirectory(prefix="tt-pane-search-") as tmp:
+        root = Path(tmp)
+        left, right = root / "left", root / "right"
+        (left / "nested").mkdir(parents=True)
+        right.mkdir()
+        leaf = left / "nested" / "needle.txt"
+        leaf.write_bytes(b"unique search phrase")
+        master, slave = pty.openpty()
+        process = None
+        try:
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 160, 0, 0))
+            before = termios.tcgetattr(slave)
+            process = subprocess.Popen(
+                [binary, "--panes", str(left), str(right)],
+                stdin=slave, stdout=slave, stderr=slave,
+                env=dict(os.environ, TERM="xterm-256color"),
+            )
+
+            def step(keys, marker):
+                os.write(master, keys)
+                wait_output(master, process, marker)
+
+            wait_output(master, process, b"Focus: Left")
+            step(b"f", b"Find filename:")
+            step(b"needle\r", b"Filename search: 1 matches")
+            step(b"\r", b"needle.txt")
+            step(b"F", b"Find text (case-sensitive):")
+            step(b"unique search phrase\r", b"Text search: 1 matches")
+            step(b"\x1b", b"Terminal Tree [panes / read-only]")
+            step(b"f", b"Find filename:")
+            step(b"\x1b", b"Terminal Tree [panes / read-only]")
+            os.write(master, b"q")
+            assert process.wait(timeout=8) == 0
+            assert termios.tcgetattr(slave) == before
+            assert leaf.read_bytes() == b"unique search phrase"
+            print("TT_PANE_SEARCH filename/content results, navigation and cancel prompt passed")
+        finally:
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait()
+            os.close(master)
+            os.close(slave)
+
+
 if __name__ == "__main__":
     binary = str(Path(sys.argv[1]).resolve())
     main(binary)
@@ -304,3 +349,4 @@ if __name__ == "__main__":
     bookmarks(binary)
     bookmark_snapshots(binary)
     pane_previews(binary)
+    pane_search(binary)
