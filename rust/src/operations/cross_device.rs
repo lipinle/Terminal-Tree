@@ -104,6 +104,18 @@ impl Engine {
         destination: &Destination,
         checkpoint: &mut dyn FnMut(&str) -> io::Result<()>,
     ) -> io::Result<PathBuf> {
+        self.move_retaining_source_with_time_rounding(review, destination, false, checkpoint)
+    }
+
+    /// Explicit opt-in permits only up to two seconds of modification-time
+    /// rounding. Content, permissions, ownership and attributes remain strict.
+    pub fn move_retaining_source_with_time_rounding(
+        &self,
+        review: &Review,
+        destination: &Destination,
+        allow_time_rounding: bool,
+        checkpoint: &mut dyn FnMut(&str) -> io::Result<()>,
+    ) -> io::Result<PathBuf> {
         let observed = self.inspect_file_transfer(review, destination)?;
         require(observed.crosses_devices(), "different devices required")?;
         let source_parent = self.check(review)?;
@@ -120,17 +132,22 @@ impl Engine {
         checkpoint("retained-prepare")?;
         self.log(
             &id,
-            "retained-move",
+            if allow_time_rounding { "retained-move-time-tolerance" } else { "retained-move" },
             Some(&review.path),
             Some(&destination.path),
             Some(&retained),
         )?;
         // Reuse the independently journalled, verified, synced no-replace copy.
         // Any error up to this point leaves the original at its initial name.
-        self.transfer_reviewed_with(review, destination, Transfer::Copy, checkpoint)?;
+        self.transfer_with_metadata_policy(
+            review, destination, Transfer::Copy, allow_time_rounding, checkpoint,
+        )?;
         checkpoint("retained-verify")?;
         let target = self.review(destination.path())?;
-        require(target.manifest == review.manifest, "published copy differs")?;
+        require(
+            review.manifest.matches_transfer(&target.manifest, allow_time_rounding),
+            "published copy differs",
+        )?;
         require(
             target.parent == destination.parent,
             "published destination parent changed",

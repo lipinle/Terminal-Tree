@@ -544,6 +544,17 @@ impl Engine {
         kind: Transfer,
         checkpoint: &mut dyn FnMut(&str) -> io::Result<()>,
     ) -> io::Result<Option<Undo>> {
+        self.transfer_with_metadata_policy(review, destination, kind, false, checkpoint)
+    }
+
+    fn transfer_with_metadata_policy(
+        &self,
+        review: &Review,
+        destination: &Destination,
+        kind: Transfer,
+        allow_time_rounding: bool,
+        checkpoint: &mut dyn FnMut(&str) -> io::Result<()>,
+    ) -> io::Result<Option<Undo>> {
         let dst = self.path(&destination.path)?;
         require(dst == destination.path, "destination path changed")?;
         let src_parent = self.check_identity(review)?;
@@ -571,7 +582,8 @@ impl Engine {
         checkpoint("transfer-prepare")?;
         self.log(
             &id,
-            if copy { "copy" } else { "move" },
+            if copy && allow_time_rounding { "copy-time-tolerance" }
+            else if copy { "copy" } else { "move" },
             Some(&review.path),
             Some(&dst),
             if copy { Some(&stage_path) } else { None },
@@ -584,6 +596,7 @@ impl Engine {
                 &payload,
                 &review.manifest,
                 &review.snapshot,
+                allow_time_rounding,
                 checkpoint,
             )?;
             self.check_identity(review)?;
