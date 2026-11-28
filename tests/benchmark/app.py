@@ -19,9 +19,12 @@ def session(binary, args, root, marker, steps, width=120):
     try:
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 26, width, 0, 0))
         before = termios.tcgetattr(slave)
+        env = dict(os.environ, TERM="xterm-256color", HOME=str(root),
+                   XDG_CONFIG_HOME=str(root / ".config"),
+                   TT_APP_CONFIG_DIR=str(root / ".config" / "terminal-tree"))
+        env.pop("TT_ICON_STYLE", None)
         process = subprocess.Popen([binary, *args], cwd=root, stdin=slave,
-                                   stdout=slave, stderr=slave,
-                                   env=dict(os.environ, TERM="xterm-256color", HOME=str(root)))
+                                   stdout=slave, stderr=slave, env=env)
         wait_output(master, process, marker)
         for keys, expected in steps:
             os.write(master, keys)
@@ -85,6 +88,8 @@ def main(binary):
             (b"\x1b", b"Terminal / Bash |"),
             (b"\x1bh", b"Tree View"),
             (b"\x1bh", b"Terminal / Bash |"),
+            (b"\x1b[<0;64;1M", b"[Terminal +]"),
+            (b"\x1b[<0;64;1M", b"[Terminal -]"),
         ])
         session(binary, ["--app", str(root)], root, b"Files *", [], width=45)
         config = root / ".config"

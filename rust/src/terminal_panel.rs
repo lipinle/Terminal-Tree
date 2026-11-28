@@ -17,6 +17,8 @@ struct Job {
     child:Child,
     bytes:Vec<u8>,
     started:Instant,
+    directory:std::path::PathBuf,
+    command:String,
     truncated:bool,
     stopped:Option<&'static str>,
 }
@@ -60,7 +62,7 @@ impl Job {
             if let Some(pid)=Pid::from_raw(child.id() as i32) { let _=kill_process_group(pid,Signal::Kill); }
             let _=child.kill(); let _=child.wait(); return Err(error);
         }
-        Ok(Self{child,bytes:Vec::new(),started:Instant::now(),truncated:false,stopped:None})
+        Ok(Self{child,bytes:Vec::new(),started:Instant::now(),directory:directory.to_path_buf(),command:command.to_owned(),truncated:false,stopped:None})
     }
     fn stop(&mut self, reason:&'static str) {
         if self.stopped.is_some(){return;}
@@ -107,7 +109,8 @@ impl Panel {
         // Drain already queued data, without blocking on a detached writer.
         job.collect()?;
         let job=self.job.take().expect("running job");
-        self.output=job.bytes.split(|&b|b==b'\n').filter(|line|!line.is_empty()).map(visible).collect();
+        self.output=vec![format!("$ {}",visible(job.command.as_bytes()))];
+        self.output.extend(job.bytes.split(|&b|b==b'\n').filter(|line|!line.is_empty()).map(visible));
         if job.truncated {self.output.push("[Output truncated at 32 KiB]".into());}
         self.output.push(match job.stopped {Some(reason)=>format!("[Stopped: {reason}]"),None=>format!("[{status}]")});
         self.scroll=0;
@@ -169,11 +172,15 @@ impl Panel {
         let width=usize::from(width);
         let header=format!("[Hide] Terminal / Bash{} | OS permissions (not scoped)",if self.focused{" *"}else{""});
         queue!(out,MoveTo(0,top),SetForegroundColor(prefs.accent),Print(super::clip(&header,width)),SetForegroundColor(prefs.foreground))?;
+        if width>=84 {queue!(out,MoveTo((width-8) as u16,top),SetForegroundColor(prefs.accent),Print("[Resize]"),SetForegroundColor(prefs.foreground))?;}
+        let directory=self.job.as_ref().map_or(directory,|job|job.directory.as_path());
         let cwd=format!("cwd: {}",terminal_tree::display_name(directory.as_os_str()));
         queue!(out,MoveTo(0,top+1),Print(super::clip(&cwd,width)))?;
         let live;
         let lines=if let Some(job)=&self.job {
-            live=job.bytes.split(|&b|b==b'\n').filter(|line|!line.is_empty()).map(visible).collect::<Vec<_>>();
+            let mut current=vec![format!("$ {}",visible(job.command.as_bytes()))];
+            current.extend(job.bytes.split(|&b|b==b'\n').filter(|line|!line.is_empty()).map(visible));
+            live=current;
             &live
         }else{&self.output};
         let capacity=usize::from(rows.saturating_sub(3));

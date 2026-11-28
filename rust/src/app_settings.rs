@@ -20,6 +20,7 @@ pub struct Preferences {
     pub custom: BTreeMap<String, String>,
     pub autosave: bool,
     pub terminal_visible: bool,
+    pub terminal_percent: u16,
     pub sidebar_width: u16,
     pub preview_percent: u16,
     pub dual_percent: u16,
@@ -32,7 +33,7 @@ impl Default for Preferences {
             foreground: Color::Reset, background: Color::Reset, accent: Color::Cyan,
             selection: Color::DarkGrey, sidebar: true, toolbar: true,
             show_icons: true, file_colors: true, status_details: true,
-            companions: [true; 3], custom: BTreeMap::new(), autosave: false, terminal_visible: true,
+            companions: [true; 3], custom: BTreeMap::new(), autosave: false, terminal_visible: true, terminal_percent: 28,
             sidebar_width: 19, preview_percent: 33, dual_percent: 50,
             navigation: [0,1,2,3,4,5,6,7,8],
         }
@@ -109,7 +110,7 @@ impl Preferences {
             "accent":encode_color(self.accent), "selection":encode_color(self.selection),
             "sidebar":self.sidebar, "toolbar":self.toolbar, "show_icons":self.show_icons,
             "file_colors":self.file_colors, "status_details":self.status_details,
-            "companions":self.companions, "custom":self.custom, "autosave":self.autosave, "terminal_visible":self.terminal_visible, "icons":icons.name(), "preview":preview,
+            "companions":self.companions, "custom":self.custom, "autosave":self.autosave, "terminal_visible":self.terminal_visible, "terminal_percent":self.terminal_percent, "icons":icons.name(), "preview":preview,
             "view":view, "zoom":zoom, "sidebar_width":self.sidebar_width,
             "preview_percent":self.preview_percent, "dual_percent":self.dual_percent,
             "navigation":self.navigation
@@ -159,6 +160,7 @@ impl Preferences {
             companions, custom:parse_pack(&v["custom"])?,
             autosave: if v.get("autosave").is_some() { boolean("autosave")? } else { false },
             terminal_visible: if v.get("terminal_visible").is_some() { boolean("terminal_visible")? } else { true },
+            terminal_percent: bounded("terminal_percent",28,20,60)?,
         }, icons, boolean("preview")?, view.to_owned(), zoom))
     }
 }

@@ -137,7 +137,7 @@ impl Layout {
 const NAV_KEYS: [KeyCode;9]=[KeyCode::Up,KeyCode::Down,KeyCode::PageUp,KeyCode::PageDown,KeyCode::Home,KeyCode::End,KeyCode::Right,KeyCode::Left,KeyCode::F(5)];
 const NAV_LABELS: [&str;9]=["Up","Down","Page up","Page down","First","Last","Expand / right","Collapse / left","Refresh"];
 #[derive(Clone,Copy)]
-enum Divider { Sidebar, Preview, Dual }
+enum Divider { Sidebar, Preview, Dual, Terminal }
 
 struct Tab {
     model: Model,
@@ -302,7 +302,7 @@ impl State {
     }
 
     fn panel_rows(&self,h:u16)->u16 {
-        if cfg!(feature = "native-ops") && self.prefs.terminal_visible && h>=16 {7.min(h/3)} else {0}
+        if cfg!(feature = "native-ops") && self.prefs.terminal_visible && h>=16 {percent(h,self.prefs.terminal_percent).clamp(5,h-9)} else {0}
     }
     #[cfg(feature = "native-ops")]
     pub fn terminal_running(&self)->bool {self.terminal_panel.running()}
@@ -316,6 +316,15 @@ impl State {
     fn draw_terminal(&self,out:&mut impl Write,h:u16,width:u16,model:&Model)->io::Result<()> {
         let rows=self.panel_rows(h);
         if rows>0 {self.terminal_panel.draw(out,h-rows,rows,width,&model.directory,&self.prefs)?;}
+        Ok(())
+    }
+    #[cfg(feature = "native-ops")]
+    fn terminal_button(&self,out:&mut impl Write,width:u16)->io::Result<()> {
+        const X:u16=63;
+        let label=if self.terminal_panel.running() {"[Terminal*]"}else if self.prefs.terminal_visible {"[Terminal -]"}else{"[Terminal +]"};
+        if width>=X+label.len() as u16 {
+            queue!(out,MoveTo(X,0),SetForegroundColor(self.prefs.accent),Print(label),SetForegroundColor(self.prefs.foreground))?;
+        }
         Ok(())
     }
     fn layout(&self, w: u16, h: u16) -> Layout {
@@ -433,12 +442,13 @@ impl State {
         Ok(())
     }
 
-    fn resize_drag(&mut self,divider:Divider,x:u16,width:u16) {
+    fn resize_drag(&mut self,divider:Divider,x:u16,width:u16,y:u16,height:u16) {
         let ratio=if width==0 {50}else{(u32::from(x.min(width))*100/u32::from(width)) as u16};
         match divider {
             Divider::Sidebar=>self.prefs.sidebar_width=x.clamp(12,48),
             Divider::Preview=>self.prefs.preview_percent=(100-ratio).clamp(18,45),
             Divider::Dual=>self.prefs.dual_percent=ratio.clamp(25,75),
+            Divider::Terminal=>if height>0 {self.prefs.terminal_percent=(u32::from(height.saturating_sub(y))*100/u32::from(height)).clamp(20,60) as u16;},
         }
     }
 
@@ -515,7 +525,7 @@ impl State {
                 Some(6)=>{model.set_view(!model.hidden,model.order,model.kind_filter,model.query.clone())?; self.pane_switched=true; self.expanded_tree=None;},
                 Some(7)=>self.zoom=self.zoom%3+1,
                 Some(8)=>self.choose_view(match self.view {View::Tree=>View::Grid,View::Grid=>View::List,View::List=>View::Tree}),
-                Some(9)=>{self.prefs.sidebar_width=19;self.prefs.preview_percent=33;self.prefs.dual_percent=50;},
+                Some(9)=>{self.prefs.sidebar_width=19;self.prefs.preview_percent=33;self.prefs.dual_percent=50;self.prefs.terminal_percent=28;},
                 _=>{self.prefs.terminal_visible=!self.prefs.terminal_visible; #[cfg(feature = "native-ops")] {self.terminal_panel.focused=false;}},
             }
         }
@@ -897,6 +907,8 @@ impl State {
             SetForegroundColor(self.prefs.accent),
             Print(super::clip("Terminal Tree  File  Edit  View  Go  Tools  Settings  Add-ons", usize::from(width))),
             SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
+        #[cfg(feature = "native-ops")]
+        self.terminal_button(&mut out,width)?;
         if h < 8 { queue!(out,ResetColor)?; return out.flush(); }
         let side = if self.active_right { "Right" } else { "Left" };
         let mode = if personal { "Personal" } else if writable { "Workspace" } else { "Read-only" };
@@ -954,6 +966,8 @@ impl State {
         let mut out = io::stdout().lock();
         queue!(out, MoveTo(0,0), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background), Clear(ClearType::All),
             SetForegroundColor(self.prefs.accent), Print(super::clip("Terminal Tree  File  Edit  View  Go  Tools  Settings  Add-ons", usize::from(l.width))), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
+        #[cfg(feature = "native-ops")]
+        self.terminal_button(&mut out,l.width)?;
         if h < 8 { queue!(out,ResetColor)?; return out.flush(); }
         let mode = if personal { "Personal" } else if writable { "Workspace" } else { "Read-only" };
         let path_width = if self.prefs.toolbar { draw_toolbar(&mut out,l.width,self.view,&self.prefs)? } else { l.width };
@@ -1159,6 +1173,24 @@ impl State {
         #[cfg(feature = "native-ops")]
         {
             if self.panel_rows(full_h)==0 {self.terminal_panel.focused=false;}
+            if let Event::Mouse(mouse)=&event {
+                if matches!(self.dragging,Some(Divider::Terminal)) {
+                    match mouse.kind {
+                        MouseEventKind::Drag(MouseButton::Left)=>self.resize_drag(Divider::Terminal,mouse.column,l.width,mouse.row,full_h),
+                        MouseEventKind::Up(MouseButton::Left)=>{self.resize_drag(Divider::Terminal,mouse.column,l.width,mouse.row,full_h);self.dragging=None;},
+                        _=>self.dragging=None,
+                    }
+                    return Ok(None);
+                }
+                if self.location.is_none() && mouse.kind==MouseEventKind::Down(MouseButton::Left) && mouse.modifiers==KeyModifiers::NONE {
+                    if mouse.row==0 && l.width>=75 && mouse.column>=63 && mouse.column<75 {
+                        self.prefs.terminal_visible=!self.prefs.terminal_visible;self.terminal_panel.focused=false;return Ok(None);
+                    }
+                    if self.panel_rows(full_h)>0 && mouse.row==h && l.width>=84 && mouse.column>=l.width-8 && mouse.column<l.width {
+                        self.dragging=Some(Divider::Terminal);return Ok(None);
+                    }
+                }
+            }
             if self.location.is_none() {
                 if let Event::Key(k)=&event {
                     if k.kind==KeyEventKind::Press && k.modifiers==KeyModifiers::ALT {
@@ -1301,8 +1333,8 @@ impl State {
         if let Event::Mouse(mouse)=&event {
             if let Some(divider)=self.dragging {
                 match mouse.kind {
-                    MouseEventKind::Drag(MouseButton::Left)=>self.resize_drag(divider,mouse.column,l.width),
-                    MouseEventKind::Up(MouseButton::Left)=>{self.resize_drag(divider,mouse.column,l.width);self.dragging=None;},
+                    MouseEventKind::Drag(MouseButton::Left)=>self.resize_drag(divider,mouse.column,l.width,mouse.row,full_h),
+                    MouseEventKind::Up(MouseButton::Left)=>{self.resize_drag(divider,mouse.column,l.width,mouse.row,full_h);self.dragging=None;},
                     _=>self.dragging=None,
                 }
                 return Ok(None);
