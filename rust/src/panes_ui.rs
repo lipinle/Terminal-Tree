@@ -439,7 +439,7 @@ fn find_location(model: &mut TreeModel, content: bool) -> io::Result<()> {
     Ok(())
 }
 
-fn pane_help(keymap: &Keymap, snapshot_enabled: bool) -> io::Result<bool> {
+fn pane_help(keymap: &Keymap, snapshot_enabled: bool, preferences_enabled: bool) -> io::Result<bool> {
     let mut lines = vec![
         "Navigation: use the configured bindings below.".into(),
         keymap.summary(),
@@ -455,6 +455,9 @@ fn pane_help(keymap: &Keymap, snapshot_enabled: bool) -> io::Result<bool> {
     ];
     if snapshot_enabled {
         lines.push("S: explicitly export a new bookmark snapshot; never overwrite.".into());
+    }
+    if preferences_enabled {
+        lines.push("T: explicitly save current theme and navigation keys to the private preferences directory.".into());
     }
     crate::page_with_interrupt("Pane help", &lines, true)
 }
@@ -559,13 +562,28 @@ fn export_session(output: Option<&Path>, marks: &Bookmarks) -> io::Result<()> {
 pub(crate) fn browse(
     left: &Path,
     right: &Path,
-    keymap: &Keymap,
+    keymap: Option<Keymap>,
+    theme: Option<Theme>,
+    preferences: Option<&Path>,
     snapshot_in: Option<&Path>,
     snapshot_out: Option<&Path>,
 ) -> io::Result<()> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return Err(io::Error::other("Interactive terminal required"));
     }
+    #[cfg(not(feature = "native-ops"))]
+    if preferences.is_some() {
+        return Err(io::Error::other("pane preferences require native Linux support"));
+    }
+    #[cfg(feature = "native-ops")]
+    let store = preferences.map(super::settings::Store::new).transpose()?;
+    #[cfg(feature = "native-ops")]
+    let saved = store.as_ref().map(|store| store.load_panes()).transpose()?.flatten();
+    #[cfg(not(feature = "native-ops"))]
+    let saved: Option<(Theme, Keymap)> = None;
+    let (saved_theme, saved_keys) = saved.unwrap_or_default();
+    let keymap = keymap.unwrap_or(saved_keys);
+    let mut theme = theme.unwrap_or(saved_theme);
     let mut marks = load_session(snapshot_in, snapshot_out)?;
     let mut layout = Layout::new(tree(left)?, tree(right)?, TAB_LIMIT)
         .ok_or_else(|| io::Error::other("invalid tab limit"))?;
@@ -576,7 +594,6 @@ pub(crate) fn browse(
         "Read-only panes. File mutations disabled."
     };
     let mut message = String::from(idle);
-    let mut theme = Theme::default();
     loop {
         let (width, height) = terminal::size()?;
         let regions = draw(
@@ -605,7 +622,7 @@ pub(crate) fn browse(
                 }
                 match key.code {
                     KeyCode::F(1) if key.modifiers == KeyModifiers::NONE => {
-                        match pane_help(keymap, snapshot_out.is_some()) {
+                        match pane_help(&keymap, snapshot_out.is_some(), preferences.is_some()) {
                             Ok(true) => break,
                             Ok(false) => Ok(()),
                             Err(error) => Err(error),
@@ -658,6 +675,20 @@ pub(crate) fn browse(
                                 continue;
                             }
                             Err(error) => Err(error),
+                        }
+                    }
+                    #[cfg(feature = "native-ops")]
+                    KeyCode::Char('T') if key.kind == KeyEventKind::Press => {
+                        if let Some(store) = &store {
+                            match store.save_panes(theme, &keymap) {
+                                Ok(()) => {
+                                    message = String::from("Pane preferences saved");
+                                    continue;
+                                }
+                                Err(error) => Err(error),
+                            }
+                        } else {
+                            Err(io::Error::other("use --preferences DIR to enable explicit saves"))
                         }
                     }
                     KeyCode::Char('t') => {

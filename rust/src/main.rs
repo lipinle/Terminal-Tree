@@ -1160,6 +1160,8 @@ fn run() -> io::Result<()> {
             use terminal_tree::keymap::Keymap;
             let mut paths = Vec::new();
             let mut keymap = None;
+            let mut theme = None;
+            let mut preferences = None;
             let mut snapshot_in = None;
             let mut snapshot_out = None;
             while let Some(arg) = args.next() {
@@ -1177,6 +1179,19 @@ fn run() -> io::Result<()> {
                             format!("invalid navigation keys: {error:?}"),
                         )
                     })?);
+                } else if arg == "--theme" {
+                    if theme.is_some() {
+                        return Err(io::Error::other("duplicate --theme"));
+                    }
+                    theme = Some(args.next().and_then(|value| value.into_string().ok())
+                        .and_then(|value| terminal_tree::theme::Theme::parse(&value))
+                        .ok_or_else(|| io::Error::other("theme must be terminal, dark, light or monochrome"))?);
+                } else if arg == "--preferences" {
+                    if preferences.is_some() {
+                        return Err(io::Error::other("duplicate --preferences"));
+                    }
+                    preferences = Some(path_arg(Some(args.next().ok_or_else(||
+                        io::Error::other("private existing preferences directory required"))?))?);
                 } else if arg == "--bookmarks-in" || arg == "--bookmarks-out" {
                     let slot = if arg == "--bookmarks-in" {
                         &mut snapshot_in
@@ -1205,7 +1220,9 @@ fn run() -> io::Result<()> {
             panes_ui::browse(
                 &left,
                 &right,
-                &keymap.unwrap_or_default(),
+                keymap,
+                theme,
+                preferences.as_deref(),
                 snapshot_in.as_deref(),
                 snapshot_out.as_deref(),
             )
@@ -1344,7 +1361,7 @@ fn run() -> io::Result<()> {
             Ok(())
         }
         _ => {
-            eprintln!("Experimental read-only Rust port\nUsage: terminal-tree --list [-a] [PATH] | --browse [PATH] | --tree [PATH] | --panes [LEFT] [RIGHT] [--keys SPEC] [--bookmarks-in PATH] [--bookmarks-out PATH] | --find PATH QUERY [--content] [--hidden] [--depth N] | --archive-list PATH | --archive-layout PATH [--portable] | --archive-member PATH NAME --stdout | --archive-build [--gzip] --stdout NAME PATH ... | --suggest-name DIRECTORY NAME | --image-preview PATH | --rename-plan DIRECTORY NEEDLE REPLACEMENT NAME... | --scan-count PATH [REPEATS] | --version | --edition");
+            eprintln!("Experimental read-only Rust port\nUsage: terminal-tree --list [-a] [PATH] | --browse [PATH] | --tree [PATH] | --panes [LEFT] [RIGHT] [--keys SPEC] [--theme NAME] [--preferences DIR (native)] [--bookmarks-in PATH] [--bookmarks-out PATH] | --find PATH QUERY [--content] [--hidden] [--depth N] | --archive-list PATH | --archive-layout PATH [--portable] | --archive-member PATH NAME --stdout | --archive-build [--gzip] --stdout NAME PATH ... | --suggest-name DIRECTORY NAME | --image-preview PATH | --rename-plan DIRECTORY NEEDLE REPLACEMENT NAME... | --scan-count PATH [REPEATS] | --version | --edition");
             Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "unsupported or missing command",
