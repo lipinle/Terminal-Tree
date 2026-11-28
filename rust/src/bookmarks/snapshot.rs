@@ -164,6 +164,18 @@ pub fn load(path: &Path) -> io::Result<Bookmarks> {
 pub fn save_new(path: &Path, marks: &Bookmarks) -> io::Result<()> {
     let (parent, name) = parts(path)?;
     let dir = private_dir(parent)?;
+    // Refuse an observed existing name before creating a temporary file.
+    // The atomic NOREPLACE rename below remains the authoritative gate.
+    match rx::statat(&dir, name, rx::AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "bookmark snapshot already exists",
+            ));
+        }
+        Err(error) if error == rustix::io::Errno::NOENT => (),
+        Err(error) => return Err(error.into()),
+    }
     let mut random = [0u8; 16];
     File::open("/dev/urandom")?.read_exact(&mut random)?;
     let suffix = random

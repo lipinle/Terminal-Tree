@@ -897,6 +897,8 @@ fn run() -> io::Result<()> {
             use terminal_tree::keymap::Keymap;
             let mut paths = Vec::new();
             let mut keymap = None;
+            let mut snapshot_in = None;
+            let mut snapshot_out = None;
             while let Some(arg) = args.next() {
                 if arg == "--keys" {
                     if keymap.is_some() {
@@ -912,6 +914,19 @@ fn run() -> io::Result<()> {
                             format!("invalid navigation keys: {error:?}"),
                         )
                     })?);
+                } else if arg == "--bookmarks-in" || arg == "--bookmarks-out" {
+                    let slot = if arg == "--bookmarks-in" {
+                        &mut snapshot_in
+                    } else {
+                        &mut snapshot_out
+                    };
+                    if slot.is_some() {
+                        return Err(io::Error::other("duplicate bookmark snapshot option"));
+                    }
+                    let path = args
+                        .next()
+                        .ok_or_else(|| io::Error::other("bookmark snapshot path required"))?;
+                    *slot = Some(path_arg(Some(path))?);
                 } else if paths.len() < 2 {
                     paths.push(arg);
                 } else {
@@ -924,7 +939,13 @@ fn run() -> io::Result<()> {
                 Some(path) => path_arg(Some(path))?,
                 None => left.clone(),
             };
-            panes_ui::browse(&left, &right, &keymap.unwrap_or_default())
+            panes_ui::browse(
+                &left,
+                &right,
+                &keymap.unwrap_or_default(),
+                snapshot_in.as_deref(),
+                snapshot_out.as_deref(),
+            )
         }
         Some("--tree") => {
             let path = path_arg(args.next())?;
@@ -1060,7 +1081,7 @@ fn run() -> io::Result<()> {
             Ok(())
         }
         _ => {
-            eprintln!("Experimental read-only Rust port\nUsage: terminal-tree --list [-a] [PATH] | --browse [PATH] | --tree [PATH] | --panes [LEFT] [RIGHT] [--keys SPEC] | --find PATH QUERY [--content] [--hidden] [--depth N] | --scan-count PATH [REPEATS] | --version | --edition");
+            eprintln!("Experimental read-only Rust port\nUsage: terminal-tree --list [-a] [PATH] | --browse [PATH] | --tree [PATH] | --panes [LEFT] [RIGHT] [--keys SPEC] [--bookmarks-in PATH] [--bookmarks-out PATH] | --find PATH QUERY [--content] [--hidden] [--depth N] | --scan-count PATH [REPEATS] | --version | --edition");
             Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "unsupported or missing command",
