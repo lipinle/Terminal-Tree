@@ -132,12 +132,13 @@ impl State {
                                 terminal_tree::preview::Mode::Auto
                             },
                             markdown: self.preview_mode == 0
-                                && e.path.extension().and_then(|x| x.to_str()).is_some_and(
-                                    |x| {
+                                && e.path
+                                    .extension()
+                                    .and_then(|x| x.to_str())
+                                    .is_some_and(|x| {
                                         x.eq_ignore_ascii_case("md")
                                             || x.eq_ignore_ascii_case("markdown")
-                                    },
-                                ),
+                                    }),
                             width: usize::from(width),
                         });
                     vec![e.name.clone(), "Loading content preview...".into()]

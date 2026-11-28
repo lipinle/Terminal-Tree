@@ -194,10 +194,7 @@ type RowMetadata = (Option<u64>, Option<std::time::SystemTime>);
 
 #[derive(Default)]
 pub(super) struct MetadataCache {
-    entries: std::collections::HashMap<
-        std::path::PathBuf,
-        (std::time::Instant, RowMetadata),
-    >,
+    entries: std::collections::HashMap<std::path::PathBuf, (std::time::Instant, RowMetadata)>,
 }
 
 impl MetadataCache {

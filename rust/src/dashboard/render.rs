@@ -1,7 +1,7 @@
 //! Dashboard rendering and terminal status presentation.
 use super::file_rows::{
-    breadcrumb, entry_type, human_size, list_heading, modified_utc, pad_cell,
-    row_text, table_columns, RowPresentation,
+    breadcrumb, entry_type, human_size, list_heading, modified_utc, pad_cell, row_text,
+    table_columns, RowPresentation,
 };
 use super::geometry::{dual_split, Layout};
 use super::markdown::PreviewStyle;
@@ -12,9 +12,7 @@ use crossterm::style::Color;
 use crossterm::{
     cursor::MoveTo,
     queue,
-    style::{
-        Attribute, Print, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor,
-    },
+    style::{Attribute, Print, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor},
     terminal::{self, Clear, ClearType},
 };
 use std::io::{self, Write};

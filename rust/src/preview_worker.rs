@@ -103,7 +103,6 @@ impl Queue {
     }
 }
 
-
 pub struct ContentRequest {
     pub path: PathBuf,
     pub name: String,
@@ -151,7 +150,9 @@ impl ContentQueue {
                     name: "Content preview".into(),
                     markdown: false,
                     width: 0,
-                    result: Err(io::Error::other("content preview worker stopped unexpectedly")),
+                    result: Err(io::Error::other(
+                        "content preview worker stopped unexpectedly",
+                    )),
                 }));
             }
         }
@@ -170,8 +171,7 @@ impl ContentQueue {
                     name: req.name,
                     markdown: req.markdown,
                     width: req.width,
-                })
-            {
+                }) {
                 Ok(handle) => self.active = Some((id, handle)),
                 Err(error) => {
                     return Some(ContentCompleted {

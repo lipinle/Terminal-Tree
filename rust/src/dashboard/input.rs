@@ -1015,20 +1015,16 @@ mod tests {
     fn terminal_compatible_view_keys_and_reset() {
         let mut state = State::new(None);
         for (digit, view) in [('1', View::Grid), ('2', View::List), ('3', View::Tree)] {
-            assert!(state.handle_view_shortcut(KeyEvent::new(
-                KeyCode::Char(digit),
-                KeyModifiers::NONE
-            )));
+            assert!(
+                state.handle_view_shortcut(KeyEvent::new(KeyCode::Char(digit), KeyModifiers::NONE))
+            );
             assert_eq!(state.view, view);
         }
         state.zoom = 3;
         state.prefs.sidebar = false;
         state.dual = true;
         state.dragging = Some(Divider::Dual);
-        assert!(state.handle_view_shortcut(KeyEvent::new(
-            KeyCode::Char('0'),
-            KeyModifiers::NONE
-        )));
+        assert!(state.handle_view_shortcut(KeyEvent::new(KeyCode::Char('0'), KeyModifiers::NONE)));
         assert_eq!(state.zoom, 1);
         assert_eq!(state.view, View::Tree);
         assert!(!state.dual);
