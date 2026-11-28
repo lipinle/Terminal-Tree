@@ -995,3 +995,96 @@ impl State {
         Ok(Some(Event::Key(key)))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dashboard::tests::Fixture;
+
+    #[test]
+    fn modified_write_shortcuts_remain_scoped() {
+        let f = Fixture::new();
+        let mut model = Model::new(f.0.clone()).unwrap();
+        let mut state = State::new(None);
+        let l = Layout::new(120, 26, true);
+        let cut = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL);
+        assert_eq!(
+            state.handle_key_input(cut, &mut model, l, false).unwrap(),
+            None
+        );
+        assert_eq!(
+            state.handle_key_input(cut, &mut model, l, true).unwrap(),
+            Some(Event::Key(KeyEvent::new(
+                KeyCode::Char('x'),
+                KeyModifiers::NONE
+            )))
+        );
+        let delete = KeyEvent::new(KeyCode::Delete, KeyModifiers::ALT);
+        assert_eq!(
+            state.handle_key_input(delete, &mut model, l, true).unwrap(),
+            None
+        );
+        let release = KeyEvent::new_with_kind(
+            KeyCode::Delete,
+            KeyModifiers::NONE,
+            KeyEventKind::Release,
+        );
+        assert_eq!(
+            state.handle_key_input(release, &mut model, l, true).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn location_consumes_keys_until_cancelled() {
+        let f = Fixture::new();
+        let mut model = Model::new(f.0.clone()).unwrap();
+        let mut state = State::new(None);
+        let l = Layout::new(120, 26, true);
+        state.location = Some(String::new());
+        let key = Event::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+        assert!(state.handle_location_input(&key, &mut model, l).unwrap());
+        assert_eq!(state.location.as_deref(), Some("q"));
+        let cancel = Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(state.handle_location_input(&cancel, &mut model, l).unwrap());
+        assert!(state.location.is_none());
+        assert!(!state.handle_location_input(&key, &mut model, l).unwrap());
+        assert_eq!(model.directory, f.0);
+    }
+
+    #[test]
+    fn mouse_selection_respects_bounds_and_write_permission() {
+        let f = Fixture::new();
+        std::fs::write(f.0.join("first"), b"a").unwrap();
+        std::fs::write(f.0.join("second"), b"b").unwrap();
+        let mut model = Model::new(f.0.clone()).unwrap();
+        let mut state = State::new(None);
+        let l = Layout::new(120, 26, true);
+        let mut click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: u16::MAX,
+            row: u16::MAX,
+            modifiers: KeyModifiers::CONTROL,
+        };
+        assert_eq!(
+            state.handle_mouse_input(click, &mut model, 26, l, true).unwrap(),
+            None
+        );
+        assert_eq!(model.selected, 0);
+        click.column = l.first();
+        click.row = 5;
+        assert_eq!(
+            state.handle_mouse_input(click, &mut model, 26, l, false).unwrap(),
+            None
+        );
+        assert_eq!(model.selected, 1);
+        assert_eq!(
+            state.handle_mouse_input(click, &mut model, 26, l, true).unwrap(),
+            Some(Event::Key(KeyEvent::new(
+                KeyCode::Char(' '),
+                KeyModifiers::NONE
+            )))
+        );
+        assert_eq!(std::fs::read(f.0.join("second")).unwrap(), b"b");
+    }
+}

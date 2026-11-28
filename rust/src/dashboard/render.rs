@@ -935,3 +935,59 @@ fn draw_column(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dashboard::tests::Fixture;
+
+    #[test]
+    fn file_rows_render_visible_entries_and_marks() {
+        let f = Fixture::new();
+        std::fs::write(f.0.join("alpha.txt"), b"a").unwrap();
+        std::fs::write(f.0.join("beta.txt"), b"b").unwrap();
+        let model = Model::new(f.0.clone()).unwrap();
+        let mut state = State::new(None);
+        state.view = View::List;
+        let l = Layout::new(120, 26, true);
+        let cells = Cells::new(l.end() - l.first(), l.capacity(), state.view, state.zoom);
+        let mut out = Vec::new();
+        state.draw_file_rows(&mut out, &model, l, cells, 0..1, &|_| true).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("alpha.txt"));
+        assert!(text.contains("[x]"));
+        assert!(!text.contains("beta.txt"));
+    }
+
+    #[test]
+    fn preview_rows_respect_scroll_and_hidden_panel() {
+        let mut state = State::new(None);
+        state.preview_lines = vec!["first-marker".into(), "second-marker".into()];
+        state.preview_scroll = 1;
+        let l = Layout::new(120, 26, true);
+        let mut out = Vec::new();
+        state.draw_preview_rows(&mut out, l, 1).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("second-marker"));
+        assert!(!text.contains("first-marker"));
+        let mut out = Vec::new();
+        state.draw_preview_rows(&mut out, Layout::new(45, 26, true), 1).unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn sidebar_respects_hidden_panel() {
+        let f = Fixture::new();
+        let model = Model::new(f.0.clone()).unwrap();
+        let mut state = State::new(None);
+        state.places = vec![("fixture-marker".into(), Some(f.0.clone()))];
+        state.side_cursor = 0;
+        state.side_top = 0;
+        let mut out = Vec::new();
+        state.draw_sidebar(&mut out, &model, 26, Layout::new(120, 26, true)).unwrap();
+        assert!(String::from_utf8(out).unwrap().contains("fixture-marker"));
+        let mut out = Vec::new();
+        state.draw_sidebar(&mut out, &model, 26, Layout::new(45, 26, true)).unwrap();
+        assert!(out.is_empty());
+    }
+}

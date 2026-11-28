@@ -131,3 +131,25 @@ fn layout_is_responsive_and_only_file_rows_map_to_actions() {
         }
     }
 }
+
+pub(super) struct Fixture(pub(super) PathBuf);
+
+impl Fixture {
+    pub(super) fn new() -> Self {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "tt-dashboard-test-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&path).unwrap();
+        Self(path)
+    }
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
