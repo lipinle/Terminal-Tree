@@ -148,18 +148,38 @@ pub fn run<T: Send>(
                     )?;
                     let (summary, item, bytes, footer) = progress_rows(h);
                     if summary {
-                        queue!(out,MoveTo(0,1),Print(super::clip(&format!("{done}/{total} items processed | {phase}"),width)))?;
+                        queue!(
+                            out,
+                            MoveTo(0, 1),
+                            Print(super::clip(
+                                &format!("{done}/{total} items processed | {phase}"),
+                                width
+                            ))
+                        )?;
                     }
                     if item {
-                        queue!(out,MoveTo(0,2),Print(super::clip(&label,width)))?;
+                        queue!(out, MoveTo(0, 2), Print(super::clip(&label, width)))?;
                     }
                     if bytes {
                         queue!(out,MoveTo(0,3),Print(super::clip(&format!("Current item: {copied} logical bytes copied (not yet committed)"),width)))?;
                     }
                     if let Some(row) = footer {
-                        queue!(out,MoveTo(0,row),Print(super::clip(if p.cancel.load(Ordering::Acquire){
-                            if committing{"Cancel requested; finishing committed item safely"}else{"Cancel requested; waiting for safe checkpoint"}
-                        }else{"Esc / Ctrl+C: request cancellation; commit cannot be interrupted"},width)))?;
+                        queue!(
+                            out,
+                            MoveTo(0, row),
+                            Print(super::clip(
+                                if p.cancel.load(Ordering::Acquire) {
+                                    if committing {
+                                        "Cancel requested; finishing committed item safely"
+                                    } else {
+                                        "Cancel requested; waiting for safe checkpoint"
+                                    }
+                                } else {
+                                    "Esc / Ctrl+C: request cancellation; commit cannot be interrupted"
+                                },
+                                width
+                            ))
+                        )?;
                     }
                     out.flush()?;
                     drop(out);
