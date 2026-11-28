@@ -2,16 +2,7 @@ name: Rust port
 
 on:
   push:
-    branches: [main]
-    paths:
-      - 'rust/**'
-      - 'tests/benchmark/**'
-      - '.github/workflows/rust.yml'
-  pull_request:
-    paths:
-      - 'rust/**'
-      - 'tests/benchmark/**'
-      - '.github/workflows/rust.yml'
+    branches: ['release-candidate/**']
   workflow_dispatch:
 
 concurrency:

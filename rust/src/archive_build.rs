@@ -7,6 +7,9 @@ const BLOCK: usize = 512;
 const MAX_BYTES: usize = 64 * 1024 * 1024;
 const MAX_ENTRIES: usize = 4096;
 
+#[cfg(all(feature = "native-ops", target_os = "linux"))]
+pub mod native;
+
 pub struct Entry<'a> {
     pub name: &'a str,
     pub kind: Kind,
@@ -15,6 +18,19 @@ pub struct Entry<'a> {
 
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message)
+}
+
+fn extend_budget(total: usize, len: usize) -> io::Result<usize> {
+    let padded = len
+        .checked_add(BLOCK - 1)
+        .ok_or_else(|| invalid("USTAR byte budget exceeded"))?
+        / BLOCK
+        * BLOCK;
+    total
+        .checked_add(BLOCK)
+        .and_then(|n| n.checked_add(padded))
+        .filter(|&n| n <= MAX_BYTES)
+        .ok_or_else(|| invalid("USTAR byte budget exceeded"))
 }
 
 /// Construct a complete archive using a deterministic, minimal metadata profile.
@@ -34,13 +50,7 @@ pub fn build(entries: &[Entry<'_>]) -> io::Result<Vec<u8>> {
         {
             return Err(invalid("invalid USTAR build entry"));
         }
-        let padded = entry.data.len().checked_add(BLOCK - 1)
-            .ok_or_else(|| invalid("USTAR byte budget exceeded"))?
-            / BLOCK * BLOCK;
-        total = total.checked_add(BLOCK)
-            .and_then(|n| n.checked_add(padded))
-            .filter(|&n| n <= MAX_BYTES)
-            .ok_or_else(|| invalid("USTAR byte budget exceeded"))?;
+        total = extend_budget(total, entry.data.len())?;
     }
     let mut output = Vec::with_capacity(total);
     for entry in entries {
@@ -76,13 +86,21 @@ mod tests {
     use super::*;
 
     fn file<'a>(name: &'a str, data: &'a [u8]) -> Entry<'a> {
-        Entry { name, kind: Kind::File, data }
+        Entry {
+            name,
+            kind: Kind::File,
+            data,
+        }
     }
 
     #[test]
     fn deterministic_round_trip_preserves_payload_and_padding() {
         let entries = [
-            Entry { name: "folder/", kind: Kind::Directory, data: b"" },
+            Entry {
+                name: "folder/",
+                kind: Kind::Directory,
+                data: b"",
+            },
             file("folder/file", b"hello"),
             file("empty", b""),
         ];
@@ -100,13 +118,24 @@ mod tests {
 
     #[test]
     fn refuses_invalid_names_collisions_and_limits() {
-        for name in ["", "../escape", "/absolute", "a//b", "bad\0name", "a/.", "a/"] {
+        for name in [
+            "",
+            "../escape",
+            "/absolute",
+            "a//b",
+            "bad\0name",
+            "a/.",
+            "a/",
+        ] {
             assert!(build(&[file(name, b"")]).is_err());
         }
         assert!(build(&[file(&"x".repeat(101), b"")]).is_err());
         assert!(build(&[file("a", b""), file("a", b"")]).is_err());
         assert!(build(&[file("a", b""), file("a/b", b"")]).is_err());
-        let data = vec![0; MAX_BYTES];
-        assert!(build(&[file("large", &data)]).is_err());
+        assert!(extend_budget(2 * BLOCK, MAX_BYTES).is_err());
+        assert_eq!(
+            extend_budget(2 * BLOCK, MAX_BYTES - 3 * BLOCK).unwrap(),
+            MAX_BYTES
+        );
     }
 }

@@ -13,9 +13,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use xattr::FileExt;
 
+mod archive_extract;
+mod cross_device;
 mod manifest;
 mod policy;
 mod trash;
+pub use cross_device::FileTransferObservation;
 use manifest::{
     copy_tree, fd_path, manifest, manifest_with, snapshot, Identity, Manifest, Snapshot,
 };
@@ -322,6 +325,11 @@ impl Engine {
         require(
             dir_id(&open_dir(&self.root)?)? == self.root_identity,
             "workspace replaced",
+        )?;
+        let raw = path.as_os_str().as_bytes();
+        require(
+            !raw.ends_with(b"/") && !raw.ends_with(b"/."),
+            "file path must end in a filename",
         )?;
         let name = path.file_name().ok_or_else(|| fail("missing filename"))?;
         one_name(name)?;

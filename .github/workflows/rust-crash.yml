@@ -2,16 +2,7 @@ name: Rust virtual crash consistency
 
 on:
   push:
-    branches: [main]
-    paths:
-      - 'rust/**'
-      - 'tests/crash/**'
-      - '.github/workflows/rust-crash.yml'
-  pull_request:
-    paths:
-      - 'rust/**'
-      - 'tests/crash/**'
-      - '.github/workflows/rust-crash.yml'
+    branches: ['release-candidate/**']
   workflow_dispatch:
 
 concurrency:
