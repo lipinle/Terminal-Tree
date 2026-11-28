@@ -79,6 +79,7 @@ fn draw(
     width: u16,
     height: u16,
     theme: Theme,
+    snapshot_enabled: bool,
 ) -> io::Result<Option<[Region; 2]>> {
     let mut out = io::stdout().lock();
     let limit = usize::from(width.saturating_sub(1));
@@ -191,7 +192,11 @@ fn draw(
         Print(clip(message, limit)),
         MoveTo(0, height - 1),
         Print(clip(
-            "Tab focus | n new | [ ] switch | w close | b/B bookmarks | ? keys | t theme | q exit",
+            if snapshot_enabled {
+                "Tab focus | n new | [ ] switch | w close | b/B bookmarks | S export snapshot | ? keys | t theme | q exit"
+            } else {
+                "Tab focus | n new | [ ] switch | w close | b/B bookmarks | ? keys | t theme | q exit"
+            },
             limit
         )),
         ResetColor
@@ -349,19 +354,74 @@ fn open_location(model: &mut TreeModel, marks: &Bookmarks, index: usize) -> io::
     Ok(())
 }
 
-pub(crate) fn browse(left: &Path, right: &Path, keymap: &Keymap) -> io::Result<()> {
+fn load_session(input: Option<&Path>, output: Option<&Path>) -> io::Result<Bookmarks> {
+    #[cfg(all(feature = "native-ops", target_os = "linux"))]
+    {
+        let _ = output;
+        match input {
+            Some(path) => terminal_tree::bookmarks::snapshot::load(path),
+            None => Ok(Bookmarks::default()),
+        }
+    }
+    #[cfg(not(all(feature = "native-ops", target_os = "linux")))]
+    {
+        if input.is_some() || output.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "bookmark snapshots require the native Linux build",
+            ));
+        }
+        Ok(Bookmarks::default())
+    }
+}
+
+fn export_session(output: Option<&Path>, marks: &Bookmarks) -> io::Result<()> {
+    let path = output.ok_or_else(|| io::Error::other("set --bookmarks-out to export"))?;
+    #[cfg(all(feature = "native-ops", target_os = "linux"))]
+    {
+        terminal_tree::bookmarks::snapshot::save_new(path, marks)
+    }
+    #[cfg(not(all(feature = "native-ops", target_os = "linux")))]
+    {
+        let _ = (path, marks);
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "bookmark snapshots require the native Linux build",
+        ))
+    }
+}
+
+pub(crate) fn browse(
+    left: &Path,
+    right: &Path,
+    keymap: &Keymap,
+    snapshot_in: Option<&Path>,
+    snapshot_out: Option<&Path>,
+) -> io::Result<()> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return Err(io::Error::other("Interactive terminal required"));
     }
+    let mut marks = load_session(snapshot_in, snapshot_out)?;
     let mut layout = Layout::new(tree(left)?, tree(right)?, TAB_LIMIT)
         .ok_or_else(|| io::Error::other("invalid tab limit"))?;
     let _terminal = Terminal::enter()?;
-    let mut message = String::from("Read-only panes. File mutations disabled.");
+    let idle = if snapshot_out.is_some() {
+        "Read-only panes. S exports bookmark snapshot only."
+    } else {
+        "Read-only panes. File mutations disabled."
+    };
+    let mut message = String::from(idle);
     let mut theme = Theme::default();
-    let mut marks = Bookmarks::default();
     loop {
         let (width, height) = terminal::size()?;
-        let regions = draw(&mut layout, &message, width, height, theme)?;
+        let regions = draw(
+            &mut layout,
+            &message,
+            width,
+            height,
+            theme,
+            snapshot_out.is_some(),
+        )?;
         let result = match event::read()? {
             Event::Key(key) if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
                 if key.code == KeyCode::Esc
@@ -402,6 +462,15 @@ pub(crate) fn browse(left: &Path, right: &Path, keymap: &Keymap) -> io::Result<(
                                     open_location(layout.focused_mut(), &marks, index)
                                 }
                             }
+                        }
+                    }
+                    KeyCode::Char('S') if key.kind == KeyEventKind::Press => {
+                        match export_session(snapshot_out, &marks) {
+                            Ok(()) => {
+                                message = String::from("Bookmark snapshot exported");
+                                continue;
+                            }
+                            Err(error) => Err(error),
                         }
                     }
                     KeyCode::Char('t') => {
@@ -458,7 +527,7 @@ pub(crate) fn browse(left: &Path, right: &Path, keymap: &Keymap) -> io::Result<(
             _ => Ok(()),
         };
         message = match result {
-            Ok(()) => String::from("Read-only panes. File mutations disabled."),
+            Ok(()) => String::from(idle),
             Err(error) => display_name(OsStr::new(&error.to_string())),
         };
     }

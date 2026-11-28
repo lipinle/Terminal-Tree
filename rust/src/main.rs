@@ -796,10 +796,12 @@ fn find(mut args: impl Iterator<Item = OsString>) -> io::Result<()> {
         return Err(invalid("search query must not be empty"));
     }
     let mut hidden = false;
+    let mut content = false;
     let mut depth = None;
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--hidden") if !hidden => hidden = true,
+            Some("--content") if !content => content = true,
             Some("--depth") if depth.is_none() => {
                 depth = Some(
                     args.next()
@@ -816,8 +818,47 @@ fn find(mut args: impl Iterator<Item = OsString>) -> io::Result<()> {
         depth: depth.unwrap_or(8),
         matches: 4096,
     };
+    let cancel = AtomicBool::new(false);
+    if content {
+        #[cfg(all(feature = "native-ops", target_os = "linux"))]
+        {
+            use terminal_tree::search::content::{text, ContentLimits};
+
+            let report = text(
+                &root,
+                &query,
+                hidden,
+                ContentLimits {
+                    traversal: limits,
+                    file_bytes: 1_048_576,
+                    total_bytes: 64 * 1_048_576,
+                },
+                &cancel,
+            )?;
+            let mut out = io::BufWriter::new(io::stdout().lock());
+            for path in &report.matches {
+                writeln!(out, "{}", display_name(path.as_os_str()))?;
+            }
+            out.flush()?;
+            eprintln!(
+                "Content search: {} matches; {} files read; {} bytes read; skipped: {} large, {} binary/non-UTF-8, {} nonregular",
+                report.matches.len(),
+                report.files_read,
+                report.bytes_read,
+                report.skipped_large,
+                report.skipped_binary,
+                report.skipped_nonregular
+            );
+            return Ok(());
+        }
+        #[cfg(not(all(feature = "native-ops", target_os = "linux")))]
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "content search requires the native Linux build",
+        ));
+    }
     // Produce no result lines if traversal fails or exhausts a budget.
-    let entries = filenames(&root, &query, hidden, limits, &AtomicBool::new(false))?;
+    let entries = filenames(&root, &query, hidden, limits, &cancel)?;
     let mut out = io::BufWriter::new(io::stdout().lock());
     for entry in entries {
         writeln!(out, "{}", display_name(entry.path.as_os_str()))?;
@@ -856,6 +897,8 @@ fn run() -> io::Result<()> {
             use terminal_tree::keymap::Keymap;
             let mut paths = Vec::new();
             let mut keymap = None;
+            let mut snapshot_in = None;
+            let mut snapshot_out = None;
             while let Some(arg) = args.next() {
                 if arg == "--keys" {
                     if keymap.is_some() {
@@ -871,6 +914,19 @@ fn run() -> io::Result<()> {
                             format!("invalid navigation keys: {error:?}"),
                         )
                     })?);
+                } else if arg == "--bookmarks-in" || arg == "--bookmarks-out" {
+                    let slot = if arg == "--bookmarks-in" {
+                        &mut snapshot_in
+                    } else {
+                        &mut snapshot_out
+                    };
+                    if slot.is_some() {
+                        return Err(io::Error::other("duplicate bookmark snapshot option"));
+                    }
+                    let path = args
+                        .next()
+                        .ok_or_else(|| io::Error::other("bookmark snapshot path required"))?;
+                    *slot = Some(path_arg(Some(path))?);
                 } else if paths.len() < 2 {
                     paths.push(arg);
                 } else {
@@ -883,7 +939,13 @@ fn run() -> io::Result<()> {
                 Some(path) => path_arg(Some(path))?,
                 None => left.clone(),
             };
-            panes_ui::browse(&left, &right, &keymap.unwrap_or_default())
+            panes_ui::browse(
+                &left,
+                &right,
+                &keymap.unwrap_or_default(),
+                snapshot_in.as_deref(),
+                snapshot_out.as_deref(),
+            )
         }
         Some("--tree") => {
             let path = path_arg(args.next())?;
@@ -1019,7 +1081,7 @@ fn run() -> io::Result<()> {
             Ok(())
         }
         _ => {
-            eprintln!("Experimental read-only Rust port\nUsage: terminal-tree --list [-a] [PATH] | --browse [PATH] | --tree [PATH] | --panes [LEFT] [RIGHT] [--keys SPEC] | --find PATH QUERY [--hidden] [--depth N] | --scan-count PATH [REPEATS] | --version | --edition");
+            eprintln!("Experimental read-only Rust port\nUsage: terminal-tree --list [-a] [PATH] | --browse [PATH] | --tree [PATH] | --panes [LEFT] [RIGHT] [--keys SPEC] [--bookmarks-in PATH] [--bookmarks-out PATH] | --find PATH QUERY [--content] [--hidden] [--depth N] | --scan-count PATH [REPEATS] | --version | --edition");
             Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "unsupported or missing command",

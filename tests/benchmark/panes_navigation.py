@@ -169,8 +169,66 @@ def bookmarks(binary):
             os.close(slave)
 
 
+def bookmark_snapshots(binary):
+    with tempfile.TemporaryDirectory(prefix="tt-pane-snapshots-") as tmp:
+        root = Path(tmp)
+        left, right = root / "left", root / "right"
+        (left / "saved").mkdir(parents=True)
+        right.mkdir()
+        leaf = left / "saved" / "saved-leaf"
+        leaf.write_bytes(b"preserve")
+        snapshot = root / "bookmarks.ttb"
+
+        def session(options, actions):
+            master, slave = pty.openpty()
+            process = None
+            try:
+                fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 160, 0, 0))
+                before = termios.tcgetattr(slave)
+                process = subprocess.Popen(
+                    [binary, "--panes", str(left), str(right), *options],
+                    stdin=slave, stdout=slave, stderr=slave,
+                    env=dict(os.environ, TERM="xterm-256color"),
+                )
+                wait_output(master, process, b"Focus: Left | Row: 1")
+                for keys, marker in actions:
+                    os.write(master, keys)
+                    wait_output(master, process, marker)
+                os.write(master, b"q")
+                assert process.wait(timeout=8) == 0
+                assert termios.tcgetattr(slave) == before
+            finally:
+                if process is not None and process.poll() is None:
+                    process.kill()
+                    process.wait()
+                os.close(master)
+                os.close(slave)
+
+        session(["--bookmarks-out", str(snapshot)], [
+            (b"b", b"Bookmark saved | 1 locations"),
+        ])
+        assert not snapshot.exists(), "Unexpected automatic save"
+        session(["--bookmarks-out", str(snapshot)], [
+            (b"b", b"Bookmark saved | 1 locations"),
+            (b"S", b"Bookmark snapshot exported"),
+        ])
+        old = snapshot.read_bytes()
+        assert snapshot.stat().st_mode & 0o777 == 0o600
+        session(["--bookmarks-in", str(snapshot), "--bookmarks-out", str(snapshot)], [
+            (b"\t", b"Focus: Right | Row: 0"),
+            (b"B", b"Bookmarks - session only"),
+            (b"\r", b"saved-leaf"),
+            (b"S", b"bookmark snapshot already exists"),
+        ])
+        assert snapshot.read_bytes() == old
+        assert leaf.read_bytes() == b"preserve"
+        assert sorted(p.name for p in root.iterdir()) == ["bookmarks.ttb", "left", "right"]
+        print("TT_PANE_SNAPSHOTS explicit save, reload and no-overwrite invariants passed")
+
+
 if __name__ == "__main__":
     binary = str(Path(sys.argv[1]).resolve())
     main(binary)
     custom_keys(binary)
     bookmarks(binary)
+    bookmark_snapshots(binary)
