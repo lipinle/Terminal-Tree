@@ -12,6 +12,8 @@ pub mod operations;
 #[cfg(all(feature = "native-ops", target_os = "linux"))]
 pub mod preview;
 #[cfg(all(feature = "native-ops", target_os = "linux"))]
+mod readonly_file;
+#[cfg(all(feature = "native-ops", target_os = "linux"))]
 pub mod recovery_advice;
 #[cfg(all(feature = "native-ops", target_os = "linux"))]
 pub mod rename_plan;
