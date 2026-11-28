@@ -301,9 +301,27 @@ fn choose(title: &str, lines: &[String]) -> io::Result<Option<usize>> {
         }
         out.flush()?;
         drop(out);
-        if let Event::Key(k) = event::read()? {
+        let input = event::read()?;
+        if let Event::Mouse(mouse) = input {
+            match mouse.kind {
+                MouseEventKind::ScrollUp => selected = selected.saturating_sub(1),
+                MouseEventKind::ScrollDown => selected = (selected + 1).min(lines.len() - 1),
+                MouseEventKind::Down(MouseButton::Left)
+                    if h >= 3 && mouse.row > 0 && mouse.row < h - 1 =>
+                {
+                    let index = top + usize::from(mouse.row - 1);
+                    if index < lines.len() {
+                        return Ok(Some(index));
+                    }
+                }
+                _ => (),
+            }
+        } else if let Event::Key(k) = input {
             if !matches!(k.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
                 continue;
+            }
+            if k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('c') {
+                return Ok(None);
             }
             match k.code {
                 KeyCode::Esc | KeyCode::Char('q') => return Ok(None),
@@ -392,6 +410,9 @@ fn browse_with_layout(
     if let Some(w) = &mut workspace {
         w.load_settings(&mut model)?;
         w.observe(&model);
+        if application {
+            w.enable_application_review();
+        }
     }
     let _terminal = Terminal::enter()?;
     let mut message = String::from(if personal {
@@ -624,6 +645,14 @@ fn browse_with_layout(
                             } else {
                                 Ok(())
                             }
+                        }
+                        #[cfg(feature = "native-ops")]
+                        KeyCode::F(12) if application => {
+                            let lines = workspace.as_ref().map_or_else(
+                                || vec!["Clipboard unavailable in read-only mode".into()],
+                                |w| w.clipboard_lines(),
+                            );
+                            page("Clipboard contents", &lines)
                         }
                         #[cfg(feature = "native-ops")]
                         KeyCode::F(6) => {

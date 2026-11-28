@@ -56,8 +56,16 @@ def main(binary):
         data.mkdir(mode=0o700)
         (work / "source").write_text("preserve me")
         session(binary, ["--app-workspace", str(work), str(journal), str(data)],
-                root, b"Clipboard: 0 files", [(b"c", b"Clipboard: 1 files")])
+                root, b"Clipboard: 0 files", [
+                    (b"\x03", b"Clipboard: 1 files"),
+                    (b"\x1b[24~", b"Clipboard contents"),
+                    (b"\x1b", b"Clipboard: 1 files"),
+                    (b"n", b"Name:"),
+                    (b"new-folder\r", b"Create item"),
+                    (b"\r", b"Created"),
+                ])
         assert (work / "source").read_text() == "preserve me"
+        assert (work / "new-folder").is_dir()
         assert not list(journal.glob("*.pending.json"))
     print("TT_APP dashboard, preview, menus, compact layout and shared clipboard passed")
 

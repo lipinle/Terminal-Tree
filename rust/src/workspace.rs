@@ -97,6 +97,10 @@ pub(crate) fn prompt(label: &str) -> io::Result<Option<String>> {
     }
 }
 fn confirm(title: &str, paths: &[&Path], word: &str) -> io::Result<bool> {
+    confirm_review(title, paths, word, false)
+}
+
+fn confirm_review(title: &str, paths: &[&Path], word: &str, quick: bool) -> io::Result<bool> {
     let mut top = 0usize;
     loop {
         let (w, h) = terminal::size()?;
@@ -125,7 +129,11 @@ fn confirm(title: &str, paths: &[&Path], word: &str) -> io::Result<bool> {
             out,
             MoveTo(0, h - 2),
             Print(super::clip(
-                "Review paths | Enter next/confirm | Esc cancel",
+                if quick && top == end {
+                    "Review paths | Enter confirm | Esc cancel"
+                } else {
+                    "Review paths | Enter next/confirm | Esc cancel"
+                },
                 width
             ))
         )?;
@@ -136,7 +144,10 @@ fn confirm(title: &str, paths: &[&Path], word: &str) -> io::Result<bool> {
             return Ok(false);
         }
         match k.code {
-            KeyCode::Enter if top == end => {
+            KeyCode::Enter if top == end && quick && k.kind == KeyEventKind::Press => {
+                return Ok(true);
+            }
+            KeyCode::Enter if top == end && !quick => {
                 return Ok(prompt(&format!("Type {word}:"))?.as_deref() == Some(word))
             }
             KeyCode::Enter | KeyCode::PageDown => top = top.saturating_add(cap).min(end),
@@ -170,6 +181,7 @@ pub struct Workspace {
     mark_directory: PathBuf,
     clipboard: Option<(Vec<Review>, Transfer)>,
     undo: Vec<Undo>,
+    quick_review: bool,
 }
 impl Workspace {
     pub fn new(root: &Path, journal: &Path, data: &Path) -> io::Result<Self> {
@@ -202,6 +214,7 @@ impl Workspace {
             mark_directory: PathBuf::new(),
             clipboard: None,
             undo: Vec::new(),
+            quick_review: false,
         })
     }
     pub fn personal(home: &Path, journal: &Path, extra: &[PathBuf]) -> io::Result<Self> {
@@ -222,6 +235,7 @@ impl Workspace {
             mark_directory: PathBuf::new(),
             clipboard: None,
             undo: Vec::new(),
+            quick_review: false,
         })
     }
     pub fn load_settings(&self, model: &mut Model) -> io::Result<()> {
@@ -235,6 +249,17 @@ impl Workspace {
     }
     pub fn marked(&self, p: &Path) -> bool {
         self.marks.contains_key(p)
+    }
+    pub fn enable_application_review(&mut self) {
+        self.quick_review = true;
+    }
+    pub fn clipboard_lines(&self) -> Vec<String> {
+        let Some((items, kind)) = &self.clipboard else {
+            return vec!["Clipboard is empty".into()];
+        };
+        let mut lines = vec![format!("{} | {} items", if matches!(kind, Transfer::Copy) { "Copy" } else { "Cut" }, items.len())];
+        lines.extend(items.iter().map(|item| path_text(item.path())));
+        lines
     }
     pub fn clipboard_count(&self) -> usize {
         self.clipboard.as_ref().map_or(0, |(items, _)| items.len())
@@ -457,7 +482,8 @@ impl Workspace {
                         }
                     )
                 };
-                if !confirm(&title, &paths, "yes")? {
+                let quick = self.quick_review && total == 1 && matches!(kind, Transfer::Copy);
+                if !confirm_review(&title, &paths, "yes", quick)? {
                     return Ok("Cancelled".into());
                 }
                 if total > 1 {
@@ -625,7 +651,7 @@ impl Workspace {
                 let dst = model.directory.join(name);
                 self.ordinary(&dst)?;
                 let target = self.engine.destination(&dst)?;
-                if !confirm("Rename item", &[review.path(), target.path()], "yes")? {
+                if !confirm_review("Rename item", &[review.path(), target.path()], "yes", self.quick_review)? {
                     return Ok("Cancelled".into());
                 }
                 if let Some(undo) = worker::run(1, |p| {
@@ -646,7 +672,7 @@ impl Workspace {
                 let dst = model.directory.join(name);
                 self.ordinary(&dst)?;
                 let target = self.engine.destination(&dst)?;
-                if !confirm("Create item", &[target.path()], "yes")? {
+                if !confirm_review("Create item", &[target.path()], "yes", self.quick_review)? {
                     return Ok("Cancelled".into());
                 }
                 self.engine.create_reviewed(&target, key == 'n')?;
