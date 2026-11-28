@@ -50,6 +50,16 @@ jobs:
           rustc --version
           cargo test --locked --manifest-path rust/Cargo.toml --features native-ops
           cargo build --locked --release --manifest-path rust/Cargo.toml --features native-ops --bin terminal-tree
+      - name: Verify separate native edition builds
+        run: |
+          set -euo pipefail
+          test "$(rust/target/release/terminal-tree --edition)" = standard
+          cargo test --locked --manifest-path rust/Cargo.toml --target-dir "$RUNNER_TEMP/tt-paranoid-preview" --features native-ops,paranoid-preview --test edition
+          cargo build --locked --release --manifest-path rust/Cargo.toml --target-dir "$RUNNER_TEMP/tt-paranoid-preview" --features native-ops,paranoid-preview --bin terminal-tree
+          test "$("$RUNNER_TEMP/tt-paranoid-preview/release/terminal-tree" --edition)" = paranoid-preview
+          mkdir -p "$RUNNER_TEMP/tt-edition-artifacts"
+          tar -C rust/target/release -czf "$RUNNER_TEMP/tt-edition-artifacts/terminal-tree-standard-preview.tar.gz" terminal-tree
+          tar -C "$RUNNER_TEMP/tt-paranoid-preview/release" -czf "$RUNNER_TEMP/tt-edition-artifacts/terminal-tree-paranoid-preview.tar.gz" terminal-tree
       - name: Test actual limited filesystem, mount isolation and permissions
         run: bash tests/benchmark/mounted.sh
       - name: Cross-language scan parity and terminal smoke test
@@ -91,3 +101,15 @@ jobs:
             exit 1
           fi
           rust/target/release/terminal-tree --version
+      - name: Upload verified Standard preview
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: terminal-tree-standard-preview
+          path: ${{ runner.temp }}/tt-edition-artifacts/terminal-tree-standard-preview.tar.gz
+          if-no-files-found: error
+      - name: Upload verified Paranoid preview identity build
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: terminal-tree-paranoid-preview
+          path: ${{ runner.temp }}/tt-edition-artifacts/terminal-tree-paranoid-preview.tar.gz
+          if-no-files-found: error

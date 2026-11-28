@@ -17,6 +17,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use terminal_tree::{display_name, scan, KindFilter, Model, Order};
 use unicode_width::UnicodeWidthChar;
+mod edition;
 mod help;
 mod places;
 mod platform;
@@ -805,6 +806,16 @@ fn result_channel(path: PathBuf) -> io::Result<()> {
 fn run() -> io::Result<()> {
     let mut args = env::args_os().skip(1);
     match args.next().as_deref().and_then(|x| x.to_str()) {
+        Some("--edition") => {
+            if args.next().is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "unexpected argument",
+                ));
+            }
+            println!("{}", edition::NAME);
+            Ok(())
+        }
         Some("--version") => {
             println!(
                 "terminal-tree Rust experimental {}",
@@ -945,7 +956,7 @@ fn run() -> io::Result<()> {
             Ok(())
         }
         _ => {
-            eprintln!("Experimental read-only Rust port\nUsage: terminal-tree --list [-a] [PATH] | --browse [PATH] | --scan-count PATH [REPEATS] | --version");
+            eprintln!("Experimental read-only Rust port\nUsage: terminal-tree --list [-a] [PATH] | --browse [PATH] | --scan-count PATH [REPEATS] | --version | --edition");
             Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "unsupported or missing command",
