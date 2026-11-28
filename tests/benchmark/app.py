@@ -42,6 +42,16 @@ def main(binary):
         root = Path(tmp)
         (root / "file.txt").write_text("preview-content-marker\n")
         session(binary, [], root, b"preview-content-marker", [
+            (b"\x1b[<0;99;2M", b"Grid View"),
+            (b"\x1b[<80;25;5M", b"Zoom 2"),
+            (b"\x1b[<81;25;5M", b"Zoom 1"),
+            (b"\x1b[<0;106;2M", b"List View"),
+            (b"\x1b[<0;113;2M", b"Tree View"),
+            (b"\x1b[<0;83;2M", b"Location:"),
+            (b"\x1b", b"Tree View"),
+            (b"\x1b[<0;90;2M", b"Filter: type text"),
+            (b"file", b"Search: file"),
+            (b"\x1b", b"Tree View"),
             (b"b", b"BOOKMARKS"),
             (b"B", b"Session bookmarks"),
             (b"\x1b", b"Clipboard: 0 files"),
@@ -49,6 +59,14 @@ def main(binary):
             (b"\x1b", b"Clipboard: 0 files"),
         ])
         session(binary, ["--app", str(root)], root, b"Files *", [], width=45)
+        folder = root / "tree-folder"
+        folder.mkdir()
+        (folder / "nested.txt").write_text("nested")
+        session(binary, ["--app", str(root)], root, b"Tree View", [
+            (b"\x1b[C", b"Expanded tree:"),
+            (b"\x1b[B", b"nested.txt"),
+            (b"\r", b"Tree View"),
+        ])
         work, journal = root / "work", root / "journal"
         work.mkdir(mode=0o700)
         journal.mkdir(mode=0o700)

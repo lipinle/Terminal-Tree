@@ -11,7 +11,94 @@ use std::{
     path::PathBuf,
     time::SystemTime,
 };
-use terminal_tree::{display_name, Entry, Model};
+use terminal_tree::{display_name, tree::TreeModel, Entry, KindFilter, Model};
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum View {
+    #[default]
+    Tree,
+    Grid,
+    List,
+}
+
+impl View {
+    fn name(self) -> &'static str {
+        match self { Self::Tree => "Tree", Self::Grid => "Grid", Self::List => "List" }
+    }
+}
+
+const TOOLBAR: [(&str, &str); 5] = [
+    ("Path", "[Path]"), ("Search", "[Search]"), ("Grid", "[Grid]"),
+    ("List", "[List]"), ("Tree", "[Tree]"),
+];
+
+fn toolbar_start(width: u16) -> Option<u16> {
+    let length = TOOLBAR.iter().map(|(_, s)| s.len() + 1).sum::<usize>() as u16;
+    (width >= length + 10).then(|| width - length)
+}
+
+fn toolbar_hit(width: u16, column: u16) -> Option<usize> {
+    let mut x = toolbar_start(width)?;
+    for (i, (_, label)) in TOOLBAR.iter().enumerate() {
+        let end = x + label.len() as u16;
+        if column >= x && column < end { return Some(i); }
+        x = end + 1;
+    }
+    None
+}
+
+#[derive(Clone, Copy)]
+struct Cells {
+    columns: usize,
+    width: u16,
+    stride: usize,
+    groups: usize,
+}
+
+impl Cells {
+    fn new(width: u16, height: usize, view: View, zoom: usize) -> Self {
+        let stride = if view == View::Grid { (zoom + 2).min(height.max(1)) } else { zoom.max(1).min(height.max(1)) };
+        let columns = if view == View::Grid { (usize::from(width) / (12 + zoom * 5)).max(1) } else { 1 };
+        Self { columns, width: width / columns as u16, stride, groups: (height / stride).max(1) }
+    }
+    fn capacity(self) -> usize { self.columns * self.groups }
+    fn hit(self, x: u16, y: usize) -> Option<usize> {
+        if self.width == 0 { return None; }
+        let col = usize::from(x / self.width);
+        let row = y / self.stride;
+        (col < self.columns && row < self.groups).then_some(row * self.columns + col)
+    }
+}
+
+fn draw_toolbar(out: &mut impl Write, width: u16, view: View) -> io::Result<u16> {
+    let Some(start) = toolbar_start(width) else { return Ok(width); };
+    let mut x = start;
+    for (name, label) in TOOLBAR {
+        queue!(out, MoveTo(x, 1))?;
+        if name == view.name() { queue!(out, SetBackgroundColor(Color::DarkGrey), SetForegroundColor(Color::Cyan))?; }
+        queue!(out, Print(label), ResetColor)?;
+        x += label.len() as u16 + 1;
+    }
+    Ok(start.saturating_sub(1))
+}
+
+fn breadcrumb(path: &std::path::Path) -> String {
+    path.components().map(|p| display_name(p.as_os_str())).collect::<Vec<_>>().join(" > ")
+}
+
+fn row_text(entry: &Entry, index: usize, count: usize, view: View, glyph: &str, marked: bool, width: u16) -> String {
+    let mark = if marked { "[x]" } else { "   " };
+    match view {
+        View::Tree => format!("{} {mark} {glyph} {}", if index + 1 == count { "└──" } else { "├──" }, entry.name),
+        View::List if width >= 30 => {
+            let name = super::clip(&format!("{mark} {glyph} {}", entry.name), usize::from(width) - 13);
+            use unicode_width::UnicodeWidthStr;
+            let pad = (usize::from(width) - 13).saturating_sub(name.width());
+            format!("{name}{} {:>12}", " ".repeat(pad), if entry.directory { "<DIR>".to_owned() } else { entry.size.to_string() })
+        }
+        _ => format!("{mark} {glyph} {}", entry.name),
+    }
+}
 
 const MENUS: [(&str, u16); 6] = [
     ("File", 15), ("Edit", 21), ("View", 27), ("Go", 33), ("Tools", 37), ("Settings", 44),
@@ -64,6 +151,10 @@ pub struct State {
     active_right: bool,
     other: Option<Model>,
     pane_switched: bool,
+    view: View,
+    zoom: usize,
+    location: Option<String>,
+    expanded_tree: Option<TreeModel>,
 }
 
 impl State {
@@ -73,6 +164,7 @@ impl State {
             side_focus: false, side_cursor: 0, side_top: 0, preview_enabled: true,
             preview_key: None, preview_lines: Vec::new(),
             dual: false, active_right: false, other: None, pane_switched: false,
+            view: View::Tree, zoom: 1, location: None, expanded_tree: None,
         };
         state.refresh_places();
         state
@@ -164,12 +256,121 @@ impl State {
         };
     }
 
+    fn choose_view(&mut self, view: View) {
+        self.view = view;
+        self.dual = false;
+        self.expanded_tree = None;
+        self.side_focus = false;
+    }
+
+    fn start_location(&mut self, model: &Model) {
+        self.expanded_tree = None;
+        self.side_focus = false;
+        self.location = Some(model.directory.to_str().unwrap_or("").to_owned());
+    }
+
+    fn open_expanded(&mut self, model: &mut Model) -> io::Result<()> {
+        let Some(tree) = &self.expanded_tree else { return Ok(()); };
+        let Some(row) = tree.rows().get(tree.selected()) else { return Ok(()); };
+        let path = row.entry.path.clone();
+        let directory = row.entry.directory && !row.entry.symlink;
+        let target = if directory { path.clone() } else {
+            path.parent().ok_or_else(|| io::Error::other("missing parent"))?.to_path_buf()
+        };
+        // Descendant rows are read-only. Navigate into their containing folder,
+        // reload ordinary rows and select the exact native path before any write.
+        model.go(target)?;
+        if !directory {
+            if let Some(index) = model.entries.iter().position(|e| e.path == path) {
+                model.selected = index;
+            }
+        }
+        self.expanded_tree = None;
+        self.preview_key = None;
+        self.pane_switched = true;
+        Ok(())
+    }
+
+    fn expand_current(&mut self, model: &Model) -> io::Result<()> {
+        if !model.query.is_empty() || model.kind_filter != KindFilter::All {
+            return Err(io::Error::other("clear filters before expanding tree"));
+        }
+        let Some(entry) = model.entries.get(model.selected) else { return Ok(()); };
+        if !entry.directory || entry.symlink { return Ok(()); }
+        let mut tree = TreeModel::new(&model.directory, model.hidden, model.order)?;
+        let index = tree.rows().iter().position(|r| r.entry.path.file_name() == entry.path.file_name())
+            .ok_or_else(|| io::Error::other("tree selection changed; refresh first"))?;
+        tree.select(index);
+        tree.expand()?;
+        self.expanded_tree = Some(tree);
+        Ok(())
+    }
+
+    fn expanded_input(&mut self, event: &Event, model: &mut Model, l: Layout) -> io::Result<bool> {
+        let Some(tree) = self.expanded_tree.as_mut() else { return Ok(false); };
+        let cells = Cells::new(l.end()-l.first(), l.capacity(), View::Tree, self.zoom);
+        match event {
+            Event::Key(k) if matches!(k.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
+                if k.modifiers == KeyModifiers::NONE {
+                    match k.code {
+                        KeyCode::Up => tree.shift(-1),
+                        KeyCode::Down => tree.shift(1),
+                        KeyCode::Home => tree.select(0),
+                        KeyCode::End => tree.select(usize::MAX),
+                        KeyCode::PageUp => tree.shift(-(cells.capacity() as isize)),
+                        KeyCode::PageDown => tree.shift(cells.capacity() as isize),
+                        KeyCode::Right => tree.expand()?,
+                        KeyCode::Left => tree.collapse_or_parent(),
+                        KeyCode::Enter => self.open_expanded(model)?,
+                        KeyCode::Esc => { self.expanded_tree = None; },
+                        KeyCode::F(5) => { tree.refresh()?; },
+                        KeyCode::F(8) | KeyCode::F(9) | KeyCode::F(10) | KeyCode::Char('q') => {
+                            self.expanded_tree = None;
+                            return Ok(false);
+                        }
+                        _ => return Err(io::Error::other("Expanded tree: Enter opens folder or selects file in its parent; Esc returns")),
+                    }
+                } else if k.modifiers == KeyModifiers::CONTROL && matches!(k.code, KeyCode::Char('l' | 'f' | 'q')) {
+                    self.expanded_tree = None;
+                    return Ok(false);
+                }
+            }
+            Event::Mouse(mouse) if l.file_row(mouse.column, mouse.row).is_some() => {
+                match mouse.kind {
+                    MouseEventKind::ScrollUp => tree.shift(-1),
+                    MouseEventKind::ScrollDown => tree.shift(1),
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        let (start,end) = tree.viewport(cells.capacity());
+                        if let Some(offset) = cells.hit(mouse.column-l.first(), usize::from(mouse.row-4)) {
+                            let index = start + offset;
+                            if index < end {
+                                tree.select(index);
+                                if mouse.column < l.first()+4 {
+                                    if tree.rows()[index].expanded { tree.collapse_or_parent(); }
+                                    else { tree.expand()?; }
+                                }
+                            }
+                        }
+                    }
+                    _ => (),
+                }
+            }
+            Event::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Left) => {
+                self.expanded_tree = None;
+                return Ok(false);
+            }
+            _ => (),
+        }
+        Ok(true)
+    }
+
     fn toggle_dual(&mut self, model: &Model) -> io::Result<()> {
         if !self.dual && self.other.is_none() {
             let mut other = Model::new(model.directory.clone())?;
             other.set_view(model.hidden, model.order, model.kind_filter, String::new())?;
             self.other = Some(other);
         }
+        self.expanded_tree = None;
         self.dual = !self.dual;
         self.side_focus = false;
         self.preview_key = None;
@@ -264,15 +465,13 @@ impl State {
             SetForegroundColor(Color::Cyan), Print(super::clip("Terminal Tree  File  Edit  View  Go  Tools  Settings", usize::from(l.width))), ResetColor)?;
         if h < 8 { return out.flush(); }
         let mode = if personal { "Personal" } else if writable { "Workspace" } else { "Read-only" };
-        let path = display_name(model.directory.as_os_str());
-        let badge = format!("[{} / {mode}]", super::edition::NAME);
-        let path_width = usize::from(l.width).saturating_sub(badge.len()+2);
-        if path_width > 0 {
-            queue!(out, MoveTo(0,1), Print(super::clip(&path,path_width)),
-                MoveTo(l.width.saturating_sub(badge.len() as u16),1), Print(&badge))?;
+        let path_width = draw_toolbar(&mut out, l.width, self.view)?;
+        let path = if let Some(input) = &self.location {
+            format!("Location: {}_", display_name(std::ffi::OsStr::new(input)))
         } else {
-            queue!(out, MoveTo(0,1), Print(super::clip(&path,usize::from(l.width))))?;
-        }
+            breadcrumb(&model.directory)
+        };
+        queue!(out, MoveTo(0,1), Print(super::clip(&path,usize::from(path_width))))?;
         queue!(out, MoveTo(0,2), Print("─".repeat(usize::from(l.width))))?;
         if l.sidebar > 0 {
             queue!(out, MoveTo(0,3), SetForegroundColor(Color::Cyan),
@@ -282,10 +481,16 @@ impl State {
             Print(if self.side_focus { "Files" } else { "Files *" }), ResetColor)?;
         if l.preview > 0 {
             queue!(out, MoveTo(l.end()+1,3), SetForegroundColor(Color::Cyan), Print("Preview"), ResetColor)?;
-            self.preview(model.entries.get(model.selected));
+            let entry = if let Some(tree) = &self.expanded_tree {
+                tree.rows().get(tree.selected()).map(|r| r.entry.clone())
+            } else { model.entries.get(model.selected).cloned() };
+            self.preview(entry.as_ref());
         }
         let cap = l.capacity();
-        let (start,end) = model.viewport(cap);
+        let cells = Cells::new(l.end()-l.first(), cap, self.view, self.zoom);
+        let (start,end) = if let Some(tree) = &mut self.expanded_tree {
+            tree.viewport(cells.capacity())
+        } else { model.viewport(cells.capacity()) };
         if self.side_cursor < self.side_top { self.side_top = self.side_cursor; }
         if self.side_cursor >= self.side_top + cap { self.side_top = self.side_cursor + 1 - cap; }
         self.side_top = self.side_top.min(self.places.len().saturating_sub(cap));
@@ -303,15 +508,6 @@ impl State {
                 }
                 queue!(out, MoveTo(l.sidebar,y), Print("│"))?;
             }
-            if start+row < end {
-                let e = &model.entries[start+row];
-                let (glyph,color) = super::icon(e.directory,e.symlink);
-                let text = format!("{} {} {}", if marked(&e.path) { "[x]" } else { "   " },glyph,e.name);
-                queue!(out, MoveTo(l.first(),y))?;
-                if start+row == model.selected { queue!(out, SetBackgroundColor(Color::DarkGrey))?; }
-                queue!(out, SetForegroundColor(color),
-                    Print(super::clip(&text,usize::from(l.end()-l.first()))), ResetColor)?;
-            }
             if l.preview > 0 {
                 queue!(out, MoveTo(l.end(),y), Print("│"))?;
                 if let Some(line) = self.preview_lines.get(row) {
@@ -319,10 +515,44 @@ impl State {
                 }
             }
         }
-        let safety = if writable { "Scoped" } else { "Read-only" };
-        let status = format!("Clipboard: {clipboard} files | Tasks: idle | Safety: {safety} | {} entries",model.entries.len());
+        for index in start..end {
+            let offset = index-start;
+            let x = l.first() + (offset % cells.columns) as u16 * cells.width;
+            let y = 4 + ((offset / cells.columns) * cells.stride) as u16;
+            if y >= h-3 { break; }
+            let (e, selected, tree_depth, expanded) = if let Some(tree) = &self.expanded_tree {
+                let row = &tree.rows()[index];
+                (&row.entry, tree.selected() == index, Some(row.depth), row.expanded)
+            } else { (&model.entries[index], model.selected == index, None, false) };
+            let (glyph,color) = super::icon(e.directory,e.symlink);
+            queue!(out, MoveTo(x,y))?;
+            if selected { queue!(out, SetBackgroundColor(Color::DarkGrey))?; }
+            queue!(out, SetForegroundColor(color))?;
+            if self.view == View::Grid {
+                let icon = if e.symlink { "[LINK]" } else if e.directory { "[DIR]" } else { "[FILE]" };
+                let mark = if marked(&e.path) { "[x] " } else { "" };
+                queue!(out, Print(super::clip(&format!("{mark}{icon}"),usize::from(cells.width))))?;
+                if y+1 < h-3 {
+                    queue!(out, MoveTo(x,y+1), Print(super::clip(&e.name,usize::from(cells.width))))?;
+                }
+            } else {
+                let text = if let Some(depth) = tree_depth {
+                    format!("{}{} {}", "  ".repeat(depth-1),
+                        if expanded { "−" } else if e.directory && !e.symlink { "+" } else { glyph }, e.name)
+                } else { row_text(e,index,model.entries.len(),self.view,glyph,marked(&e.path),cells.width) };
+                queue!(out, Print(super::clip(&text,usize::from(cells.width))))?;
+            }
+            queue!(out, ResetColor)?;
+        }
+        let safety = if self.expanded_tree.is_some() { "Tree inspection" } else if writable { "Scoped" } else { "Read-only" };
+        let status = format!("Clipboard: {clipboard} files | Tasks: idle | Safety: {safety} | {} | {} View | Zoom {}",model.entries.len(),self.view.name(),self.zoom);
+        let detail = if self.expanded_tree.is_some() {
+            "Expanded tree: Right expand / Left collapse / Enter open / Esc back".to_owned()
+        } else if searching || !model.query.is_empty() {
+            format!("Search: {} | {message}", display_name(std::ffi::OsStr::new(&model.query)))
+        } else { format!("[{} / {mode}] {message}",super::edition::NAME) };
         queue!(out, MoveTo(0,h-3), Print(super::clip(&status,usize::from(l.width))),
-            MoveTo(0,h-2), Print(super::clip(message,usize::from(l.width))),
+            MoveTo(0,h-2), Print(super::clip(&detail,usize::from(l.width))),
             MoveTo(0,h-1), Print(super::clip(if searching {
                 "Filter: type text | Enter accept | Esc cancel"
             } else if writable {
@@ -346,7 +576,7 @@ impl State {
             0 => vec![("Open",KeyCode::Enter,plain),("Properties",KeyCode::Char('i'),plain),("Exit",KeyCode::Char('q'),plain)],
             1 if writable => vec![("Copy (Ctrl+C)",KeyCode::Char('c'),plain),("Cut (Ctrl+X)",KeyCode::Char('x'),plain),("Paste (Ctrl+V)",KeyCode::Char('v'),plain),("View clipboard",KeyCode::F(12),plain),("Rename",KeyCode::F(2),plain),("New folder",KeyCode::Char('n'),plain),("New file",KeyCode::Char('t'),plain),("Trash",KeyCode::Delete,plain),("Undo",KeyCode::Char('u'),plain)],
             1 => vec![("Select a scoped workspace to enable file operations",KeyCode::Null,plain)],
-            2 => vec![("Toggle dual pane (F8)",KeyCode::F(8),plain),("Toggle live preview",KeyCode::F(9),plain),("Open preview",KeyCode::F(3),plain),("Hidden files",KeyCode::Char('h'),plain),("Sort",KeyCode::Char('s'),plain),("Refresh",KeyCode::F(5),plain),("Filter",KeyCode::Char('/'),plain)],
+            2 => vec![("Tree view (Ctrl+3)",KeyCode::Char('3'),KeyModifiers::CONTROL),("Grid view (Ctrl+1)",KeyCode::Char('1'),KeyModifiers::CONTROL),("List view (Ctrl+2)",KeyCode::Char('2'),KeyModifiers::CONTROL),("Toggle dual pane (F8)",KeyCode::F(8),plain),("Toggle live preview",KeyCode::F(9),plain),("Open preview",KeyCode::F(3),plain),("Hidden files",KeyCode::Char('h'),plain),("Sort",KeyCode::Char('s'),plain),("Refresh",KeyCode::F(5),plain),("Filter",KeyCode::Char('/'),plain)],
             3 => vec![("Parent",KeyCode::Left,plain),("Back",KeyCode::Char('['),plain),("Forward",KeyCode::Char(']'),plain),("Locations",KeyCode::Char('m'),plain),("Bookmark current directory",KeyCode::Char('b'),plain),("Bookmarks",KeyCode::Char('B'),plain)],
             4 => vec![("Companion tools",KeyCode::Char('p'),KeyModifiers::CONTROL),("Help",KeyCode::F(1),plain)],
             _ => vec![("Toggle live preview",KeyCode::F(9),plain),("Hidden files",KeyCode::Char('h'),plain),("Sort",KeyCode::Char('s'),plain)],
@@ -360,7 +590,7 @@ impl State {
         if category == 4 && writable { commands.push(("File actions",KeyCode::F(6),plain)); commands.push(("Recovery",KeyCode::Char('j'),plain)); }
         if category == 5 && writable { commands.push(("Save view settings",KeyCode::Char('S'),plain)); }
         if !cfg!(feature = "native-ops") {
-            commands.retain(|(_,key,mods)| *key != KeyCode::F(3) && *mods != KeyModifiers::CONTROL);
+            commands.retain(|(_,key,mods)| *key != KeyCode::F(3) && !(*mods == KeyModifiers::CONTROL && *key == KeyCode::Char('p')));
         }
         let labels: Vec<_> = commands.iter().map(|(label,_,_)| label.to_string()).collect();
         Ok(super::choose(MENUS[category].0,&labels)?.map(|i| {
@@ -400,6 +630,72 @@ impl State {
         let (w,h) = terminal::size()?;
         let l = Layout::new(w,h,self.preview_enabled);
         if searching { return Ok(Some(event)); }
+        if let Some(input) = &mut self.location {
+            match &event {
+                Event::Key(k) if matches!(k.kind,KeyEventKind::Press | KeyEventKind::Repeat) => {
+                    match k.code {
+                        KeyCode::Esc => self.location = None,
+                        KeyCode::Char('l' | 'c') if k.modifiers == KeyModifiers::CONTROL => self.location = None,
+                        KeyCode::Char('a') if k.modifiers == KeyModifiers::CONTROL => input.clear(),
+                        KeyCode::Backspace => { input.pop(); }
+                        KeyCode::Enter => {
+                            if input.is_empty() { return Ok(None); }
+                            let path = if input == "~" || input.starts_with("~/") {
+                                super::platform::home_dir().ok_or_else(|| io::Error::other("home unavailable"))?
+                                    .join(input.strip_prefix("~/").unwrap_or(""))
+                            } else { model.directory.join(input.as_str()) };
+                            model.go(path.canonicalize()?)?;
+                            self.location = None;
+                            self.preview_key = None;
+                        }
+                        KeyCode::Char(c) if !c.is_control() && !k.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) && input.len()+c.len_utf8() <= 4096 => input.push(c),
+                        _ => (),
+                    }
+                }
+                Event::Mouse(mouse) if mouse.row == 1 && mouse.kind == MouseEventKind::Down(MouseButton::Left) && toolbar_hit(l.width,mouse.column) == Some(0) => self.location = None,
+                _ => (),
+            }
+            return Ok(None);
+        }
+        if let Event::Mouse(mouse) = &event {
+            if !self.dual && mouse.modifiers.contains(KeyModifiers::CONTROL) {
+                match mouse.kind {
+                    MouseEventKind::ScrollUp => { self.zoom = (self.zoom+1).min(3); return Ok(None); }
+                    MouseEventKind::ScrollDown => { self.zoom = self.zoom.saturating_sub(1).max(1); return Ok(None); }
+                    _ => (),
+                }
+            }
+            if !self.dual && mouse.row == 1 && mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+                match toolbar_hit(l.width, mouse.column) {
+                    Some(0) => self.start_location(model),
+                    Some(1) => {
+                        self.expanded_tree = None;
+                        self.side_focus = false;
+                        return Ok(Some(Event::Key(KeyEvent::new(KeyCode::Char('/'),KeyModifiers::NONE))));
+                    }
+                    Some(2) => self.choose_view(View::Grid),
+                    Some(3) => self.choose_view(View::List),
+                    Some(4) => self.choose_view(View::Tree),
+                    _ => (),
+                }
+                return Ok(None);
+            }
+        }
+        if let Event::Key(k) = &event {
+            if k.modifiers == KeyModifiers::CONTROL && matches!(k.kind,KeyEventKind::Press | KeyEventKind::Repeat) {
+                match k.code {
+                    KeyCode::Char('1') => { self.choose_view(View::Grid); return Ok(None); }
+                    KeyCode::Char('2') => { self.choose_view(View::List); return Ok(None); }
+                    KeyCode::Char('3') => { self.choose_view(View::Tree); return Ok(None); }
+                    KeyCode::Char('l') if !self.dual => { self.start_location(model); return Ok(None); }
+                    KeyCode::Char('+' | '=') if !self.dual => { self.zoom = (self.zoom+1).min(3); return Ok(None); }
+                    KeyCode::Char('-') if !self.dual => { self.zoom = self.zoom.saturating_sub(1).max(1); return Ok(None); }
+                    KeyCode::Char('0') if !self.dual => { self.zoom = 1; return Ok(None); }
+                    _ => (),
+                }
+            }
+        }
+        if self.expanded_input(&event, model, l)? { return Ok(None); }
         if let Event::Mouse(mouse) = &mut event {
             if mouse.kind == MouseEventKind::Down(MouseButton::Left) && mouse.row == 0 {
                 if let Some((i,_)) = MENUS.iter().enumerate().find(|(_, (name,x))| mouse.column >= *x && mouse.column < *x + name.len() as u16) {
@@ -462,22 +758,34 @@ impl State {
                 }
                 return Ok(None);
             }
-            if let Some(row) = l.file_row(mouse.column,mouse.row) {
+            if l.file_row(mouse.column,mouse.row).is_some() {
                 self.side_focus = false;
-                mouse.row = row;
-                mouse.column = 0;
-                if mouse.kind == MouseEventKind::Down(MouseButton::Right) && mouse.modifiers == KeyModifiers::NONE {
-                    let index = model.top + usize::from(row - 1);
-                    if index >= model.entries.len() {
-                        return Ok(None);
+                let cells = Cells::new(l.end()-l.first(),l.capacity(),self.view,self.zoom);
+                match mouse.kind {
+                    MouseEventKind::ScrollUp => model.shift(-(cells.columns as isize)),
+                    MouseEventKind::ScrollDown => model.shift(cells.columns as isize),
+                    MouseEventKind::Down(MouseButton::Left | MouseButton::Right) => {
+                        if let Some(offset) = cells.hit(mouse.column-l.first(),usize::from(mouse.row-4)) {
+                            let index = model.top+offset;
+                            if index < model.entries.len() {
+                                model.selected = index;
+                                if mouse.kind == MouseEventKind::Down(MouseButton::Right) && mouse.modifiers == KeyModifiers::NONE {
+                                    return self.context_menu(writable);
+                                }
+                                if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+                                    if writable && mouse.modifiers == KeyModifiers::CONTROL {
+                                        return Ok(Some(Event::Key(KeyEvent::new(KeyCode::Char(' '),KeyModifiers::NONE))));
+                                    }
+                                    if mouse.modifiers == KeyModifiers::NONE && self.view == View::Tree && mouse.column < l.first()+4 {
+                                        self.expand_current(model)?;
+                                    }
+                                }
+                            }
+                        }
                     }
-                    model.selected = index;
-                    return self.context_menu(writable);
+                    _ => (),
                 }
-                if mouse.kind == MouseEventKind::Down(MouseButton::Left) && mouse.modifiers == KeyModifiers::NONE {
-                    mouse.kind = MouseEventKind::Down(MouseButton::Right);
-                }
-                return Ok(Some(event));
+                return Ok(None);
             }
             return Ok(None);
         }
@@ -571,6 +879,19 @@ impl State {
                 if let Some(i) = super::choose("Session bookmarks",&labels)? { model.go(self.bookmarks[i].clone())?; }
                 return Ok(None);
             }
+            if !self.dual && key.modifiers == KeyModifiers::NONE {
+                let cells = Cells::new(l.end()-l.first(),l.capacity(),self.view,self.zoom);
+                match code {
+                    KeyCode::Right if self.view == View::Tree => { self.expand_current(model)?; return Ok(None); }
+                    KeyCode::Up if self.view == View::Grid => { model.shift(-(cells.columns as isize)); return Ok(None); }
+                    KeyCode::Down if self.view == View::Grid => { model.shift(cells.columns as isize); return Ok(None); }
+                    KeyCode::Left if self.view == View::Grid => { model.shift(-1); return Ok(None); }
+                    KeyCode::Right if self.view == View::Grid => { model.shift(1); return Ok(None); }
+                    KeyCode::PageUp => { model.shift(-(cells.capacity() as isize)); return Ok(None); }
+                    KeyCode::PageDown => { model.shift(cells.capacity() as isize); return Ok(None); }
+                    _ => (),
+                }
+            }
             let replacement = match code {
                 KeyCode::F(4) if writable => Some(KeyCode::F(6)),
                 KeyCode::Backspace => Some(KeyCode::Left),
@@ -615,6 +936,31 @@ fn draw_column(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn view_cells_and_toolbar_hit_testing() {
+        assert_eq!(View::default(), View::Tree);
+        for width in 0..150 {
+            for height in 1..30 {
+                for view in [View::Tree,View::Grid,View::List] {
+                    for zoom in 1..=3 {
+                        let c = Cells::new(width,height,view,zoom);
+                        assert!(c.capacity() > 0);
+                        assert!(c.groups*c.stride <= height);
+                        for i in 0..c.capacity() {
+                            let x = (i%c.columns) as u16*c.width;
+                            let y = (i/c.columns)*c.stride;
+                            if c.width > 0 { assert_eq!(c.hit(x,y),Some(i)); }
+                        }
+                    }
+                }
+            }
+            if let Some(start) = toolbar_start(width) {
+                assert_eq!(toolbar_hit(width,start),Some(0));
+                assert_eq!(toolbar_hit(width,start+7),Some(1));
+            }
+        }
+    }
+
     #[test]
     fn layout_is_responsive_and_only_file_rows_map_to_actions() {
         for width in 0..150 {
