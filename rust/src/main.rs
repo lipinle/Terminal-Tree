@@ -29,6 +29,8 @@ mod recovery;
 mod settings;
 mod tree_ui;
 #[cfg(feature = "native-ops")]
+mod tools_ui;
+#[cfg(feature = "native-ops")]
 mod worker;
 #[cfg(feature = "native-ops")]
 mod workspace;
@@ -197,9 +199,9 @@ fn draw(
             if searching {
                 "Filter: type text | Enter accept | Esc cancel"
             } else if writable {
-                "F1 help | F6 actions | Space mark | c copy | x cut | v paste | q exit"
+                "F1 help | Ctrl+P tools | F6 actions | Space mark | c copy | x cut | v paste | q exit"
             } else {
-                "F1 help | ↑↓ select | ← parent | → enter | / filter | q exit"
+                "F1 help | ↑↓ select | ← parent | → enter | / filter | q exit | Ctrl+P tools"
             },
             width
         ))
@@ -586,6 +588,13 @@ fn browse(
                             } else {
                                 Ok(())
                             }
+                        }
+                        #[cfg(feature = "native-ops")]
+                        KeyCode::Char('p') if key.modifiers == KeyModifiers::CONTROL => {
+                            tools_ui::show(
+                                &model.directory,
+                                model.entries.get(model.selected).map(|e| e.path.as_path()),
+                            )
                         }
                         KeyCode::Char('i') => match model.entries.get(model.selected) {
                             Some(e) => properties(&e.path),

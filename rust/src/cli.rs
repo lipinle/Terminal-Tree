@@ -160,7 +160,11 @@ File tools
   --archive-member PATH NAME --stdout
   --archive-build [--gzip] --stdout NAME PATH ...
   --rename-plan DIRECTORY NEEDLE REPLACEMENT NAME ...
-  --suggest-name DIRECTORY NAME"
+  --suggest-name DIRECTORY NAME
+  --tools                          Check companion availability
+  --eza [PATH]                     Detailed directory listing
+  --7zip-list PATH                 Read-only archive inspection
+  --git-status [PATH]              Trusted repositories only; local helpers may run"
     )?;
     writeln!(
         out,
@@ -199,6 +203,32 @@ pub(super) fn run() -> io::Result<()> {
             list(&path, hidden)
         }
         Some("--find") => find(args),
+        #[cfg(feature = "native-ops")]
+        Some("--tools") => {
+            end_of_args(&mut args)?;
+            for line in terminal_tree::external_tools::availability() {
+                println!("{line}");
+            }
+            Ok(())
+        }
+        #[cfg(feature = "native-ops")]
+        Some(command @ ("--eza" | "--7zip-list" | "--git-status")) => {
+            let argument = args.next();
+            if command == "--7zip-list" && argument.is_none() {
+                return Err(io::Error::other("archive path required"));
+            }
+            let path = path_arg(argument)?;
+            end_of_args(&mut args)?;
+            let lines = match command {
+                "--eza" => terminal_tree::external_tools::eza(&path)?,
+                "--7zip-list" => terminal_tree::external_tools::archive(&path)?,
+                _ => terminal_tree::external_tools::git_status(&path)?,
+            };
+            for line in lines {
+                println!("{line}");
+            }
+            Ok(())
+        }
         Some("--rename-plan") => {
             #[cfg(all(feature = "native-ops", target_os = "linux"))]
             {

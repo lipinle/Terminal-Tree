@@ -459,6 +459,7 @@ fn pane_help(
 ) -> io::Result<bool> {
     let mut lines = vec![
         "Navigation: use the configured bindings below.".into(),
+        "Ctrl+P: eza, 7-Zip and trusted Git status tools (native Linux).".into(),
         keymap.summary(),
         "Tab: change focus | n: new tab | [ / ]: switch tabs | w: close tab".into(),
         "b: save bookmark | B: open bookmark menu | J/K reorder within menu".into(),
@@ -661,6 +662,17 @@ pub(crate) fn browse(
                             Ok(false) => Ok(()),
                             Err(error) => Err(error),
                         }
+                    }
+                    #[cfg(feature = "native-ops")]
+                    KeyCode::Char('p') if key.modifiers == KeyModifiers::CONTROL => {
+                        let model = layout.focused();
+                        let selected = model.rows().get(model.selected()).map(|r| &r.entry);
+                        let directory = match selected {
+                            Some(entry) if entry.directory && !entry.symlink => entry.path.as_path(),
+                            Some(entry) => entry.path.parent().unwrap_or(model.root()),
+                            None => model.root(),
+                        };
+                        crate::tools_ui::show(directory, selected.map(|e| e.path.as_path()))
                     }
                     KeyCode::Tab => {
                         layout.toggle_focus();

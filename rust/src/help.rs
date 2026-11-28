@@ -30,6 +30,7 @@ const TOPICS: &[Topic] = &[
             ("m / F4", "My Computer: choose Home, existing home Trash, File System or mounted media. Discovery does not grant write access."),
             ("q / Esc / Ctrl+C", "Exit the navigator outside a prompt or operation."),
             ("F1 / ?", "Open this guide."),
+            ("Ctrl+P", "Native Linux companion tools: eza listing, 7-Zip archive inspection and explicitly trusted Git status. Install the corresponding system packages first."),
             ("Shell navigation", "In tt_rust_nav, Enter on a folder exits to Bash in that folder. Right continues browsing. Esc, q or Ctrl+C cancels the selection."),
         ],
     },
