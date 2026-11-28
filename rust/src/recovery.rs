@@ -1,7 +1,7 @@
 //! Display only: journal paths are untrusted data, never action inputs.
 use serde_json::Value;
 use std::{ffi::OsString, os::unix::ffi::OsStringExt};
-use terminal_tree::display_name;
+use terminal_tree::{display_name, recovery_advice::classify};
 
 fn field(record: &Value, key: &str) -> String {
     let hexkey = format!("{key}_bytes_hex");
@@ -58,6 +58,7 @@ pub fn show(
             field(r, "id"),
             field(r, "operation")
         ));
+        lines.push(classify(name, r).message().into());
         for key in ["source", "destination", "stage"] {
             lines.push(format!("{key}: {}", field(r, key)));
         }

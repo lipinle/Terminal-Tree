@@ -19,6 +19,7 @@ use terminal_tree::{display_name, scan, KindFilter, Model, Order};
 use unicode_width::UnicodeWidthChar;
 mod edition;
 mod help;
+mod panes_ui;
 mod places;
 mod platform;
 #[cfg(feature = "native-ops")]
@@ -331,39 +332,8 @@ fn properties(path: &Path) -> io::Result<()> {
     page("Properties", &platform::properties(path)?)
 }
 #[cfg(feature = "native-ops")]
-fn preview(path: &Path) -> io::Result<()> {
-    use rustix::fs::{self as rx, Mode, OFlags};
-    use std::io::Read;
-    use std::os::unix::fs::MetadataExt;
-    let before = std::fs::symlink_metadata(path)?;
-    if !before.is_file() {
-        return Err(io::Error::other("preview requires a regular non-link file"));
-    }
-    let f: std::fs::File = rx::open(
-        path,
-        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
-        Mode::empty(),
-    )?
-    .into();
-    let m = f.metadata()?;
-    if !m.is_file() || (m.dev(), m.ino()) != (before.dev(), before.ino()) {
-        return Err(io::Error::other("file changed before preview"));
-    }
-    let mut bytes = Vec::new();
-    f.take(65537).read_to_end(&mut bytes)?;
-    let mut lines = vec![display_name(path.as_os_str())];
-    if bytes.contains(&0) {
-        lines.push("Binary file; preview unavailable".into());
-    } else {
-        let truncated = bytes.len() > 65536;
-        bytes.truncate(65536);
-        for line in bytes.split(|&b| b == b'\n') {
-            lines.push(display_name(std::ffi::OsStr::from_bytes(line)));
-        }
-        if truncated {
-            lines.push("[Preview limited to 64 KiB]".into());
-        }
-    }
+fn preview(path: &Path, mode: terminal_tree::preview::Mode) -> io::Result<()> {
+    let lines = terminal_tree::preview::read_lines(path, mode)?;
     page("File preview", &lines)
 }
 
@@ -605,10 +575,15 @@ fn browse(
                         #[cfg(feature = "native-ops")]
                         KeyCode::Char('p') | KeyCode::F(3) => {
                             match model.entries.get(model.selected) {
-                                Some(e) => preview(&e.path),
+                                Some(e) => preview(&e.path, terminal_tree::preview::Mode::Auto),
                                 None => Err(io::Error::other("select a file")),
                             }
                         }
+                        #[cfg(feature = "native-ops")]
+                        KeyCode::F(8) => match model.entries.get(model.selected) {
+                            Some(e) => preview(&e.path, terminal_tree::preview::Mode::Hex),
+                            None => Err(io::Error::other("select a file")),
+                        },
                         KeyCode::F(1) | KeyCode::Char('?') => {
                             help::show(writable, personal, return_on_enter)
                         }
@@ -804,6 +779,52 @@ fn result_channel(path: PathBuf) -> io::Result<()> {
     file.flush()
 }
 
+fn find(mut args: impl Iterator<Item = OsString>) -> io::Result<()> {
+    use std::sync::atomic::AtomicBool;
+    use terminal_tree::search::{filenames, SearchLimits};
+
+    let invalid = |message| io::Error::new(io::ErrorKind::InvalidInput, message);
+    let root = path_arg(Some(
+        args.next().ok_or_else(|| invalid("search path required"))?,
+    ))?;
+    let query = args
+        .next()
+        .ok_or_else(|| invalid("search query required"))?
+        .into_string()
+        .map_err(|_| invalid("search query must be UTF-8"))?;
+    if query.is_empty() {
+        return Err(invalid("search query must not be empty"));
+    }
+    let mut hidden = false;
+    let mut depth = None;
+    while let Some(arg) = args.next() {
+        match arg.to_str() {
+            Some("--hidden") if !hidden => hidden = true,
+            Some("--depth") if depth.is_none() => {
+                depth = Some(
+                    args.next()
+                        .and_then(|value| value.to_str()?.parse::<usize>().ok())
+                        .filter(|value| (1..=16).contains(value))
+                        .ok_or_else(|| invalid("search depth must be 1..=16"))?,
+                );
+            }
+            _ => return Err(invalid("unknown or duplicate search option")),
+        }
+    }
+    let limits = SearchLimits {
+        entries: 16_384,
+        depth: depth.unwrap_or(8),
+        matches: 4096,
+    };
+    // Produce no result lines if traversal fails or exhausts a budget.
+    let entries = filenames(&root, &query, hidden, limits, &AtomicBool::new(false))?;
+    let mut out = io::BufWriter::new(io::stdout().lock());
+    for entry in entries {
+        writeln!(out, "{}", display_name(entry.path.as_os_str()))?;
+    }
+    out.flush()
+}
+
 fn run() -> io::Result<()> {
     let mut args = env::args_os().skip(1);
     match args.next().as_deref().and_then(|x| x.to_str()) {
@@ -829,6 +850,18 @@ fn run() -> io::Result<()> {
             let hidden = first.as_deref() == Some(std::ffi::OsStr::new("-a"));
             let path = path_arg(if hidden { args.next() } else { first })?;
             list(&path, hidden)
+        }
+        Some("--find") => find(args),
+        Some("--panes") => {
+            let left = path_arg(args.next())?;
+            let right = match args.next() {
+                Some(path) => path_arg(Some(path))?,
+                None => left.clone(),
+            };
+            if args.next().is_some() {
+                return Err(io::Error::other("unexpected argument"));
+            }
+            panes_ui::browse(&left, &right)
         }
         Some("--tree") => {
             let path = path_arg(args.next())?;
@@ -964,7 +997,7 @@ fn run() -> io::Result<()> {
             Ok(())
         }
         _ => {
-            eprintln!("Experimental read-only Rust port\nUsage: terminal-tree --list [-a] [PATH] | --browse [PATH] | --tree [PATH] | --scan-count PATH [REPEATS] | --version | --edition");
+            eprintln!("Experimental read-only Rust port\nUsage: terminal-tree --list [-a] [PATH] | --browse [PATH] | --tree [PATH] | --panes [LEFT] [RIGHT] | --find PATH QUERY [--hidden] [--depth N] | --scan-count PATH [REPEATS] | --version | --edition");
             Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "unsupported or missing command",
