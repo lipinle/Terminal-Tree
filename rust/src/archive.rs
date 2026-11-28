@@ -76,12 +76,12 @@ fn name(header: &[u8; BLOCK], kind: Kind) -> io::Result<String> {
     // Deliberately conservative portable ASCII subset. These strings are
     // listing labels, not validated destinations for a future extractor.
     if path.is_empty()
-        || !path.bytes().all(|b| {
-            b.is_ascii_alphanumeric() || matches!(b, b'/' | b'.' | b'_' | b'-' | b' ')
-        })
-        || path.split('/').any(|p| {
-            p.is_empty() || p == "." || p == ".." || p.ends_with('.') || p.ends_with(' ')
-        })
+        || !path
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'.' | b'_' | b'-' | b' '))
+        || path
+            .split('/')
+            .any(|p| p.is_empty() || p == "." || p == ".." || p.ends_with('.') || p.ends_with(' '))
     {
         return Err(invalid("unsupported or unsafe USTAR member name"));
     }

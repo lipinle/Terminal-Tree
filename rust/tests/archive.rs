@@ -144,7 +144,11 @@ fn native_listing_cli_rejects_aliases_and_malformed_data() {
     assert_eq!(output.stdout, b"file\t5\tfile.txt\n");
     symlink(&path, root.join("alias")).unwrap();
     symlink(&root, root.join("parent-alias")).unwrap();
-    for bad in [root.join("alias"), root.join("parent-alias/test.tar"), root.clone()] {
+    for bad in [
+        root.join("alias"),
+        root.join("parent-alias/test.tar"),
+        root.clone(),
+    ] {
         let output = run(&bad);
         assert!(!output.status.success());
         assert!(output.stdout.is_empty());
