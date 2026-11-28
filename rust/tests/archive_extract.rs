@@ -100,4 +100,24 @@ fn staged_extraction_never_merges_or_overwrites_existing_trees() {
     });
     assert!(result.is_err());
     assert_eq!(fs::read(&conflict).unwrap(), b"other");
+
+    for (index, point) in ["extract-before-sync", "extract-after-sync"]
+        .into_iter()
+        .enumerate()
+    {
+        let path = workspace.join(format!("published-{index}"));
+        let destination = engine.destination(&path).unwrap();
+        let result = engine.extract_archive_reviewed_with(&destination, &archive, &mut |seen| {
+            if seen == point {
+                Err(io::Error::other("injected interruption"))
+            } else {
+                Ok(())
+            }
+        });
+        assert!(result.is_err());
+        assert_eq!(fs::read(path.join("folder/file")).unwrap(), b"hello\0");
+        assert!(path.join("empty").is_dir());
+        assert_eq!(fs::read(&source).unwrap(), archive);
+        assert_eq!(engine.pending().unwrap().len(), index + 3);
+    }
 }

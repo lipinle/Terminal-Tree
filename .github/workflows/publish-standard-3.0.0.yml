@@ -1,0 +1,119 @@
+name: Publish Standard 3.0.0
+on:
+  push:
+    branches: ['release-candidate/3.0.0']
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: standard-3.0.0-publication
+  cancel-in-progress: false
+
+jobs:
+  acceptance:
+    if: github.repository == 'lipinle/Terminal-Tree' && github.actor == 'lipinle' && github.ref == 'refs/heads/release-candidate/3.0.0'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    outputs:
+      native_run: ${{ steps.gate.outputs.native_run }}
+    steps:
+      - name: Require all fifteen successful jobs on this exact owner candidate
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          workflows=(rust-quality.yml rust-compat.yml rust.yml rust-crash.yml)
+          counts=(3 7 1 4)
+          for attempt in $(seq 1 105); do
+            ready=0
+            native_run=
+            for i in "${!workflows[@]}"; do
+              file=${workflows[$i]}
+              runs=$(gh api --method GET "repos/$GH_REPO/actions/workflows/$file/runs" \
+                -f head_sha="$GITHUB_SHA" -f branch="$GITHUB_REF_NAME" -f event=push -F per_page=30)
+              run=$(jq -c --arg sha "$GITHUB_SHA" --arg branch "$GITHUB_REF_NAME" \
+                '[.workflow_runs[] | select(.head_sha == $sha and .head_branch == $branch and .event == "push" and .actor.login == "lipinle" and .head_repository.full_name == "lipinle/Terminal-Tree")] | sort_by(.run_number,.run_attempt) | last // empty' <<<"$runs")
+              [[ -n "$run" ]] || continue
+              [[ $(jq -r '.status' <<<"$run") == completed ]] || continue
+              if [[ $(jq -r '.conclusion' <<<"$run") != success ]]; then
+                echo "Acceptance failed: $file" >&2
+                exit 1
+              fi
+              id=$(jq -r '.id' <<<"$run")
+              jobs=$(gh api "repos/$GH_REPO/actions/runs/$id/jobs?per_page=100&filter=latest")
+              jq -e --argjson expected "${counts[$i]}" \
+                '.total_count == $expected and (.jobs | length) == $expected and all(.jobs[]; .status == "completed" and .conclusion == "success")' <<<"$jobs" >/dev/null
+              if [[ $file == rust.yml ]]; then native_run=$id; fi
+              ready=$((ready + 1))
+            done
+            if [[ $ready == 4 && -n "$native_run" ]]; then
+              echo "native_run=$native_run" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "Acceptance did not complete; no publication" >&2
+          exit 1
+
+  publish:
+    needs: acceptance
+    if: github.repository == 'lipinle/Terminal-Tree' && github.actor == 'lipinle' && github.ref == 'refs/heads/release-candidate/3.0.0'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Package the validated native Standard artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NATIVE_RUN: ${{ needs.acceptance.outputs.native_run }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(uname -m)" = x86_64
+          grep -Fx 'version = "3.0.0"' rust/Cargo.toml
+          mkdir -p "$RUNNER_TEMP/tt-download" "$RUNNER_TEMP/tt-package" "$RUNNER_TEMP/tt-dist"
+          gh run download "$NATIVE_RUN" --name terminal-tree-standard-preview --dir "$RUNNER_TEMP/tt-download"
+          input="$RUNNER_TEMP/tt-download/terminal-tree-standard-preview.tar.gz"
+          test "$(tar -tzf "$input")" = terminal-tree
+          tar -xOzf "$input" terminal-tree > "$RUNNER_TEMP/tt-package/terminal-tree"
+          chmod 755 "$RUNNER_TEMP/tt-package/terminal-tree"
+          test "$("$RUNNER_TEMP/tt-package/terminal-tree" --edition)" = standard
+          test "$("$RUNNER_TEMP/tt-package/terminal-tree" --version)" = 'terminal-tree Rust 3.0.0'
+          cp README.md LICENSE "$RUNNER_TEMP/tt-package/"
+          cp rust/integration-preview.sh "$RUNNER_TEMP/tt-package/integration.sh"
+          archive=terminal-tree-3.0.0-linux-x86_64.tar.gz
+          tar --sort=name --mtime="@$(git show -s --format=%ct HEAD)" --owner=0 --group=0 --numeric-owner \
+            -C "$RUNNER_TEMP/tt-package" -cf - terminal-tree integration.sh README.md LICENSE | gzip -n > "$RUNNER_TEMP/tt-dist/$archive"
+          (cd "$RUNNER_TEMP/tt-dist" && sha256sum "$archive" > SHA256SUMS)
+      - name: Create release draft, fast-forward main, then publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EXPECTED_BASE: 80c1d012543507c5e64c72c3245a2a24879bf431
+        run: |
+          set -euo pipefail
+          tag=v3.0.0
+          head=$(gh api "repos/$GH_REPO/git/ref/heads/main" --jq '.object.sha')
+          test "$head" = "$EXPECTED_BASE"
+          current=$(gh api "repos/$GH_REPO/git/ref/heads/release-candidate/3.0.0" --jq '.object.sha')
+          test "$current" = "$GITHUB_SHA"
+          compare=$(gh api "repos/$GH_REPO/compare/$EXPECTED_BASE...$GITHUB_SHA")
+          jq -e --arg base "$EXPECTED_BASE" '.status == "ahead" and .behind_by == 0 and .merge_base_commit.sha == $base' <<<"$compare" >/dev/null
+          gh release create "$tag" --target "$GITHUB_SHA" --draft --title "Terminal Tree Standard 3.0.0" \
+            --notes-file RELEASE_NOTES.md "$RUNNER_TEMP/tt-dist/terminal-tree-3.0.0-linux-x86_64.tar.gz" "$RUNNER_TEMP/tt-dist/SHA256SUMS"
+          test "$(gh api "repos/$GH_REPO/git/ref/heads/main" --jq '.object.sha')" = "$EXPECTED_BASE"
+          gh api --method PATCH "repos/$GH_REPO/git/refs/heads/main" -f sha="$GITHUB_SHA" -F force=false >/dev/null
+          test "$(gh api "repos/$GH_REPO/git/ref/heads/main" --jq '.object.sha')" = "$GITHUB_SHA"
+          gh release edit "$tag" --draft=false --latest
+          gh release view "$tag" --json tagName,isDraft,isPrerelease,assets,url

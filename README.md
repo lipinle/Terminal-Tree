@@ -1,12 +1,14 @@
-# Terminal Tree — Standard 3.0.0-rc.1
+# Terminal Tree — Standard 3.0.0
 
-Terminal Tree is a terminal file navigator with explicitly scoped native Linux file operations. This is a release candidate under validation, not a stable release or a replacement for independent backups. No stable release is implied by a successful build.
+Terminal Tree is a terminal file navigator with explicitly scoped native Linux file operations. Standard 3.0.0 is the first stable Rust release for the documented supported scope. It is not a replacement for independent backups. Paranoid remains a separate preview build.
 
 To start browsing after building or installing, run `terminal-tree --browse .`. Use the arrow keys to navigate, F1 for help and q to exit. Run `terminal-tree --help` for the commands available in your build.
 
 ## Installation and updates
 
-On Linux, install the Rust toolchain, a C toolchain, Bash, GNU coreutils and gzip. Build as a normal user, never with sudo:
+The Linux x86-64 release archive contains a native Standard executable, Bash integration, this guide and the license. Download it and SHA256SUMS from the matching GitHub release, verify with `sha256sum -c SHA256SUMS`, and extract into a fresh owned directory. Run `./terminal-tree --edition` and `./terminal-tree --version` from the extracted directory before use. Ubuntu 22.04 and 24.04 source builds are tested; the hosted prebuilt binary targets the Ubuntu 24.04 runner and may require a compatible glibc. The extracted archive is not a manifest-managed source installation.
+
+To build from source on Linux, install the Rust toolchain, a C toolchain, Bash, GNU coreutils and gzip. Build as a normal user, never with sudo:
 
 ```sh
 cargo build --locked --release --manifest-path rust/Cargo.toml --features native-ops --bin terminal-tree
@@ -92,7 +94,7 @@ Use new output filenames; shell redirection can overwrite a file before the prog
 
 If a write fails or is interrupted, open j in the same scoped navigator to inspect pending journal records. A pending record does not prove an operation failed. Preserve the journal, source, destination, staging data and any retained original. Compare independently before attempting manual recovery. Never execute a path from an untrusted journal or repeat a deletion blindly. For a retained move with both the published and retained copies present, select the published file in scoped mode, press O, enter the independently inspected original absolute path and transaction ID, then a new filename. Review the four paths and type recover. The program checks the journal structure and matching current file manifests, copies to a new name without overwrite, and preserves both files and the old journal. This is not proof of historical provenance. Missing or conflicting evidence requires independent manual recovery; do not purge retention or overwrite existing data. The journal is not a backup.
 
-Native operations are Linux-specific and depend on actual filesystem semantics, including permissions, metadata, mount isolation and no-replace rename. Unsupported operations fail rather than silently degrade. Do not assume the preview is validated on every filesystem, network share, terminal or concurrent-writer scenario. Portable builds provide a reduced read-only navigator. No stable-release assurance is implied.
+Native operations are Linux-specific and depend on actual filesystem semantics, including permissions, metadata, mount isolation and no-replace rename. Unsupported operations fail rather than silently degrade. Native regression coverage includes Ubuntu 22.04/24.04, ext4, XFS, Btrfs, exFAT and an isolated size-limited mount; this does not mean every operation is supported on every filesystem. Windows is tested in reduced read-only mode. macOS runtime validation is deferred. Do not assume support for network shares, every terminal or hostile concurrent writers. The virtual power-cut matrix covers copy, move, Trash, restore and purge; the newer archive extraction, retained move and retained recovery paths have targeted interruption and conflict tests, not exhaustive power-loss coverage. Retained moves intentionally preserve the original in private retention and do not perform automatic cleanup. Use an independent backup and start in a disposable workspace.
 
 ## Development checks
 

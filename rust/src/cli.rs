@@ -188,10 +188,7 @@ pub(super) fn run() -> io::Result<()> {
         }
         Some("--version") => {
             end_of_args(&mut args)?;
-            println!(
-                "terminal-tree Rust experimental {}",
-                env!("CARGO_PKG_VERSION")
-            );
+            println!("terminal-tree Rust {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
         Some("--list") => {

@@ -36,3 +36,14 @@ fn invalid_arguments_fail_before_running_the_command() {
         assert!(!output.stderr.is_empty(), "{args:?}");
     }
 }
+
+#[test]
+fn version_matches_package() {
+    let output = run(&["--version"]);
+    assert!(output.status.success());
+    assert_eq!(
+        output.stdout,
+        format!("terminal-tree Rust {}\n", env!("CARGO_PKG_VERSION")).as_bytes()
+    );
+    assert!(output.stderr.is_empty());
+}

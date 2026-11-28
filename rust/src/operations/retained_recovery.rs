@@ -260,8 +260,10 @@ impl Engine {
             name,
             super::RenameFlags::NOREPLACE,
         )?;
+        checkpoint("recovery-before-sync")?;
         parent.sync_all()?;
         stage.sync_all()?;
+        checkpoint("recovery-after-sync")?;
         require(
             dir_id(&open_dir(&fd_path(&parent).join(&stage_name))?)? == dir_id(&stage)?,
             "recovery stage replaced",
@@ -338,6 +340,35 @@ mod tests {
         }
         assert!(!original.exists());
         assert!(engine.pending().unwrap().is_empty());
+        for (index, point) in [
+            "copy-before-publish",
+            "recovery-before-sync",
+            "recovery-after-sync",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let path = work.join(format!("interrupted-{index}"));
+            let destination = engine.destination(&path).unwrap();
+            let result =
+                engine.copy_retained_recovery(&review, &destination, &mut |checkpoint| {
+                    if checkpoint == point {
+                        Err(io::Error::other("injected interruption"))
+                    } else {
+                        Ok(())
+                    }
+                });
+            assert!(result.is_err());
+            if index == 0 {
+                assert!(!path.exists());
+            } else {
+                assert_eq!(fs::read(&path).unwrap(), b"preserved");
+            }
+            assert_eq!(fs::read(&retained).unwrap(), b"preserved");
+            assert_eq!(fs::read(&published).unwrap(), b"preserved");
+            assert!(!original.exists());
+            assert_eq!(engine.pending().unwrap().len(), index + 1);
+        }
         fs::write(&published, b"changed").unwrap();
         assert!(engine
             .review_retained_recovery(&original, &published, &id, &mut hook)

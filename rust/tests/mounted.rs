@@ -79,6 +79,37 @@ fn mount_policy_and_real_enospc() {
         .is_err());
     assert_eq!(fs::read(&interrupted).unwrap(), b"do not lose");
     assert_eq!(fs::read(&interrupted_target).unwrap(), b"do not lose");
+    for (index, point) in ["retained-before-sync", "retained-after-sync"]
+        .into_iter()
+        .enumerate()
+    {
+        let source = home.join(format!("interrupted-retention-{index}"));
+        let destination = external.join(format!("interrupted-publication-{index}"));
+        fs::write(&source, b"retention evidence").unwrap();
+        let result = e.move_retaining_source(
+            &e.review(&source).unwrap(),
+            &e.destination(&destination).unwrap(),
+            &mut |seen| {
+                if seen == point {
+                    Err(std::io::Error::other("injected interruption"))
+                } else {
+                    Ok(())
+                }
+            },
+        );
+        assert!(result.is_err());
+        assert!(!source.exists());
+        assert_eq!(fs::read(&destination).unwrap(), b"retention evidence");
+        let records = e.pending().unwrap();
+        let record = records
+            .iter()
+            .find(|record| record["source"].as_str() == source.to_str())
+            .unwrap();
+        assert_eq!(record["operation"], "retained-move");
+        let retained = PathBuf::from(record["stage"].as_str().unwrap());
+        assert!(retained.starts_with(&home));
+        assert_eq!(fs::read(retained).unwrap(), b"retention evidence");
+    }
     let denied = home.join("denied");
     fs::write(&denied, b"private").unwrap();
     fs::set_permissions(&denied, fs::Permissions::from_mode(0o0)).unwrap();
@@ -100,6 +131,6 @@ fn mount_policy_and_real_enospc() {
     assert_eq!(fs::metadata(&big).unwrap().len(), 16 * 1024 * 1024);
     assert_eq!(fs::read(&source).unwrap(), b"preserved data");
     assert_eq!(fs::read(&dest).unwrap(), b"preserved data");
-    assert_eq!(e.pending().unwrap().len(), 2);
+    assert_eq!(e.pending().unwrap().len(), 4);
     println!("TT_MOUNT_POLICY external copy, cross-device move refusal, nested bind mount refusal, permissions and real ENOSPC passed");
 }
