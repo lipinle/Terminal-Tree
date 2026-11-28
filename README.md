@@ -88,6 +88,10 @@ Click the Preview heading or press Alt+P to cycle Auto (text or optional visual)
 
 Click [Git] in the top bar, press Alt+G, or search Git Manager in the command palette. The Git add-on must be enabled and installed. Explicitly trust the repository before Git reads its configuration. Review changes, staged and unstaged diffs, local history, branches and the next commit summary. Enable local editing separately for each manager session to stage/unstage a selected file, create a local commit from all staged files, or create a branch without switching. Each write requires review. The manager does not run push, pull, fetch, checkout, reset or force commands. Git editing is separate from the file-operation journal, is not undoable there, and can affect files outside scoped roots via Git configuration; only ordinary repositories without ongoing Git operations or conflicts are eligible. Hooks, global configuration and commit signing are disabled by the bounded companion runner; configure local identity and use normal Git for workflows requiring hooks/signing. No automatic Git calls while browsing.
 
+### Clickable navigation and Markdown preview
+
+Click a fully visible breadcrumb segment to navigate to its directory. In List view, click Name, Size or Type in the header to select the existing sort order. The active sort column has an indicator. Markdown Auto preview formats headings, lists, quotes and code fences, wraps to panel width, and never opens embedded links or images. The status bar reports when the embedded Bash console is running.
+
 ## Navigation and search
 
 Use the installed executable (examples below assume it is on your PATH), or substitute its full path.

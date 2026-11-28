@@ -3,7 +3,7 @@ use crossterm::{
     cursor::MoveTo,
     event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind},
     queue,
-    style::{Color, Print, ResetColor, SetBackgroundColor, SetForegroundColor},
+    style::{Attribute, Color, Print, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor},
     terminal::{self, Clear, ClearType},
 };
 use std::{
@@ -86,6 +86,72 @@ fn breadcrumb(path: &std::path::Path) -> String {
     path.components().map(|p| display_name(p.as_os_str())).collect::<Vec<_>>().join(" > ")
 }
 
+fn breadcrumb_hit(path:&std::path::Path,column:u16,width:u16)->Option<PathBuf> {
+    use unicode_width::UnicodeWidthStr;
+    let mut prefix=PathBuf::new();
+    let mut x=0usize;
+    for part in path.components(){
+        prefix.push(part.as_os_str());
+        let label=display_name(part.as_os_str());
+        let end=x+label.width();
+        if end>usize::from(width){break;}
+        if (x..end).contains(&usize::from(column)){return Some(prefix);}
+        x=end+3;
+    }
+    None
+}
+fn list_sort_hit(column:u16,width:u16,details:bool)->terminal_tree::Order {
+    use terminal_tree::Order;
+    if details&&width>=48 {
+        if column>=width-11 {Order::Type}
+        else if column>=width-22 {Order::Size}
+        else{Order::Name}
+    }else if width>=30&&column>=width-12 {Order::Size}
+    else{Order::Name}
+}
+fn list_heading(order:terminal_tree::Order,focused:bool,width:u16,details:bool)->String{
+    use terminal_tree::Order;
+    let name=if focused{"Files * / Name"}else{"Files / Name"};
+    list_columns(&format!("{name}{}",if order==Order::Name{" ↑"}else{""}),
+        if order==Order::Size{"Size ↑"}else{"Size"},
+        if order==Order::Type{"Type ↑"}else{"Type"},width,details)
+}
+#[derive(Clone,Copy,Default,Debug,PartialEq,Eq)]
+enum PreviewStyle {#[default] Plain,Heading,Code,Quote}
+#[cfg(feature = "native-ops")]
+fn markdown_preview(lines:&[String],width:usize)->(Vec<String>,Vec<PreviewStyle>){
+    use unicode_width::UnicodeWidthChar;
+    let mut out=Vec::new();
+    let mut styles=Vec::new();
+    let mut fence=false;
+    let width=width.max(1);
+    for (i,raw) in lines.iter().enumerate(){
+        if out.len()>=8192{break;}
+        let trimmed=raw.trim_start();
+        let (text,style)=if i==0 {(raw.clone(),PreviewStyle::Heading)}
+        else if trimmed.starts_with(&char::from(96).to_string().repeat(3))||trimmed.starts_with("~~~"){
+            fence=!fence;(raw.clone(),PreviewStyle::Code)
+        }else if fence{(raw.clone(),PreviewStyle::Code)}
+        else if let Some((_,title))=trimmed.split_once(' ').filter(|(p,_)|!p.is_empty()&&p.len()<=6&&p.bytes().all(|c|c==b'#')){
+            (title.to_owned(),PreviewStyle::Heading)
+        }else if let Some(s)=trimmed.strip_prefix("> "){(format!("│ {s}"),PreviewStyle::Quote)}
+        else if let Some(s)=trimmed.strip_prefix("- ").or_else(||trimmed.strip_prefix("* ")){(format!("• {s}"),PreviewStyle::Plain)}
+        else{(raw.clone(),PreviewStyle::Plain)};
+        let mut line=String::new();
+        let mut cells=0;
+        for ch in text.chars(){
+            let n=ch.width().unwrap_or(0);
+            if n>width{continue;}
+            if cells+n>width{
+                if out.len()>=8192{return (out,styles);}
+                out.push(std::mem::take(&mut line));styles.push(style);cells=0;
+            }
+            line.push(ch);cells+=n;
+        }
+        if out.len()<8192{out.push(line);styles.push(style);}
+    }
+    (out,styles)
+}
 fn human_size(size:u64)->String {
     if size<1024 {return format!("{size} B");}
     let mut n=size as f64;
@@ -186,6 +252,7 @@ pub struct State {
     preview_key: Option<PreviewKey>,
     preview_lines: Vec<String>,
     preview_scroll: usize,
+    preview_styles: Vec<PreviewStyle>,
     preview_mode: u8,
     #[cfg(feature = "native-ops")]
     visual_frame: Option<terminal_tree::visual_preview::Frame>,
@@ -221,7 +288,7 @@ impl State {
         let mut state = Self {
             places: Vec::new(), bookmarks: Vec::new(), trash,
             side_focus: false, side_cursor: 0, side_top: 0, preview_enabled: true,
-            preview_key: None, preview_lines: Vec::new(), preview_scroll: 0, preview_mode: 0,
+            preview_key: None, preview_lines: Vec::new(), preview_scroll: 0, preview_styles: Vec::new(), preview_mode: 0,
             #[cfg(feature = "native-ops")]
             visual_frame: None,
             #[cfg(feature = "native-ops")]
@@ -364,6 +431,11 @@ impl State {
         }
         if width>=83 {queue!(out,MoveTo(78,0),SetForegroundColor(self.prefs.accent),Print(if self.prefs.companions[2]{"[Git]"}else{"[git]"}),SetForegroundColor(self.prefs.foreground))?;}
         Ok(())
+    }
+    fn task_label(&self)->&'static str {
+        #[cfg(feature = "native-ops")]
+        if self.terminal_panel.running(){return "Bash running";}
+        "idle"
     }
     fn layout(&self, w: u16, h: u16) -> Layout {
         let mut layout = Layout::new(w,h,self.preview_enabled);
@@ -769,6 +841,7 @@ impl State {
         let _=(width,rows);
         if key == self.preview_key && !self.preview_lines.is_empty() { return; }
         self.preview_key = key;
+        self.preview_styles.clear();
         #[cfg(feature = "native-ops")]
         {
             self.visual_frame=None;
@@ -804,7 +877,10 @@ impl State {
                     match terminal_tree::preview::read_lines(&e.path, if self.preview_mode==2 {terminal_tree::preview::Mode::Hex}else{terminal_tree::preview::Mode::Auto}) {
                         Ok(mut lines) => {
                             if !lines.is_empty() { lines[0] = e.name.clone(); }
-                            lines
+                            if self.preview_mode==0 && e.path.extension().and_then(|x|x.to_str()).is_some_and(|x|x.eq_ignore_ascii_case("md")||x.eq_ignore_ascii_case("markdown")) && lines.get(1).is_some_and(|s|s!="Hex preview") {
+                                let (formatted,styles)=markdown_preview(&lines,usize::from(width));
+                                self.preview_styles=styles;formatted
+                            }else{lines}
                         }
                         Err(error) => vec![e.name.clone(), display_name(std::ffi::OsStr::new(&error.to_string()))],
                     }
@@ -1009,7 +1085,7 @@ impl State {
             draw_column(&mut out, model, side, true, 0, width, cap, marked, self.icons, &self.prefs)?;
         }
         let safety = if writable { "Scoped" } else { "Read-only" };
-        let status = if self.prefs.status_details { format!("Clipboard: {clipboard} files | Tasks: idle | Safety: {safety} | {} entries", model.entries.len()) } else { format!("Safety: {safety}") };
+        let status = if self.prefs.status_details { format!("Clipboard: {clipboard} files | Tasks: {} | Safety: {safety} | {} entries",self.task_label(), model.entries.len()) } else { format!("Safety: {safety}") };
         let detail = if searching || !model.query.is_empty() {
             format!("Filter: {} | {message}", display_name(std::ffi::OsStr::new(&model.query)))
         } else { message.to_owned() };
@@ -1059,7 +1135,7 @@ impl State {
                 Print(if self.side_focus { "Places *" } else { "Places" }), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
         }
         queue!(out, MoveTo(l.first(),3), SetForegroundColor(self.prefs.accent),
-            Print(if self.view==View::List {list_columns(if self.side_focus{"Files / Name"}else{"Files * / Name"},"Size","Type",l.end()-l.first(),self.prefs.list_details)}else if self.side_focus {"Files".into()}else{"Files *".into()}), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
+            Print(if self.view==View::List {list_heading(model.order,!self.side_focus,l.end()-l.first(),self.prefs.list_details)}else if self.side_focus {"Files".into()}else{"Files *".into()}), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
         if l.preview > 0 {
             queue!(out, MoveTo(l.end()+1,3), SetForegroundColor(self.prefs.accent), Print(super::clip(match self.preview_mode {1=>"Preview [Info]",2=>"Preview [Hex]",_=>"Preview [Auto]"},usize::from(l.preview))), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
             let entry = if let Some(tree) = &self.expanded_tree {
@@ -1095,7 +1171,15 @@ impl State {
             if l.preview > 0 {
                 queue!(out, MoveTo(l.end(),y), Print("│"))?;
                 if let Some(line) = self.preview_lines.get(row+self.preview_scroll) {
-                    queue!(out, MoveTo(l.end()+1,y), Print(super::clip(line,usize::from(l.preview))))?;
+                    let style=self.preview_styles.get(row+self.preview_scroll).copied().unwrap_or_default();
+                    queue!(out,MoveTo(l.end()+1,y))?;
+                    match style {
+                        PreviewStyle::Heading=>queue!(out,SetAttribute(Attribute::Bold),SetForegroundColor(self.prefs.accent))?,
+                        PreviewStyle::Code=>queue!(out,SetForegroundColor(Color::Yellow))?,
+                        PreviewStyle::Quote=>queue!(out,SetForegroundColor(self.prefs.accent))?,
+                        PreviewStyle::Plain=>(),
+                    }
+                    queue!(out,Print(super::clip(line,usize::from(l.preview))),SetAttribute(Attribute::NormalIntensity),SetForegroundColor(self.prefs.foreground))?;
                 } else {
                     #[cfg(feature = "native-ops")]
                     if let Some(frame)=&self.visual_frame {
@@ -1142,7 +1226,7 @@ impl State {
             queue!(out, SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
         }
         let safety = if self.expanded_tree.is_some() { "Tree inspection" } else if writable { "Scoped" } else { "Read-only" };
-        let status = if self.prefs.status_details { format!("Clipboard: {clipboard} files | Tasks: idle | Safety: {safety} | {} | {} View | Zoom {}",model.entries.len(),self.view.name(),self.zoom) } else { format!("Safety: {safety} | {} View | Zoom {}",self.view.name(),self.zoom) };
+        let status = if self.prefs.status_details { format!("Clipboard: {clipboard} files | Tasks: {} | Safety: {safety} | {} | {} View | Zoom {}",self.task_label(),model.entries.len(),self.view.name(),self.zoom) } else { format!("Safety: {safety} | {} View | Zoom {}",self.view.name(),self.zoom) };
         let detail = if self.expanded_tree.is_some() {
             "Expanded tree: Right expand / Left collapse / Enter open / Esc back".to_owned()
         } else if searching || !model.query.is_empty() {
@@ -1350,7 +1434,15 @@ impl State {
                     _ => (),
                 }
             }
-            if !self.dual && self.prefs.toolbar && mouse.row == 1 && mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+            if !self.dual && mouse.row == 1 && mouse.kind == MouseEventKind::Down(MouseButton::Left) && mouse.modifiers==KeyModifiers::NONE {
+                let path_width=if self.prefs.toolbar{toolbar_start(l.width).unwrap_or(l.width)}else{l.width};
+                if mouse.column<path_width {
+                    if let Some(target)=breadcrumb_hit(&model.directory,mouse.column,path_width){
+                        if target!=model.directory {model.go(target)?;self.clear_tab_transients();}
+                    }
+                    return Ok(None);
+                }
+                if !self.prefs.toolbar{return Ok(None);}
                 match toolbar_hit(l.width, mouse.column) {
                     Some(0) => self.start_location(model),
                     Some(1) => {
@@ -1455,6 +1547,16 @@ impl State {
                     } else if l.sidebar>0&&mouse.column==l.sidebar {Some(Divider::Sidebar)}
                     else if l.preview>0&&mouse.column==l.end(){Some(Divider::Preview)}else{None};
                     if self.dragging.is_some(){return Ok(None);}
+                }
+            }
+        }
+        if !self.dual && self.view==View::List {
+            if let Event::Mouse(mouse)=&event {
+                if h>=8 && mouse.row==3 && (l.first()..l.end()).contains(&mouse.column) && mouse.kind==MouseEventKind::Down(MouseButton::Left)&&mouse.modifiers==KeyModifiers::NONE {
+                    let order=list_sort_hit(mouse.column-l.first(),l.end()-l.first(),self.prefs.list_details);
+                    model.set_view(model.hidden,order,model.kind_filter,model.query.clone())?;
+                    self.pane_switched=true;self.side_focus=false;self.expanded_tree=None;self.preview_key=None;
+                    return Ok(None);
                 }
             }
         }
@@ -1731,6 +1833,31 @@ fn draw_column(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn breadcrumb_and_sort_targets(){
+        use std::path::Path;
+        use terminal_tree::Order;
+        let p=Path::new("/home/日本語/docs");
+        assert_eq!(breadcrumb_hit(p,0,80),Some(PathBuf::from("/")));
+        assert_eq!(breadcrumb_hit(p,4,80),Some(PathBuf::from("/home")));
+        assert_eq!(breadcrumb_hit(p,9,80),None);
+        assert_eq!(breadcrumb_hit(p,11,80),Some(PathBuf::from("/home/日本語")));
+        assert_eq!(breadcrumb_hit(p,11,12),None);
+        assert_eq!(list_sort_hit(40,60,true),Order::Size);
+        assert_eq!(list_sort_hit(55,60,true),Order::Type);
+        assert_eq!(list_sort_hit(32,40,false),Order::Size);
+    }
+    #[cfg(feature = "native-ops")]
+    #[test]
+    fn markdown_formats_without_loading_content(){
+        let lines=["README.md","# Heading","- List","> Quote","<img src=x>"].map(str::to_owned);
+        let (text,styles)=markdown_preview(&lines,80);
+        assert_eq!(text[1],"Heading");
+        assert_eq!(styles[1],PreviewStyle::Heading);
+        assert_eq!(text[2],"• List");
+        assert_eq!(styles[3],PreviewStyle::Quote);
+        assert_eq!(text[4],"<img src=x>");
+    }
     #[test]
     fn list_cells_fit_and_sizes_are_readable() {
         use unicode_width::UnicodeWidthStr;

@@ -55,6 +55,7 @@ def main(binary):
             (b"\x1b[<80;25;5M", b"Zoom 2"),
             (b"\x1b[<81;25;5M", b"Zoom 1"),
             (b"\x1b[<0;106;2M", b"List View"),
+            (b"\x1b[<0;63;4M", "Size ↑".encode()),
             (b"\x1bp", b"Preview [Info]"),
             (b"\x1bp", b"Preview [Hex]"),
             (b"\x1bp", b"Preview [Auto]"),
