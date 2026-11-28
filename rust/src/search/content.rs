@@ -38,6 +38,19 @@ fn unchanged(a: &fs::Metadata, b: &fs::Metadata) -> bool {
         && a.ctime_nsec() == b.ctime_nsec()
 }
 
+// Keep the original root identity through both enumeration and content reads.
+// This detects observed replacement, not every race or a consistent snapshot.
+fn check_root(root: &Path, original: &fs::Metadata) -> io::Result<()> {
+    let current = fs::symlink_metadata(root)?;
+    if !current.is_dir()
+        || (current.dev(), current.ino()) != (original.dev(), original.ino())
+        || root.canonicalize()? != root
+    {
+        return Err(io::Error::other("content search root identity changed"));
+    }
+    Ok(())
+}
+
 /// Search complete, bounded UTF-8 files for an exact case-sensitive substring.
 /// NUL-bearing or invalid UTF-8 files and oversized files are counted, not
 /// silently treated as nonmatches. Errors/cancellation return no partial report.
@@ -63,7 +76,9 @@ pub fn text(
     }
     check_cancel(cancel)?;
     let root = root.canonicalize()?;
-    let device = fs::symlink_metadata(&root)?.dev();
+    let original = fs::symlink_metadata(&root)?;
+    check_root(&root, &original)?;
+    let device = original.dev();
     let candidates = filenames(
         &root,
         "",
@@ -74,9 +89,11 @@ pub fn text(
         },
         cancel,
     )?;
+    check_root(&root, &original)?;
     let mut report = ContentReport::default();
     for entry in candidates {
         check_cancel(cancel)?;
+        check_root(&root, &original)?;
         if entry.symlink {
             report.skipped_nonregular += 1;
             continue;
@@ -122,6 +139,7 @@ pub fn text(
         check_cancel(cancel)?;
         check_directory(&root, parent)?;
         session.verify()?;
+        check_root(&root, &original)?;
         if !unchanged(&opened, &fs::symlink_metadata(&entry.path)?)
             || bytes.len() as u64 != opened.len()
         {
@@ -144,5 +162,27 @@ pub fn text(
         }
     }
     check_cancel(cancel)?;
+    check_root(&root, &original)?;
     Ok(report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_observed_root_replacement_after_enumeration() {
+        let parent = std::env::temp_dir().join(format!("tt-content-root-{}", std::process::id()));
+        fs::create_dir(&parent).unwrap();
+        let root = parent.join("root");
+        fs::create_dir(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let original = fs::symlink_metadata(&root).unwrap();
+        assert!(check_root(&root, &original).is_ok());
+        fs::rename(&root, parent.join("old")).unwrap();
+        fs::create_dir(&root).unwrap();
+        let result = check_root(&root, &original);
+        fs::remove_dir_all(&parent).unwrap();
+        assert!(result.is_err());
+    }
 }
