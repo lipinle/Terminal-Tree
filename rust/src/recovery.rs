@@ -36,7 +36,7 @@ pub fn show(
     ];
     if truncated {
         lines.push(
-            "Showing at most 128 records; additional records remain. No records were modified."
+            "Report incomplete: scan limited to 4096 directory entries and 128 records. No records were modified."
                 .into(),
         );
     }
