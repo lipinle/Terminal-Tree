@@ -11,7 +11,7 @@ use std::{
     path::PathBuf,
     time::SystemTime,
 };
-use terminal_tree::{display_name, tree::TreeModel, Entry, KindFilter, Model};
+use terminal_tree::{display_name, tree::TreeModel, Entry, KindFilter, Model, Order};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum View {
@@ -86,18 +86,78 @@ fn breadcrumb(path: &std::path::Path) -> String {
     path.components().map(|p| display_name(p.as_os_str())).collect::<Vec<_>>().join(" > ")
 }
 
-fn row_text(entry: &Entry, index: usize, count: usize, view: View, glyph: &str, marked: bool, width: u16) -> String {
-    let mark = if marked { "[x]" } else { "   " };
-    match view {
-        View::Tree => format!("{} {mark} {glyph} {}", if index + 1 == count { "└──" } else { "├──" }, entry.name),
-        View::List if width >= 30 => {
-            let name = super::clip(&format!("{mark} {glyph} {}", entry.name), usize::from(width) - 13);
-            use unicode_width::UnicodeWidthStr;
-            let pad = (usize::from(width) - 13).saturating_sub(name.width());
-            format!("{name}{} {:>12}", " ".repeat(pad), if entry.directory { "<DIR>".to_owned() } else { entry.size.to_string() })
-        }
-        _ => format!("{mark} {glyph} {}", entry.name),
+fn human_size(bytes:u64)->String {
+    let units=["B","KiB","MiB","GiB","TiB","PiB","EiB"];
+    let mut unit=0;
+    let mut scale=1u64;
+    while unit+1<units.len() && bytes/scale>=1024 {scale*=1024;unit+=1;}
+    if unit==0 {format!("{bytes} B")} else {
+        let n=(u128::from(bytes)*10/u128::from(scale)) as u64;
+        format!("{}.{} {}",n/10,n%10,units[unit])
     }
+}
+fn modified_date(time:Option<SystemTime>)->String {
+    let Some(time)=time else {return "-".into()};
+    let days=match time.duration_since(SystemTime::UNIX_EPOCH) {
+        Ok(d)=>(d.as_secs()/86400) as i64,
+        Err(e)=>-((e.duration().as_secs()/86400) as i64)-i64::from(e.duration().as_secs()%86400!=0||e.duration().subsec_nanos()!=0),
+    };
+    if !(-719162..=2932896).contains(&days){return "-".into();}
+    let z=days+719468;
+    let era=z.div_euclid(146097);
+    let doe=z-era*146097;
+    let yoe=(doe-doe/1460+doe/36524-doe/146096)/365;
+    let doy=doe-(365*yoe+yoe/4-yoe/100);
+    let mp=(5*doy+2)/153;
+    let day=doy-(153*mp+2)/5+1;
+    let month=mp+if mp<10{3}else{-9};
+    let year=yoe+era*400+i64::from(month<=2);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+fn file_type(entry:&Entry)->String {
+    if entry.symlink {"Link".into()}
+    else if entry.directory {"Folder".into()}
+    else {entry.path.extension().filter(|e|!e.is_empty()).map(display_name).unwrap_or_else(||"File".into())}
+}
+#[derive(Clone,Copy)]
+struct Columns {name:u16,size:u16,kind:u16,date:u16}
+impl Columns {
+    fn new(width:u16,details:bool)->Self{
+        let size=if details&&width>=32{12}else{0};
+        let kind=if details&&width>=46{10}else{0};
+        let date=if details&&width>=58{12}else{0};
+        Self{name:width-size-kind-date,size,kind,date}
+    }
+    fn sort_hit(self,x:u16)->Order{
+        if x<self.name {Order::Name}
+        else if x<self.name+self.size {Order::Size}
+        else if x<self.name+self.size+self.kind {Order::Type}
+        else {Order::Date}
+    }
+    fn cell(text:&str,width:u16)->String {
+        use unicode_width::UnicodeWidthStr;
+        if width==0 {return String::new();}
+        let clipped=super::clip(text,usize::from(width-1));
+        format!("{clipped}{}", " ".repeat(usize::from(width).saturating_sub(clipped.width())))
+    }
+    fn header(self,order:Order,focused:bool)->String{
+        let arrow=|name:&str,key| if order==key{format!("{name} ^")}else{name.to_owned()};
+        format!("{}{}{}{}",Self::cell(&arrow(if focused{"Files *"}else{"Files"},Order::Name),self.name),
+            Self::cell(&arrow("Size",Order::Size),self.size),Self::cell(&arrow("Type",Order::Type),self.kind),
+            Self::cell(&arrow("Modified",Order::Date),self.date))
+    }
+    fn row(self,name:&str,entry:&Entry)->String{
+        let size=if entry.directory&&!entry.symlink{"-".into()}else{human_size(entry.size)};
+        format!("{}{}{}{}",Self::cell(name,self.name),Self::cell(&size,self.size),Self::cell(&file_type(entry),self.kind),Self::cell(&modified_date(entry.modified),self.date))
+    }
+}
+fn row_text(entry: &Entry, index: usize, count: usize, view: View, glyph: &str, marked: bool, width: u16, details:bool) -> String {
+    let mark = if marked { "[x]" } else { "   " };
+    let name=match view {
+        View::Tree => format!("{} {mark} {glyph} {}", if index + 1 == count { "└──" } else { "├──" }, entry.name),
+        _ => format!("{mark} {glyph} {}", entry.name),
+    };
+    Columns::new(width,details).row(&name,entry)
 }
 
 const MENUS: [(&str, u16); 7] = [
@@ -513,6 +573,7 @@ impl State {
                 format!("File view: {}",self.view.name()),
                 "Reset panel sizes".into(),
                 format!("Terminal panel: {}",self.prefs.terminal_visible),
+                format!("File detail columns: {}",self.prefs.file_details),
             ];
             match super::choose("Settings / Display (Enter toggles)",&labels)? {
                 None=>return Ok(()),
@@ -526,7 +587,8 @@ impl State {
                 Some(7)=>self.zoom=self.zoom%3+1,
                 Some(8)=>self.choose_view(match self.view {View::Tree=>View::Grid,View::Grid=>View::List,View::List=>View::Tree}),
                 Some(9)=>{self.prefs.sidebar_width=19;self.prefs.preview_percent=33;self.prefs.dual_percent=50;self.prefs.terminal_percent=28;},
-                _=>{self.prefs.terminal_visible=!self.prefs.terminal_visible; #[cfg(feature = "native-ops")] {self.terminal_panel.focused=false;}},
+                Some(10)=>{self.prefs.terminal_visible=!self.prefs.terminal_visible; #[cfg(feature = "native-ops")] {self.terminal_panel.focused=false;}},
+                _=>self.prefs.file_details=!self.prefs.file_details,
             }
         }
     }
@@ -982,8 +1044,10 @@ impl State {
             queue!(out, MoveTo(0,3), SetForegroundColor(self.prefs.accent),
                 Print(if self.side_focus { "Places *" } else { "Places" }), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
         }
+        let heading=if self.view==View::Grid {if self.side_focus{"Files".into()}else{"Files *".into()}}
+            else {Columns::new(l.end()-l.first(),self.prefs.file_details).header(model.order,!self.side_focus)};
         queue!(out, MoveTo(l.first(),3), SetForegroundColor(self.prefs.accent),
-            Print(if self.side_focus { "Files" } else { "Files *" }), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
+            Print(super::clip(&heading,usize::from(l.end()-l.first()))), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
         if l.preview > 0 {
             queue!(out, MoveTo(l.end()+1,3), SetForegroundColor(self.prefs.accent), Print("Preview"), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
             let entry = if let Some(tree) = &self.expanded_tree {
@@ -1044,9 +1108,10 @@ impl State {
                 }
             } else {
                 let text = if let Some(depth) = tree_depth {
-                    format!("{}{} {glyph} {}", "  ".repeat(depth-1),
-                        if expanded { "−" } else if e.directory && !e.symlink { "+" } else { "·" }, e.name)
-                } else { row_text(e,index,model.entries.len(),self.view,glyph,marked(&e.path),cells.width) };
+                    let name=format!("{}{} {glyph} {}", "  ".repeat(depth.saturating_sub(1)),
+                        if expanded { "−" } else if e.directory && !e.symlink { "+" } else { "·" }, e.name);
+                    Columns::new(cells.width,self.prefs.file_details).row(&name,e)
+                } else { row_text(e,index,model.entries.len(),self.view,glyph,marked(&e.path),cells.width,self.prefs.file_details) };
                 queue!(out, Print(super::clip(&text,usize::from(cells.width))))?;
             }
             queue!(out, SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
@@ -1356,6 +1421,15 @@ impl State {
                 }
             }
         }
+        if let Event::Mouse(mouse)=&event {
+            if !self.dual && h>=8 && self.view!=View::Grid && mouse.row==3 && mouse.column>=l.first() && mouse.column<l.end() &&
+                mouse.kind==MouseEventKind::Down(MouseButton::Left)&&mouse.modifiers==KeyModifiers::NONE {
+                let order=Columns::new(l.end()-l.first(),self.prefs.file_details).sort_hit(mouse.column-l.first());
+                model.set_view(model.hidden,order,model.kind_filter,model.query.clone())?;
+                self.expanded_tree=None;self.preview_key=None;self.side_focus=false;self.pane_switched=true;
+                return Ok(None);
+            }
+        }
         if self.expanded_input(&event, model, l)? { return Ok(None); }
         if let Event::Mouse(mouse) = &mut event {
             if mouse.kind == MouseEventKind::Down(MouseButton::Left) && mouse.row == 0 {
@@ -1624,6 +1698,23 @@ mod tests {
         }
     }
 
+    #[test]
+    fn detail_columns_and_dates_are_bounded(){
+        use unicode_width::UnicodeWidthStr;
+        for width in 0..150 {
+            let c=Columns::new(width,true);
+            assert_eq!(c.name+c.size+c.kind+c.date,width);
+            assert_eq!(c.header(Order::Name,true).width(),usize::from(width));
+            if c.size>0 {assert_eq!(c.sort_hit(c.name),Order::Size);}
+            if c.kind>0 {assert_eq!(c.sort_hit(c.name+c.size),Order::Type);}
+            if c.date>0 {assert_eq!(c.sort_hit(c.name+c.size+c.kind),Order::Date);}
+        }
+        assert_eq!(human_size(1024),"1.0 KiB");
+        assert_eq!(human_size(u64::MAX),"15.9 EiB");
+        assert_eq!(modified_date(Some(SystemTime::UNIX_EPOCH)),"1970-01-01");
+        assert_eq!(modified_date(SystemTime::UNIX_EPOCH.checked_sub(std::time::Duration::from_secs(1))),"1969-12-31");
+        assert_eq!(modified_date(SystemTime::UNIX_EPOCH.checked_add(std::time::Duration::from_secs(951782400))),"2000-02-29");
+    }
     #[test]
     fn layout_is_responsive_and_only_file_rows_map_to_actions() {
         for width in 0..150 {
