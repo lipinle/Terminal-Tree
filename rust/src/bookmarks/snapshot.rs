@@ -126,6 +126,11 @@ fn check_dir(dir: &File, path: &Path) -> io::Result<()> {
 pub fn load(path: &Path) -> io::Result<Bookmarks> {
     let (parent, name) = parts(path)?;
     let dir = private_dir(parent)?;
+    // Reject observed nonregular files before attempting to open them.
+    let named = rx::statat(&dir, name, rx::AtFlags::SYMLINK_NOFOLLOW)?;
+    if rx::FileType::from_raw_mode(named.st_mode) != rx::FileType::RegularFile {
+        return Err(invalid("invalid bookmark snapshot file"));
+    }
     let file: File = rx::openat(
         &dir,
         name,
@@ -135,6 +140,8 @@ pub fn load(path: &Path) -> io::Result<Bookmarks> {
     .into();
     let before = file.metadata()?;
     if !before.is_file()
+        || before.dev() != named.st_dev
+        || before.ino() != named.st_ino
         || before.nlink() != 1
         || before.uid() != rustix::process::getuid().as_raw()
         || before.mode() & 0o077 != 0
@@ -158,6 +165,13 @@ pub fn load(path: &Path) -> io::Result<Bookmarks> {
         return Err(invalid("bookmark snapshot changed during read"));
     }
     check_dir(&dir, parent)?;
+    let named = rx::statat(&dir, name, rx::AtFlags::SYMLINK_NOFOLLOW)?;
+    if rx::FileType::from_raw_mode(named.st_mode) != rx::FileType::RegularFile
+        || named.st_dev != before.dev()
+        || named.st_ino != before.ino()
+    {
+        return Err(invalid("bookmark snapshot name changed during read"));
+    }
     decode(&bytes)
 }
 
@@ -197,4 +211,23 @@ pub fn save_new(path: &Path, marks: &Bookmarks) -> io::Result<()> {
     check_dir(&dir, parent)?;
     rx::renameat_with(&dir, &temporary, &dir, name, RenameFlags::NOREPLACE)?;
     dir.sync_all()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::os::unix::fs::DirBuilderExt;
+
+    #[test]
+    fn loading_a_directory_is_refused() {
+        let parent = std::env::temp_dir().join(format!("tt-snapshot-dir-{}", std::process::id()));
+        fs::DirBuilder::new().mode(0o700).create(&parent).unwrap();
+        let child = parent.join("directory");
+        fs::create_dir(&child).unwrap();
+        let result = load(&child);
+        fs::remove_dir(&child).unwrap();
+        fs::remove_dir(&parent).unwrap();
+        assert!(result.is_err());
+    }
 }

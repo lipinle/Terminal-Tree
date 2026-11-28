@@ -19,6 +19,8 @@ pub struct TreeRow {
 #[derive(Debug)]
 pub struct TreeModel {
     root: PathBuf,
+    #[cfg(unix)]
+    root_identity: (u64, u64),
     rows: Vec<TreeRow>,
     selected: usize,
     top: usize,
@@ -48,7 +50,14 @@ fn plain_directory(path: &Path) -> io::Result<fs::Metadata> {
 impl TreeModel {
     pub fn new(root: &Path, hidden: bool, order: Order) -> io::Result<Self> {
         let root = root.canonicalize()?;
-        plain_directory(&root)?;
+        let metadata = plain_directory(&root)?;
+        #[cfg(unix)]
+        let root_identity = {
+            use std::os::unix::fs::MetadataExt;
+            (metadata.dev(), metadata.ino())
+        };
+        #[cfg(not(unix))]
+        let _ = metadata;
         let rows = scan_bounded(&root, hidden, order, "", MAX_SCAN)?
             .into_iter()
             .map(|entry| TreeRow {
@@ -57,15 +66,19 @@ impl TreeModel {
                 expanded: false,
             })
             .collect();
-        Ok(Self {
+        let model = Self {
             root,
+            #[cfg(unix)]
+            root_identity,
             rows,
             selected: 0,
             top: 0,
             depth_limit: 4,
             hidden,
             order,
-        })
+        };
+        model.check_directory(&model.root)?;
+        Ok(model)
     }
 
     pub fn root(&self) -> &Path {
@@ -110,6 +123,13 @@ impl TreeModel {
     // This is best-effort for a read-only view, not race-free authorization.
     fn check_directory(&self, path: &Path) -> io::Result<()> {
         let root_metadata = plain_directory(&self.root)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if (root_metadata.dev(), root_metadata.ino()) != self.root_identity {
+                return Err(io::Error::other("tree root identity changed"));
+            }
+        }
         if self.root.canonicalize()? != self.root {
             return Err(io::Error::other("tree root changed"));
         }

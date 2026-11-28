@@ -102,6 +102,16 @@ impl Progress {
     }
 }
 
+// Always reserve the last row for cancellation guidance when it fits.
+fn progress_rows(height: u16) -> (bool, bool, bool, Option<u16>) {
+    (
+        height >= 3,
+        height >= 4,
+        height >= 5,
+        (height >= 2).then(|| height - 1),
+    )
+}
+
 pub fn run<T: Send>(
     total: usize,
     job: impl FnOnce(&Progress) -> io::Result<T> + Send,
@@ -136,13 +146,40 @@ pub fn run<T: Send>(
                         Clear(ClearType::All),
                         Print(super::clip("File operation in progress", width))
                     )?;
-                    if h > 3 {
-                        queue!(out,MoveTo(0,1),Print(super::clip(&format!("{done}/{total} items processed | {phase}"),width)),
-                        MoveTo(0,2),Print(super::clip(&label,width)),
-                        MoveTo(0,3),Print(super::clip(&format!("Current item: {copied} logical bytes copied (not yet committed)"),width)),
-                        MoveTo(0,h-1),Print(super::clip(if p.cancel.load(Ordering::Acquire){
-                            if committing{"Cancel requested; finishing committed item safely"}else{"Cancel requested; waiting for safe checkpoint"}
-                        }else{"Esc / Ctrl+C: request cancellation; commit cannot be interrupted"},width)))?;
+                    let (summary, item, bytes, footer) = progress_rows(h);
+                    if summary {
+                        queue!(
+                            out,
+                            MoveTo(0, 1),
+                            Print(super::clip(
+                                &format!("{done}/{total} items processed | {phase}"),
+                                width
+                            ))
+                        )?;
+                    }
+                    if item {
+                        queue!(out, MoveTo(0, 2), Print(super::clip(&label, width)))?;
+                    }
+                    if bytes {
+                        queue!(out,MoveTo(0,3),Print(super::clip(&format!("Current item: {copied} logical bytes copied (not yet committed)"),width)))?;
+                    }
+                    if let Some(row) = footer {
+                        queue!(
+                            out,
+                            MoveTo(0, row),
+                            Print(super::clip(
+                                if p.cancel.load(Ordering::Acquire) {
+                                    if committing {
+                                        "Cancel requested; finishing committed item safely"
+                                    } else {
+                                        "Cancel requested; waiting for safe checkpoint"
+                                    }
+                                } else {
+                                    "Esc / Ctrl+C: request cancellation; commit cannot be interrupted"
+                                },
+                                width
+                            ))
+                        )?;
                     }
                     out.flush()?;
                     drop(out);
@@ -181,6 +218,16 @@ pub fn run<T: Send>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn small_terminal_keeps_cancellation_footer_separate() {
+        assert_eq!(progress_rows(0), (false, false, false, None));
+        assert_eq!(progress_rows(1), (false, false, false, None));
+        assert_eq!(progress_rows(2), (false, false, false, Some(1)));
+        assert_eq!(progress_rows(3), (true, false, false, Some(2)));
+        assert_eq!(progress_rows(4), (true, true, false, Some(3)));
+        assert_eq!(progress_rows(5), (true, true, true, Some(4)));
+    }
+
     #[test]
     fn cancellation_before_commit_is_refused() {
         let p = Progress::new(1);
