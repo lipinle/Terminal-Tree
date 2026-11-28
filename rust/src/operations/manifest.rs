@@ -33,6 +33,36 @@ pub(crate) struct Manifest {
     items: BTreeMap<PathBuf, Item>,
     groups: Vec<Vec<PathBuf>>,
 }
+impl Manifest {
+    /// Only a single regular file with identical bytes and all other metadata
+    /// may tolerate timestamp rounding (at most two seconds).
+    pub(crate) fn matches_transfer(&self, actual: &Self, allow_time_rounding: bool) -> bool {
+        if self == actual {
+            return true;
+        }
+        if !allow_time_rounding || self.items.len() != 1 || actual.items.len() != 1
+            || !self.groups.is_empty() || !actual.groups.is_empty()
+        {
+            return false;
+        }
+        let (Some(source), Some(target)) =
+            (self.items.get(Path::new(".")), actual.items.get(Path::new(".")))
+        else {
+            return false;
+        };
+        if !matches!(&source.body, Body::File(..)) || !source.attrs.is_empty()
+            || source.mode & 0o7000 != 0
+        {
+            return false;
+        }
+        let nanos = |item: &Item| i128::from(item.seconds) * 1_000_000_000 + i128::from(item.nanos);
+        let mut rounded = source.clone();
+        rounded.seconds = target.seconds;
+        rounded.nanos = target.nanos;
+        rounded == *target && (nanos(source) - nanos(target)).abs() <= 2_000_000_000
+    }
+}
+
 pub(crate) type Snapshot = BTreeMap<PathBuf, Identity>;
 type Links = BTreeMap<(u64, u64), Vec<PathBuf>>;
 type HashCache = BTreeMap<(u64, u64), (Identity, [u8; 32])>;
@@ -390,6 +420,7 @@ pub(crate) fn copy_tree(
     payload: &Path,
     expected: &Manifest,
     reviewed: &Snapshot,
+    allow_time_rounding: bool,
     checkpoint: &mut dyn FnMut(&str) -> io::Result<()>,
 ) -> io::Result<Snapshot> {
     let original = fs::symlink_metadata(src)?;
@@ -407,7 +438,7 @@ pub(crate) fn copy_tree(
     checkpoint("copy-verify-stage")?;
     let (actual, staged) = manifest_buffered(payload, true, checkpoint, &mut buffer)?;
     require(
-        &actual == expected,
+        expected.matches_transfer(&actual, allow_time_rounding),
         "staged tree differs from reviewed source",
     )?;
     checkpoint("copy-verify-source")?;
@@ -417,4 +448,36 @@ pub(crate) fn copy_tree(
         "source tree changed",
     )?;
     Ok(staged)
+}
+
+#[cfg(test)]
+mod transfer_metadata_tests {
+    use super::*;
+
+    #[test]
+    fn timestamp_tolerance_is_narrow_and_explicit() {
+        let item = Item {
+            mode: 0o100600, uid: 1000, gid: 1000, seconds: 100, nanos: 0,
+            attrs: BTreeMap::new(), body: Body::File(3, [1; 32]),
+        };
+        let source = Manifest {
+            items: BTreeMap::from([(PathBuf::from("."), item.clone())]),
+            groups: Vec::new(),
+        };
+        let mut target = source.clone();
+        target.items.get_mut(Path::new(".")).unwrap().seconds = 102;
+        assert!(!source.matches_transfer(&target, false));
+        assert!(source.matches_transfer(&target, true));
+        target.items.get_mut(Path::new(".")).unwrap().nanos = 1;
+        assert!(!source.matches_transfer(&target, true));
+        target.items.get_mut(Path::new(".")).unwrap().nanos = 0;
+        target.items.get_mut(Path::new(".")).unwrap().mode = 0o100644;
+        assert!(!source.matches_transfer(&target, true));
+        target.items.get_mut(Path::new(".")).unwrap().mode = item.mode;
+        target.items.get_mut(Path::new(".")).unwrap().body = Body::File(3, [2; 32]);
+        assert!(!source.matches_transfer(&target, true));
+        target.items.get_mut(Path::new(".")).unwrap().body = item.body;
+        target.items.get_mut(Path::new(".")).unwrap().uid = 0;
+        assert!(!source.matches_transfer(&target, true));
+    }
 }

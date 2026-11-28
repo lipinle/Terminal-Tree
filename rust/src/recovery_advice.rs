@@ -9,6 +9,7 @@ use std::os::unix::ffi::OsStrExt;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Advice {
     InspectTransfer,
+    InspectRetainedMove,
     InspectCreation,
     InspectTrashOrRestore,
     InspectPurge,
@@ -79,7 +80,10 @@ pub fn classify(filename: &OsStr, record: &Value) -> Advice {
         return Advice::MalformedRecord;
     };
     match record.get("operation").and_then(Value::as_str) {
-        Some("copy" | "retained-move") if source && destination && stage => Advice::InspectTransfer,
+        Some("copy" | "copy-time-tolerance") if source && destination && stage => Advice::InspectTransfer,
+        Some("retained-move" | "retained-move-time-tolerance") if source && destination && stage => {
+            Advice::InspectRetainedMove
+        }
         Some("move") if source && destination && !stage => Advice::InspectTransfer,
         Some("archive-extract") if !source && destination && stage => Advice::InspectCreation,
         Some("mkdir" | "create-file") if !source && destination && !stage => {
@@ -91,7 +95,8 @@ pub fn classify(filename: &OsStr, record: &Value) -> Advice {
         Some("permanent-delete") if source && !destination => Advice::InspectPurge,
         Some(
             "copy" | "move" | "mkdir" | "create-file" | "native-trash" | "restore"
-            | "permanent-delete" | "archive-extract" | "retained-move",
+            | "permanent-delete" | "archive-extract" | "retained-move"
+            | "copy-time-tolerance" | "retained-move-time-tolerance",
         )
         | None => Advice::MalformedRecord,
         Some(_) => Advice::UnrecognizedOperation,
@@ -103,6 +108,9 @@ impl Advice {
         match self {
             Self::InspectTransfer => {
                 "Inspect source, destination and any staging data; do not retry blindly."
+            }
+            Self::InspectRetainedMove => {
+                "Retained move: preserve all copies. Inspect the original path, destination and retained original (stage). If the original is absent, independently verify the retained file and copy it to a new unoccupied recovery path. Never overwrite, purge or replay from journal evidence."
             }
             Self::InspectCreation => {
                 "Inspect the destination and any staging data; verify identity before any retry."
@@ -146,6 +154,12 @@ mod tests {
     #[test]
     fn known_operations_have_only_advisory_classes() {
         let mut record = copy_record();
+        assert_eq!(inspect(&record), Advice::InspectTransfer);
+        for operation in ["retained-move", "retained-move-time-tolerance"] {
+            record["operation"] = json!(operation);
+            assert_eq!(inspect(&record), Advice::InspectRetainedMove);
+        }
+        record["operation"] = json!("copy-time-tolerance");
         assert_eq!(inspect(&record), Advice::InspectTransfer);
         record["operation"] = json!("restore");
         assert_eq!(inspect(&record), Advice::InspectTrashOrRestore);

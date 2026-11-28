@@ -509,18 +509,28 @@ impl Workspace {
                 if !observed.crosses_devices() {
                     return Err(error("use normal paste for same-device moves"));
                 }
+                let policies = vec![
+                    "Strict metadata (default)".to_string(),
+                    "Allow modification time rounding only (up to 2 seconds)".to_string(),
+                ];
+                let Some(policy) = super::choose("Cross-device metadata policy", &policies)? else {
+                    return Ok("Cancelled".into());
+                };
+                let allow_time_rounding = policy == 1;
                 if !confirm(
-                    "Cross-device move: keep original in private retention",
+                    if allow_time_rounding { "Retain original; allow mtime rounding" }
+                    else { "Cross-device move: keep original in private retention" },
                     &[review.path(), target.path()],
-                    "yes",
+                    if allow_time_rounding { "round-time" } else { "yes" },
                 )? {
                     return Ok("Cancelled".into());
                 }
                 let retained = worker::run(1, |progress| {
                     progress.item(path_text(review.path()), 0)?;
-                    let retained = self.engine.move_retaining_source(
+                    let retained = self.engine.move_retaining_source_with_time_rounding(
                         review,
                         &target,
+                        allow_time_rounding,
                         &mut |point| progress.checkpoint(point),
                     )?;
                     progress.finished(1);
