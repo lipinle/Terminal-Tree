@@ -129,7 +129,11 @@ fn draw(
                 palette.text
             }),
             Print(clip(
-                &format!("{:?}: {}", region.pane, display_name(model.root().as_os_str())),
+                &format!(
+                    "{:?}: {}",
+                    region.pane,
+                    display_name(model.root().as_os_str())
+                ),
                 width
             )),
             SetForegroundColor(palette.text)

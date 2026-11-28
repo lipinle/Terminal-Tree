@@ -119,7 +119,12 @@ mod tests {
     #[test]
     fn cycling_returns_to_terminal_defaults() {
         let mut theme = Theme::default();
-        for expected in [Theme::Dark, Theme::Light, Theme::Monochrome, Theme::Terminal] {
+        for expected in [
+            Theme::Dark,
+            Theme::Light,
+            Theme::Monochrome,
+            Theme::Terminal,
+        ] {
             theme = theme.next();
             assert_eq!(theme, expected);
         }

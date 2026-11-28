@@ -51,9 +51,7 @@ fn hex_lines(bytes: &[u8]) -> Vec<String> {
 pub fn read_lines(path: &Path, mode: Mode) -> io::Result<Vec<String>> {
     let before = fs::symlink_metadata(path)?;
     if !before.is_file() {
-        return Err(io::Error::other(
-            "preview requires a regular non-link file",
-        ));
+        return Err(io::Error::other("preview requires a regular non-link file"));
     }
     let file: fs::File = rx::open(
         path,

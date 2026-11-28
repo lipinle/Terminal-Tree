@@ -18,7 +18,10 @@ pub struct SearchLimits {
 
 fn check_cancel(cancel: &AtomicBool) -> io::Result<()> {
     if cancel.load(Ordering::Relaxed) {
-        return Err(io::Error::new(io::ErrorKind::Interrupted, "search cancelled"));
+        return Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "search cancelled",
+        ));
     }
     Ok(())
 }

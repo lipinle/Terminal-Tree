@@ -86,8 +86,11 @@ pub fn classify(filename: &OsStr, record: &Value) -> Advice {
             Advice::InspectTrashOrRestore
         }
         Some("permanent-delete") if source && !destination => Advice::InspectPurge,
-        Some("copy" | "move" | "mkdir" | "create-file" | "native-trash" | "restore"
-            | "permanent-delete") | None => Advice::MalformedRecord,
+        Some(
+            "copy" | "move" | "mkdir" | "create-file" | "native-trash" | "restore"
+            | "permanent-delete",
+        )
+        | None => Advice::MalformedRecord,
         Some(_) => Advice::UnrecognizedOperation,
     }
 }
@@ -95,12 +98,24 @@ pub fn classify(filename: &OsStr, record: &Value) -> Advice {
 impl Advice {
     pub fn message(self) -> &'static str {
         match self {
-            Self::InspectTransfer => "Inspect source, destination and any staging data; do not retry blindly.",
-            Self::InspectCreation => "Inspect the destination and verify its identity before any retry.",
-            Self::InspectTrashOrRestore => "Inspect source, destination and Trash metadata together.",
-            Self::InspectPurge => "Inspect the original item and metadata; do not repeat deletion blindly.",
-            Self::UnrecognizedOperation => "Unrecognized operation; preserve evidence and review manually.",
-            Self::MalformedRecord => "Malformed journal evidence; preserve it and do not use recorded paths for actions.",
+            Self::InspectTransfer => {
+                "Inspect source, destination and any staging data; do not retry blindly."
+            }
+            Self::InspectCreation => {
+                "Inspect the destination and verify its identity before any retry."
+            }
+            Self::InspectTrashOrRestore => {
+                "Inspect source, destination and Trash metadata together."
+            }
+            Self::InspectPurge => {
+                "Inspect the original item and metadata; do not repeat deletion blindly."
+            }
+            Self::UnrecognizedOperation => {
+                "Unrecognized operation; preserve evidence and review manually."
+            }
+            Self::MalformedRecord => {
+                "Malformed journal evidence; preserve it and do not use recorded paths for actions."
+            }
         }
     }
 }

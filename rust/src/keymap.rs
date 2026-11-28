@@ -104,10 +104,7 @@ impl Keymap {
 
     /// Validate the whole replacement before changing any mapping. This
     /// permits swaps without ever leaving an action without a binding.
-    pub fn replace_all(
-        &mut self,
-        bindings: [Binding; ACTIONS.len()],
-    ) -> Result<(), BindingError> {
+    pub fn replace_all(&mut self, bindings: [Binding; ACTIONS.len()]) -> Result<(), BindingError> {
         for (index, binding) in bindings.iter().enumerate() {
             if !permitted(*binding) {
                 return Err(BindingError::ReservedOrUnsupported);
@@ -168,7 +165,12 @@ mod tests {
             map.rebind(Action::Up, key(KeyCode::Down)),
             Err(BindingError::Conflict)
         );
-        for code in [KeyCode::Esc, KeyCode::Enter, KeyCode::Delete, KeyCode::Char('q')] {
+        for code in [
+            KeyCode::Esc,
+            KeyCode::Enter,
+            KeyCode::Delete,
+            KeyCode::Char('q'),
+        ] {
             assert_eq!(
                 map.rebind(Action::Up, key(code)),
                 Err(BindingError::ReservedOrUnsupported)

@@ -784,7 +784,9 @@ fn find(mut args: impl Iterator<Item = OsString>) -> io::Result<()> {
     use terminal_tree::search::{filenames, SearchLimits};
 
     let invalid = |message| io::Error::new(io::ErrorKind::InvalidInput, message);
-    let root = path_arg(Some(args.next().ok_or_else(|| invalid("search path required"))?))?;
+    let root = path_arg(Some(
+        args.next().ok_or_else(|| invalid("search path required"))?,
+    ))?;
     let query = args
         .next()
         .ok_or_else(|| invalid("search query required"))?

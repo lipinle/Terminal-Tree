@@ -36,10 +36,7 @@ fn single_name(name: &OsStr) -> bool {
 /// native checks. Reject cycles and chains into occupied names, even if those
 /// names are sources elsewhere in the plan. Never execute this plan directly.
 pub fn validate(existing: &[OsString], requested: &[Rename]) -> Result<(), PlanError> {
-    if existing.len() > MAX_DIRECTORY_NAMES
-        || requested.is_empty()
-        || requested.len() > MAX_ITEMS
-    {
+    if existing.len() > MAX_DIRECTORY_NAMES || requested.is_empty() || requested.len() > MAX_ITEMS {
         return Err(PlanError::Limit);
     }
     let mut occupied = BTreeSet::new();
@@ -87,7 +84,10 @@ mod tests {
     #[test]
     fn distinct_unoccupied_names_pass_preflight() {
         let existing = ["a".into(), "b".into()];
-        assert_eq!(validate(&existing, &[item("a", "c"), item("b", "d")]), Ok(()));
+        assert_eq!(
+            validate(&existing, &[item("a", "c"), item("b", "d")]),
+            Ok(())
+        );
     }
 
     #[test]
@@ -111,7 +111,10 @@ mod tests {
             vec![item("a", "b"), item("b", "c")],
             vec![item("a", "a")],
         ] {
-            assert_eq!(validate(&existing, &plan), Err(PlanError::DestinationOccupied));
+            assert_eq!(
+                validate(&existing, &plan),
+                Err(PlanError::DestinationOccupied)
+            );
         }
         assert_eq!(
             validate(&existing, &[item("missing", "c")]),

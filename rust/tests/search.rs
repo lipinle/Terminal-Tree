@@ -144,15 +144,28 @@ fn cli_search_respects_hidden_and_depth_options() {
 
     let visible = run(&["--depth", "2"]);
     assert!(visible.status.success());
-    let expected = display_name(f.0.join("folder/Match.txt").canonicalize().unwrap().as_os_str());
-    assert_eq!(String::from_utf8(visible.stdout).unwrap().trim_end(), expected);
+    let expected = display_name(
+        f.0.join("folder/Match.txt")
+            .canonicalize()
+            .unwrap()
+            .as_os_str(),
+    );
+    assert_eq!(
+        String::from_utf8(visible.stdout).unwrap().trim_end(),
+        expected
+    );
 
     let hidden = run(&["--hidden", "--depth", "2"]);
     assert!(hidden.status.success());
     let output = String::from_utf8(hidden.stdout).unwrap();
     assert_eq!(output.lines().count(), 2);
     assert!(output.contains(&expected));
-    let secret = display_name(f.0.join(".secret/match.txt").canonicalize().unwrap().as_os_str());
+    let secret = display_name(
+        f.0.join(".secret/match.txt")
+            .canonicalize()
+            .unwrap()
+            .as_os_str(),
+    );
     assert!(output.contains(&secret));
     assert_eq!(fs::read(f.0.join("folder/Match.txt")).unwrap(), b"keep");
 }
