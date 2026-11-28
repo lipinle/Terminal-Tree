@@ -21,7 +21,9 @@ The Rust edition is the actively developed product; legacy Python editions are h
 
 [UX preview builds and application screenshot artifacts](https://github.com/lipinle/Terminal-Tree/actions/workflows/rust-development.yml?query=branch%3Aux-companion-tools) (sign in to GitHub to download available artifacts).
 
-## Features
+<a id="features"></a>
+
+## ✨ Features
 
 | Explore | Work | Personalize |
 | :--- | :--- | :--- |
@@ -35,7 +37,9 @@ Session and application preferences can be saved through Settings.
 
 Image/PDF previews require optional helpers. The embedded interactive Bash panel is experimental; full-screen terminal programs are not yet supported.
 
-## System requirements
+<a id="system-requirements"></a>
+
+## 💻 System requirements
 
 | Operating system | Availability |
 | :--- | :--- |
@@ -47,7 +51,9 @@ Image/PDF previews require optional helpers. The embedded interactive Bash panel
 
 The stable prebuilt archive is Linux x86-64 and targets Ubuntu 24.04-compatible system libraries. The source build requires Rust, a C toolchain and GNU/Linux utilities. The optional visual helper requires Rust 1.92 or newer. The latest UX preview has development CI coverage, not a full release compatibility certification.
 
-## Terminal compatibility
+<a id="terminal-compatibility"></a>
+
+## 🖥️ Terminal compatibility
 
 Terminal Tree shares the same file manager UI across terminals. Graphics quality depends on the terminal's capabilities.
 
@@ -67,7 +73,9 @@ Terminal Tree shares the same file manager UI across terminals. Graphics quality
 
 If graphics do not work, start with `TT_GRAPHICS=unicode`. For compatible terminals, `TT_GRAPHICS=kitty` or `TT_GRAPHICS=sixel` selects the protocol explicitly. Native graphics are optional; browsing does not depend on them.
 
-## Install
+<a id="install"></a>
+
+## 📦 Install
 
 ### Stable release (Linux x86-64)
 
@@ -128,7 +136,9 @@ cargo build --locked --release --manifest-path rust/Cargo.toml --no-default-feat
 
 Native file writes, the Bash panel and Linux-only add-ons are unavailable. The current UX preview has not completed Windows release testing.
 
-## Update and uninstall
+<a id="update-and-uninstall"></a>
+
+## 🔄 Update and uninstall
 
 ### Update the UX preview
 
@@ -155,7 +165,9 @@ bash rust/uninstall-preview.sh "$HOME/terminal-tree-preview" --yes
 
 The script removes only the verified, managed installation files. It leaves the empty directory, your files and preferences untouched. Substitute the exact installation directory you want to remove. For a downloaded archive, remove only the dedicated extracted application directory using your file manager; do not use the source-install uninstaller for it.
 
-## Getting started
+<a id="getting-started"></a>
+
+## 🚀 Getting started
 
 The UX preview opens in Tree view. Use the toolbar to switch views, click folders in Places, and select a file to preview it. Drag panel dividers to resize them. Open **Settings** to customize the layout and save preferences.
 
@@ -172,7 +184,9 @@ mkdir -m 700 "$demo/work" "$demo/journal" "$demo/work/data"
 
 Review the displayed paths before confirming an operation. The journal is not a backup. Bash and Git commands use ordinary OS permissions outside the file-operation journal. Start with disposable files and keep independent backups.
 
-### Shortcuts
+<a id="shortcuts"></a>
+
+### ⌨️ Shortcuts
 
 | Shortcut | Action |
 | :--- | :--- |
@@ -193,7 +207,9 @@ Review the displayed paths before confirming an operation. The journal is not a 
 
 Terminal shortcuts may take priority over application shortcuts. Use the on-screen menus when this occurs.
 
-## Add-ons
+<a id="add-ons"></a>
+
+## 🧩 Add-ons
 
 Add-ons are optional. Terminal Tree works without them and does not install external software automatically.
 
@@ -225,7 +241,9 @@ Both helpers have separate install, update and uninstall instructions. They are 
 
 See [companion tools](OPTIONAL-TOOLS.md) for external program setup.
 
-## Help and troubleshooting
+<a id="help-and-troubleshooting"></a>
+
+## 🛠️ Help and troubleshooting
 
 | Problem | What to try |
 | :--- | :--- |
