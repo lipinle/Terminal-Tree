@@ -1,5 +1,7 @@
 //! Read-only validation of pending journal record structure.
 //! A structurally valid record is untrusted evidence, not a recovery command.
+pub mod transfer_evidence;
+
 use serde_json::Value;
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;

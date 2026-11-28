@@ -1,5 +1,5 @@
 //! Strict, bounded USTAR listing only. No extraction or filesystem writes.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Read};
 
 #[cfg(all(feature = "native-ops", target_os = "linux"))]
@@ -197,4 +197,91 @@ pub fn list(mut reader: impl Read) -> io::Result<Vec<Member>> {
         }
     }
     Ok(members)
+}
+
+/// A preview of the directory/file structure of a validated archive stream.
+/// Implicit ancestor directories are included exactly once. The order is
+/// parent-before-child for directories; files retain archive order.
+/// This is not an extraction plan authorized for any real filesystem.
+#[derive(Debug, PartialEq, Eq)]
+pub struct LayoutPreview {
+    pub directories: Vec<String>,
+    pub files: Vec<Member>,
+    pub payload_bytes: u64,
+}
+
+pub fn layout_preview(reader: impl Read) -> io::Result<LayoutPreview> {
+    let members = list(reader)?;
+    let mut directories = BTreeSet::new();
+    let mut files = Vec::new();
+    let mut payload_bytes = 0u64;
+    for member in members {
+        let mut path = member.name.as_str();
+        while let Some((parent, _)) = path.rsplit_once('/') {
+            directories.insert(parent.to_owned());
+            if directories.len() > MAX_MEMBERS {
+                return Err(invalid("USTAR layout directory limit exceeded"));
+            }
+            path = parent;
+        }
+        match member.kind {
+            Kind::Directory => {
+                directories.insert(member.name);
+                if directories.len() > MAX_MEMBERS {
+                    return Err(invalid("USTAR layout directory limit exceeded"));
+                }
+            }
+            Kind::File => {
+                payload_bytes = payload_bytes
+                    .checked_add(member.size)
+                    .ok_or_else(|| invalid("USTAR payload size overflow"))?;
+                files.push(member);
+            }
+        }
+    }
+    Ok(LayoutPreview {
+        directories: directories.into_iter().collect(),
+        files,
+        payload_bytes,
+    })
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    fn append(bytes: &mut Vec<u8>, name: &str, data: &[u8]) {
+        let mut header = [0u8; BLOCK];
+        header[..name.len()].copy_from_slice(name.as_bytes());
+        header[124..136].copy_from_slice(format!("{:011o}\0", data.len()).as_bytes());
+        header[148..156].fill(b' ');
+        header[156] = b'0';
+        header[257..265].copy_from_slice(b"ustar\x0000");
+        let sum: u32 = header.iter().map(|&byte| u32::from(byte)).sum();
+        header[148..156].copy_from_slice(format!("{sum:06o}\0 ").as_bytes());
+        bytes.extend_from_slice(&header);
+        bytes.extend_from_slice(data);
+        bytes.resize(bytes.len() + (BLOCK - data.len() % BLOCK) % BLOCK, 0);
+    }
+
+    #[test]
+    fn layout_includes_implicit_parents_and_payload_total() {
+        let mut bytes = Vec::new();
+        append(&mut bytes, "a/b/one", b"123");
+        append(&mut bytes, "a/two", b"45");
+        bytes.resize(bytes.len() + 2 * BLOCK, 0);
+        let preview = layout_preview(bytes.as_slice()).unwrap();
+        assert_eq!(preview.directories, ["a", "a/b"]);
+        assert_eq!(preview.files.len(), 2);
+        assert_eq!(preview.files[0].name, "a/b/one");
+        assert_eq!(preview.payload_bytes, 5);
+    }
+
+    #[test]
+    fn malformed_stream_never_returns_layout() {
+        let mut bytes = Vec::new();
+        append(&mut bytes, "../escape", b"data");
+        bytes.resize(bytes.len() + 2 * BLOCK, 0);
+        assert!(layout_preview(bytes.as_slice()).is_err());
+    }
 }
