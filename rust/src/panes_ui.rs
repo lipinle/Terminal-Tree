@@ -193,9 +193,9 @@ fn draw(
         MoveTo(0, height - 1),
         Print(clip(
             if snapshot_enabled {
-                "Tab focus | n new | [ ] switch | w close | b/B bookmarks | S export snapshot | ? keys | t theme | q exit"
+                "Tab focus | n new | [ ] switch | w close | b/B bookmarks | p/F8/I/A preview | S export snapshot | ? keys | t theme | q exit"
             } else {
-                "Tab focus | n new | [ ] switch | w close | b/B bookmarks | ? keys | t theme | q exit"
+                "Tab focus | n new | [ ] switch | w close | b/B bookmarks | p/F8/I/A preview | ? keys | t theme | q exit"
             },
             limit
         )),
@@ -354,6 +354,62 @@ fn open_location(model: &mut TreeModel, marks: &Bookmarks, index: usize) -> io::
     Ok(())
 }
 
+/// Preview the focused row without changing its selection or granting writes.
+fn show_preview(model: &TreeModel, code: KeyCode) -> io::Result<bool> {
+    #[cfg(all(feature = "native-ops", target_os = "linux"))]
+    {
+        use terminal_tree::{archive, image_preview, preview};
+
+        let row = model
+            .rows()
+            .get(model.selected())
+            .ok_or_else(|| io::Error::other("select a file to preview"))?;
+        if row.entry.directory || row.entry.symlink {
+            return Err(io::Error::other("preview requires a regular non-link file"));
+        }
+        let path = &row.entry.path;
+        let (title, lines) = match code {
+            KeyCode::Char('I') => {
+                let (width, height) = terminal::size()?;
+                let thumbnail = image_preview::native::thumbnail_file(
+                    path,
+                    usize::from(width.saturating_sub(1)).clamp(1, 80),
+                    usize::from(height.saturating_sub(3)).clamp(1, 40),
+                )?;
+                let mut lines = vec![format!("PPM {}x{}", thumbnail.width, thumbnail.height)];
+                lines.extend(thumbnail.rows);
+                ("Image preview", lines)
+            }
+            KeyCode::Char('A') => {
+                let members = archive::native::list_file(path)?;
+                let mut lines = vec![format!("USTAR members: {}", members.len())];
+                lines.extend(members.into_iter().map(|member| {
+                    let kind = match member.kind {
+                        archive::Kind::File => "file",
+                        archive::Kind::Directory => "directory",
+                    };
+                    format!("{} {} bytes | {}", kind, member.size, member.name)
+                }));
+                ("Archive listing (read-only)", lines)
+            }
+            KeyCode::F(8) => ("File preview", preview::read_lines(path, preview::Mode::Hex)?),
+            KeyCode::Char('p') | KeyCode::F(3) => {
+                ("File preview", preview::read_lines(path, preview::Mode::Auto)?)
+            }
+            _ => return Err(io::Error::other("unsupported preview action")),
+        };
+        crate::page_with_interrupt(title, &lines, true)
+    }
+    #[cfg(not(all(feature = "native-ops", target_os = "linux")))]
+    {
+        let _ = (model, code);
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "file previews require the native Linux build",
+        ))
+    }
+}
+
 fn load_session(input: Option<&Path>, output: Option<&Path>) -> io::Result<Bookmarks> {
     #[cfg(all(feature = "native-ops", target_os = "linux"))]
     {
@@ -439,6 +495,17 @@ pub(crate) fn browse(
                     continue;
                 }
                 match key.code {
+                    code @ (KeyCode::Char('p' | 'I' | 'A') | KeyCode::F(3 | 8))
+                        if key.kind == KeyEventKind::Press
+                            && (key.modifiers == KeyModifiers::NONE
+                                || key.modifiers == KeyModifiers::SHIFT) =>
+                    {
+                        match show_preview(layout.focused(), code) {
+                            Ok(true) => break,
+                            Ok(false) => Ok(()),
+                            Err(error) => Err(error),
+                        }
+                    }
                     KeyCode::Tab => {
                         layout.toggle_focus();
                         Ok(())

@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Exercise the Rust dual-pane navigator in a real terminal."""
 import fcntl
+import io
 import os
 from pathlib import Path
 import pty
 import struct
 import subprocess
 import sys
+import tarfile
 import tempfile
 import termios
 
@@ -226,9 +228,77 @@ def bookmark_snapshots(binary):
         print("TT_PANE_SNAPSHOTS explicit save, reload and no-overwrite invariants passed")
 
 
+def pane_previews(binary):
+    with tempfile.TemporaryDirectory(prefix="tt-pane-preview-") as tmp:
+        root = Path(tmp)
+        left, right = root / "left", root / "right"
+        left.mkdir()
+        right.mkdir()
+        text = left / "a.txt"
+        image = left / "b.ppm"
+        archive = left / "c.tar"
+        text.write_bytes(b"left-preview-content\n")
+        image.write_bytes(b"P6\n2 1\n255\n\x00\x00\x00\xff\xff\xff")
+        with tarfile.open(archive, "w", format=tarfile.USTAR_FORMAT) as tar:
+            info = tarfile.TarInfo("item.txt")
+            info.size = 4
+            tar.addfile(info, io.BytesIO(b"keep"))
+        (left / "d-link").symlink_to(text)
+        right_file = right / "right.txt"
+        right_file.write_bytes(b"right-preview-content")
+        original = {p: p.read_bytes() for p in (text, image, archive, right_file)}
+        master, slave = pty.openpty()
+        process = None
+        try:
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 160, 0, 0))
+            before = termios.tcgetattr(slave)
+            process = subprocess.Popen(
+                [binary, "--panes", str(left), str(right)],
+                stdin=slave, stdout=slave, stderr=slave,
+                env=dict(os.environ, TERM="xterm-256color"),
+            )
+
+            def step(keys, marker):
+                os.write(master, keys)
+                wait_output(master, process, marker)
+
+            wait_output(master, process, b"Focus: Left | Row: 1")
+            step(b"p", b"left-preview-content")
+            step(b"q", b"Focus: Left | Row: 1")
+            step(b"\x1b[19~", b"00000000  6c 65 66 74 ")
+            step(b"q", b"Focus: Left | Row: 1")
+            step(b"\x1b[B", b"Focus: Left | Row: 2")
+            step(b"I", b"PPM 2x1")
+            step(b"q", b"Focus: Left | Row: 2")
+            step(b"\x1b[B", b"Focus: Left | Row: 3")
+            step(b"A", b"file 4 bytes | item.txt")
+            step(b"q", b"Focus: Left | Row: 3")
+            step(b"\x1b[B", b"Focus: Left | Row: 4")
+            step(b"p", b"preview requires a regular non-link file")
+            step(b"\t", b"Focus: Right | Row: 1")
+            step(b"p", b"right-preview-content")
+            os.write(master, b"\x03")
+            assert process.wait(timeout=8) == 0
+            assert termios.tcgetattr(slave) == before
+            assert all(p.read_bytes() == data for p, data in original.items())
+            assert (left / "d-link").is_symlink()
+            assert sorted(str(p.relative_to(root)) for p in root.rglob("*")) == [
+                "left", "left/a.txt", "left/b.ppm", "left/c.tar", "left/d-link",
+                "right", "right/right.txt",
+            ]
+            print("TT_PANE_PREVIEWS text, hex, image, archive, focus and read-only invariants passed")
+        finally:
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait()
+            os.close(master)
+            os.close(slave)
+
+
 if __name__ == "__main__":
     binary = str(Path(sys.argv[1]).resolve())
     main(binary)
     custom_keys(binary)
     bookmarks(binary)
     bookmark_snapshots(binary)
+    pane_previews(binary)

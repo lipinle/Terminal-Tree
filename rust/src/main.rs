@@ -207,6 +207,15 @@ fn draw(
 }
 
 fn page(title: &str, lines: &[String]) -> io::Result<()> {
+    page_with_interrupt(title, lines, false).map(|_| ())
+}
+
+// True means Ctrl+C requested leaving the enclosing navigator.
+fn page_with_interrupt(
+    title: &str,
+    lines: &[String],
+    interrupt_exits: bool,
+) -> io::Result<bool> {
     let mut top = 0usize;
     loop {
         let (w, h) = terminal::size()?;
@@ -237,7 +246,12 @@ fn page(title: &str, lines: &[String]) -> io::Result<()> {
                 continue;
             }
             match k.code {
-                KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => return Ok(()),
+                KeyCode::Char('c')
+                    if interrupt_exits && k.modifiers.contains(KeyModifiers::CONTROL) =>
+                {
+                    return Ok(true);
+                }
+                KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => return Ok(false),
                 KeyCode::Up => top = top.saturating_sub(1),
                 KeyCode::Down => top = top.saturating_add(1),
                 KeyCode::PageUp => top = top.saturating_sub(cap),
