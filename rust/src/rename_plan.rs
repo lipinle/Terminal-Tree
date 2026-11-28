@@ -4,6 +4,8 @@ use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Component, Path};
 
+pub mod native;
+
 const MAX_ITEMS: usize = 1000;
 const MAX_DIRECTORY_NAMES: usize = 16_384;
 const MAX_NAME_BYTES: usize = 255;

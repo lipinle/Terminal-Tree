@@ -893,6 +893,45 @@ fn run() -> io::Result<()> {
             list(&path, hidden)
         }
         Some("--find") => find(args),
+        Some("--rename-plan") => {
+            #[cfg(all(feature = "native-ops", target_os = "linux"))]
+            {
+                let path = path_arg(Some(
+                    args.next()
+                        .ok_or_else(|| io::Error::other("rename directory required"))?,
+                ))?;
+                let needle = args
+                    .next()
+                    .ok_or_else(|| io::Error::other("rename search text required"))?;
+                let replacement = args
+                    .next()
+                    .ok_or_else(|| io::Error::other("rename replacement required"))?;
+                let selected: Vec<_> = args.take(1001).collect();
+                let plan = terminal_tree::rename_plan::native::preview(
+                    &path,
+                    &selected,
+                    &needle,
+                    &replacement,
+                )?;
+                let mut out = io::BufWriter::new(io::stdout().lock());
+                for item in plan {
+                    writeln!(
+                        out,
+                        "{}\t{}",
+                        display_name(&item.source),
+                        display_name(&item.destination)
+                    )?;
+                }
+                out.flush()
+            }
+            #[cfg(not(all(feature = "native-ops", target_os = "linux")))]
+            {
+                Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "rename preview requires the native Linux build",
+                ))
+            }
+        }
         Some("--image-preview") => {
             let path = path_arg(Some(
                 args.next()
@@ -1141,7 +1180,7 @@ fn run() -> io::Result<()> {
             Ok(())
         }
         _ => {
-            eprintln!("Experimental read-only Rust port\nUsage: terminal-tree --list [-a] [PATH] | --browse [PATH] | --tree [PATH] | --panes [LEFT] [RIGHT] [--keys SPEC] [--bookmarks-in PATH] [--bookmarks-out PATH] | --find PATH QUERY [--content] [--hidden] [--depth N] | --archive-list PATH | --image-preview PATH | --scan-count PATH [REPEATS] | --version | --edition");
+            eprintln!("Experimental read-only Rust port\nUsage: terminal-tree --list [-a] [PATH] | --browse [PATH] | --tree [PATH] | --panes [LEFT] [RIGHT] [--keys SPEC] [--bookmarks-in PATH] [--bookmarks-out PATH] | --find PATH QUERY [--content] [--hidden] [--depth N] | --archive-list PATH | --image-preview PATH | --rename-plan DIRECTORY NEEDLE REPLACEMENT NAME... | --scan-count PATH [REPEATS] | --version | --edition");
             Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "unsupported or missing command",
