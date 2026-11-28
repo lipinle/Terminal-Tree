@@ -853,15 +853,37 @@ fn run() -> io::Result<()> {
         }
         Some("--find") => find(args),
         Some("--panes") => {
-            let left = path_arg(args.next())?;
-            let right = match args.next() {
+            use terminal_tree::keymap::Keymap;
+            let mut paths = Vec::new();
+            let mut keymap = None;
+            while let Some(arg) = args.next() {
+                if arg == "--keys" {
+                    if keymap.is_some() {
+                        return Err(io::Error::other("duplicate --keys"));
+                    }
+                    let spec = args
+                        .next()
+                        .and_then(|value| value.into_string().ok())
+                        .ok_or_else(|| io::Error::other("--keys requires a UTF-8 specification"))?;
+                    keymap = Some(Keymap::from_spec(&spec).map_err(|error| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            format!("invalid navigation keys: {error:?}"),
+                        )
+                    })?);
+                } else if paths.len() < 2 {
+                    paths.push(arg);
+                } else {
+                    return Err(io::Error::other("unexpected argument"));
+                }
+            }
+            let mut paths = paths.into_iter();
+            let left = path_arg(paths.next())?;
+            let right = match paths.next() {
                 Some(path) => path_arg(Some(path))?,
                 None => left.clone(),
             };
-            if args.next().is_some() {
-                return Err(io::Error::other("unexpected argument"));
-            }
-            panes_ui::browse(&left, &right)
+            panes_ui::browse(&left, &right, &keymap.unwrap_or_default())
         }
         Some("--tree") => {
             let path = path_arg(args.next())?;
@@ -997,7 +1019,7 @@ fn run() -> io::Result<()> {
             Ok(())
         }
         _ => {
-            eprintln!("Experimental read-only Rust port\nUsage: terminal-tree --list [-a] [PATH] | --browse [PATH] | --tree [PATH] | --panes [LEFT] [RIGHT] | --find PATH QUERY [--hidden] [--depth N] | --scan-count PATH [REPEATS] | --version | --edition");
+            eprintln!("Experimental read-only Rust port\nUsage: terminal-tree --list [-a] [PATH] | --browse [PATH] | --tree [PATH] | --panes [LEFT] [RIGHT] [--keys SPEC] | --find PATH QUERY [--hidden] [--depth N] | --scan-count PATH [REPEATS] | --version | --edition");
             Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "unsupported or missing command",

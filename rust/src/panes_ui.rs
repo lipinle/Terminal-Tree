@@ -12,6 +12,7 @@ use std::io::{self, IsTerminal, Write};
 use std::path::Path;
 use terminal_tree::{
     display_name,
+    keymap::{Action, Binding, Keymap},
     layout::{Layout, Pane},
     theme::Theme,
     tree::TreeModel,
@@ -189,7 +190,7 @@ fn draw(
         Print(clip(message, limit)),
         MoveTo(0, height - 1),
         Print(clip(
-            "Tab focus | n new | [ ] switch | w close | arrows | F5 refresh | t theme | q exit",
+            "Tab focus | n new | [ ] switch | w close | ? keys | t theme | q exit",
             limit
         )),
         ResetColor
@@ -223,24 +224,22 @@ fn toggle(model: &mut TreeModel) -> io::Result<()> {
     }
 }
 
-fn navigate(model: &mut TreeModel, code: KeyCode, capacity: usize) -> io::Result<()> {
-    match code {
-        KeyCode::Up => model.shift(-1),
-        KeyCode::Down => model.shift(1),
-        KeyCode::PageUp => model.shift(-(capacity as isize)),
-        KeyCode::PageDown => model.shift(capacity as isize),
-        KeyCode::Home => model.select(0),
-        KeyCode::End => model.select(usize::MAX),
-        KeyCode::Right => model.expand()?,
-        KeyCode::Left => model.collapse_or_parent(),
-        KeyCode::Enter => toggle(model)?,
-        KeyCode::F(5) => model.refresh()?,
-        _ => {}
+fn navigate(model: &mut TreeModel, action: Action, capacity: usize) -> io::Result<()> {
+    match action {
+        Action::Up => model.shift(-1),
+        Action::Down => model.shift(1),
+        Action::PageUp => model.shift(-(capacity as isize)),
+        Action::PageDown => model.shift(capacity as isize),
+        Action::First => model.select(0),
+        Action::Last => model.select(usize::MAX),
+        Action::Expand => model.expand()?,
+        Action::Collapse => model.collapse_or_parent(),
+        Action::Refresh => model.refresh()?,
     }
     Ok(())
 }
 
-pub(crate) fn browse(left: &Path, right: &Path) -> io::Result<()> {
+pub(crate) fn browse(left: &Path, right: &Path, keymap: &Keymap) -> io::Result<()> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return Err(io::Error::other("Interactive terminal required"));
     }
@@ -262,6 +261,10 @@ pub(crate) fn browse(left: &Path, right: &Path) -> io::Result<()> {
                     break;
                 }
                 if regions.is_none() {
+                    continue;
+                }
+                if key.code == KeyCode::Char('?') {
+                    message = keymap.summary();
                     continue;
                 }
                 match key.code {
@@ -291,7 +294,16 @@ pub(crate) fn browse(left: &Path, right: &Path) -> io::Result<()> {
                             Err(io::Error::other("cannot close the last tab"))
                         }
                     }
-                    _ => navigate(layout.focused_mut(), key.code, usize::from(height - 4)),
+                    KeyCode::Enter => toggle(layout.focused_mut()),
+                    _ => match keymap.action(Binding {
+                        code: key.code,
+                        modifiers: key.modifiers,
+                    }) {
+                        Some(action) => {
+                            navigate(layout.focused_mut(), action, usize::from(height - 4))
+                        }
+                        None => Ok(()),
+                    },
                 }
             }
             Event::Mouse(mouse) => {
