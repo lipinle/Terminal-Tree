@@ -85,10 +85,8 @@ def main(binary):
         session(binary, ["--app", str(root)], root, b"Tree View", [
             (b"b", b"BOOKMARKS"),
             (b"\x1b[<0;45;1M", b"Settings Center"),
-            (b"\x1b[B" * 4, b"Save application preferences"),
-            (b"\r", b"Save application preferences in this private directory?"),
-            (b"\x1b[B", b"Create or use"),
-            (b"\r", b"Preferences saved"),
+            (b"\x1b[<0;2;6M", b"Save application preferences in this private directory?"),
+            (b"\x1b[<0;2;3M", b"Preferences saved"),
             (b"\x1b", b"Settings Center"),
             (b"\x1b", b"Tree View"),
         ])

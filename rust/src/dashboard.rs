@@ -898,6 +898,11 @@ impl State {
             }
         };
         let commands = self.commands(category,writable);
+        // Settings and Add-ons remain direct one-click destinations.
+        if category == 5 || category == 6 {
+            let (_,key,mods)=commands[0];
+            return Ok(Some(Event::Key(KeyEvent::new(key,mods))));
+        }
         let labels: Vec<_> = commands.iter().map(|(label,_,_)| label.to_string()).collect();
         Ok(super::choose(MENUS[category].0,&labels)?.map(|i| {
             let (_,key,modifiers) = commands[i];
