@@ -79,7 +79,7 @@ pub fn classify(filename: &OsStr, record: &Value) -> Advice {
         return Advice::MalformedRecord;
     };
     match record.get("operation").and_then(Value::as_str) {
-        Some("copy") if source && destination && stage => Advice::InspectTransfer,
+        Some("copy" | "retained-move") if source && destination && stage => Advice::InspectTransfer,
         Some("move") if source && destination && !stage => Advice::InspectTransfer,
         Some("archive-extract") if !source && destination && stage => Advice::InspectCreation,
         Some("mkdir" | "create-file") if !source && destination && !stage => {
@@ -91,7 +91,7 @@ pub fn classify(filename: &OsStr, record: &Value) -> Advice {
         Some("permanent-delete") if source && !destination => Advice::InspectPurge,
         Some(
             "copy" | "move" | "mkdir" | "create-file" | "native-trash" | "restore"
-            | "permanent-delete" | "archive-extract",
+            | "permanent-delete" | "archive-extract" | "retained-move",
         )
         | None => Advice::MalformedRecord,
         Some(_) => Advice::UnrecognizedOperation,

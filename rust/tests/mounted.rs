@@ -27,6 +27,38 @@ fn mount_policy_and_real_enospc() {
     e.transfer(&e.review(&source).unwrap(), &dest, Transfer::Copy)
         .unwrap();
     assert_eq!(fs::read(&dest).unwrap(), b"preserved data");
+    let moving = home.join("retained-source");
+    fs::write(&moving, b"retained original").unwrap();
+    let moved = external.join("retained-target");
+    let retained = e
+        .move_retaining_source(
+            &e.review(&moving).unwrap(),
+            &e.destination(&moved).unwrap(),
+            &mut |_| Ok(()),
+        )
+        .unwrap();
+    assert!(!moving.exists());
+    assert_eq!(fs::read(&moved).unwrap(), b"retained original");
+    assert_eq!(fs::read(&retained).unwrap(), b"retained original");
+
+    let interrupted = home.join("interrupted-source");
+    fs::write(&interrupted, b"do not lose").unwrap();
+    let interrupted_target = external.join("interrupted-target");
+    assert!(e
+        .move_retaining_source(
+            &e.review(&interrupted).unwrap(),
+            &e.destination(&interrupted_target).unwrap(),
+            &mut |point| {
+                if point == "retained-before-publish" {
+                    Err(std::io::Error::other("injected interruption"))
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .is_err());
+    assert_eq!(fs::read(&interrupted).unwrap(), b"do not lose");
+    assert_eq!(fs::read(&interrupted_target).unwrap(), b"do not lose");
     let denied = home.join("denied");
     fs::write(&denied, b"private").unwrap();
     fs::set_permissions(&denied, fs::Permissions::from_mode(0o0)).unwrap();
@@ -48,6 +80,6 @@ fn mount_policy_and_real_enospc() {
     assert_eq!(fs::metadata(&big).unwrap().len(), 16 * 1024 * 1024);
     assert_eq!(fs::read(&source).unwrap(), b"preserved data");
     assert_eq!(fs::read(&dest).unwrap(), b"preserved data");
-    assert_eq!(e.pending().unwrap().len(), 1);
+    assert_eq!(e.pending().unwrap().len(), 2);
     println!("TT_MOUNT_POLICY external copy, cross-device move refusal, nested bind mount refusal, permissions and real ENOSPC passed");
 }

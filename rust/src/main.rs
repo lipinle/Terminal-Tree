@@ -331,6 +331,7 @@ fn actions_menu(w: &mut workspace::Workspace, model: &mut Model) -> io::Result<O
         ('j', "Recovery"),
         ('S', "Save Rust view settings"),
         ('E', "Extract archive to new directory"),
+        ('M', "Move one file across devices (retain original)"),
         ('N', "Bulk rename marked items"),
         ('V', "Paste one item (keep both)"),
     ];
