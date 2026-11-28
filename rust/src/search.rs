@@ -74,6 +74,25 @@ fn check_directory(root: &Path, path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+// Compare the observed root identity on Unix. This does not pin a directory
+// descriptor or guarantee a consistent filesystem snapshot.
+fn check_root_identity(root: &Path, original: &fs::Metadata) -> io::Result<()> {
+    let current = plain_directory(root)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if (current.dev(), current.ino()) != (original.dev(), original.ino()) {
+            return Err(io::Error::other("search root identity changed"));
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = (current, original);
+    if root.canonicalize()? != root {
+        return Err(io::Error::other("search root changed"));
+    }
+    Ok(())
+}
+
 /// Search filenames recursively, without descending into observed directory links.
 /// Count hidden/nonmatching entries against the scan budget. Return an error,
 /// not incomplete results, on cancellation, scan failure or limit exhaustion.
@@ -102,15 +121,18 @@ pub fn filenames(
     }
     check_cancel(cancel)?;
     let root = root.canonicalize()?;
+    let original = plain_directory(&root)?;
     let query = query.to_lowercase();
     let mut stack: Vec<(PathBuf, usize)> = vec![(root.clone(), 0)];
     let mut remaining = limits.entries;
     let mut matches = Vec::new();
     while let Some((directory, depth)) = stack.pop() {
         check_cancel(cancel)?;
+        check_root_identity(&root, &original)?;
         check_directory(&root, &directory)?;
         let entries = scan_bounded(&directory, true, Order::Name, "", remaining)?;
         check_directory(&root, &directory)?;
+        check_root_identity(&root, &original)?;
         remaining -= entries.len();
         for entry in entries {
             check_cancel(cancel)?;
@@ -133,5 +155,27 @@ pub fn filenames(
         }
     }
     check_cancel(cancel)?;
+    check_root_identity(&root, &original)?;
     Ok(matches)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replaced_plain_root_is_detected() {
+        let parent = std::env::temp_dir().join(format!("tt-search-root-{}", std::process::id()));
+        fs::create_dir(&parent).unwrap();
+        let root = parent.join("root");
+        fs::create_dir(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let original = plain_directory(&root).unwrap();
+        assert!(check_root_identity(&root, &original).is_ok());
+        fs::rename(&root, parent.join("old")).unwrap();
+        fs::create_dir(&root).unwrap();
+        let result = check_root_identity(&root, &original);
+        fs::remove_dir_all(&parent).unwrap();
+        assert!(result.is_err());
+    }
 }

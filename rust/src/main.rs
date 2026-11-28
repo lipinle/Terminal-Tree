@@ -330,6 +330,7 @@ fn actions_menu(w: &mut workspace::Workspace, model: &mut Model) -> io::Result<O
         ('u', "Undo move"),
         ('j', "Recovery"),
         ('S', "Save Rust view settings"),
+        ('E', "Extract archive to new directory"),
     ];
     let labels: Vec<_> = actions.iter().map(|(_, label)| label.to_string()).collect();
     if let Some(i) = choose("Actions - writes require review", &labels)? {
@@ -1002,6 +1003,147 @@ fn run() -> io::Result<()> {
                 ))
             }
         }
+        Some("--suggest-name") => {
+            let directory = path_arg(Some(
+                args.next()
+                    .ok_or_else(|| io::Error::other("directory required"))?,
+            ))?;
+            let name = args
+                .next()
+                .ok_or_else(|| io::Error::other("requested filename required"))?;
+            if args.next().is_some() {
+                return Err(io::Error::other("unexpected name argument"));
+            }
+            #[cfg(all(feature = "native-ops", target_os = "linux"))]
+            {
+                let candidate = terminal_tree::rename_plan::native::suggest(&directory, &name)?;
+                println!("{}", display_name(&candidate));
+                Ok(())
+            }
+            #[cfg(not(all(feature = "native-ops", target_os = "linux")))]
+            {
+                let _ = (directory, name);
+                Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "name suggestion requires the native Linux build",
+                ))
+            }
+        }
+        Some("--archive-build") => {
+            #[cfg(all(feature = "native-ops", target_os = "linux"))]
+            {
+                if args.next().as_deref() != Some(std::ffi::OsStr::new("--stdout"))
+                    || io::stdout().is_terminal()
+                {
+                    return Err(io::Error::other(
+                        "archive build requires --stdout and non-terminal output",
+                    ));
+                }
+                let mut files = Vec::new();
+                while let Some(name) = args.next() {
+                    if files.len() >= 4096 {
+                        return Err(io::Error::other("archive input count exceeded"));
+                    }
+                    let name = name
+                        .into_string()
+                        .map_err(|_| io::Error::other("archive member name must be UTF-8"))?;
+                    let path =
+                        path_arg(Some(args.next().ok_or_else(|| {
+                            io::Error::other("archive input path required")
+                        })?))?;
+                    files.push((name, path));
+                }
+                let archive = terminal_tree::archive_build::native::build_files(&files)?;
+                let mut out = io::stdout().lock();
+                out.write_all(&archive)?;
+                out.flush()
+            }
+            #[cfg(not(all(feature = "native-ops", target_os = "linux")))]
+            {
+                Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "archive construction requires the native Linux build",
+                ))
+            }
+        }
+        Some("--archive-member") => {
+            let path = path_arg(Some(
+                args.next()
+                    .ok_or_else(|| io::Error::other("archive path required"))?,
+            ))?;
+            let name = args
+                .next()
+                .and_then(|name| name.into_string().ok())
+                .ok_or_else(|| io::Error::other("UTF-8 archive member name required"))?;
+            if args.next().as_deref() != Some(std::ffi::OsStr::new("--stdout"))
+                || args.next().is_some()
+                || io::stdout().is_terminal()
+            {
+                return Err(io::Error::other(
+                    "archive member requires --stdout and non-terminal output",
+                ));
+            }
+            #[cfg(all(feature = "native-ops", target_os = "linux"))]
+            {
+                let data = terminal_tree::archive::native::read_member(&path, &name)?;
+                let mut out = io::stdout().lock();
+                out.write_all(&data)?;
+                out.flush()
+            }
+            #[cfg(not(all(feature = "native-ops", target_os = "linux")))]
+            {
+                let _ = (path, name);
+                Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "archive member access requires the native Linux build",
+                ))
+            }
+        }
+        Some("--archive-layout") => {
+            let path = path_arg(Some(
+                args.next()
+                    .ok_or_else(|| io::Error::other("archive path required"))?,
+            ))?;
+            let portable = match args.next() {
+                None => false,
+                Some(flag) if flag == "--portable" => true,
+                _ => return Err(io::Error::other("unexpected archive argument")),
+            };
+            if args.next().is_some() {
+                return Err(io::Error::other("unexpected archive argument"));
+            }
+            #[cfg(all(feature = "native-ops", target_os = "linux"))]
+            {
+                let layout = if portable {
+                    terminal_tree::archive::native::portable_layout_file(&path)?
+                } else {
+                    terminal_tree::archive::native::layout_file(&path)?
+                };
+                let mut out = io::BufWriter::new(io::stdout().lock());
+                writeln!(
+                    out,
+                    "Layout (read-only): {} directories, {} files, {} payload bytes",
+                    layout.directories.len(),
+                    layout.files.len(),
+                    layout.payload_bytes
+                )?;
+                for directory in layout.directories {
+                    writeln!(out, "directory\t0\t{directory}")?;
+                }
+                for member in layout.files {
+                    writeln!(out, "file\t{}\t{}", member.size, member.name)?;
+                }
+                out.flush()
+            }
+            #[cfg(not(all(feature = "native-ops", target_os = "linux")))]
+            {
+                let _ = (path, portable);
+                Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "archive layout requires the native Linux build",
+                ))
+            }
+        }
         Some("--panes") => {
             use terminal_tree::keymap::Keymap;
             let mut paths = Vec::new();
@@ -1190,7 +1332,7 @@ fn run() -> io::Result<()> {
             Ok(())
         }
         _ => {
-            eprintln!("Experimental read-only Rust port\nUsage: terminal-tree --list [-a] [PATH] | --browse [PATH] | --tree [PATH] | --panes [LEFT] [RIGHT] [--keys SPEC] [--bookmarks-in PATH] [--bookmarks-out PATH] | --find PATH QUERY [--content] [--hidden] [--depth N] | --archive-list PATH | --image-preview PATH | --rename-plan DIRECTORY NEEDLE REPLACEMENT NAME... | --scan-count PATH [REPEATS] | --version | --edition");
+            eprintln!("Experimental read-only Rust port\nUsage: terminal-tree --list [-a] [PATH] | --browse [PATH] | --tree [PATH] | --panes [LEFT] [RIGHT] [--keys SPEC] [--bookmarks-in PATH] [--bookmarks-out PATH] | --find PATH QUERY [--content] [--hidden] [--depth N] | --archive-list PATH | --archive-layout PATH [--portable] | --archive-member PATH NAME --stdout | --archive-build --stdout NAME PATH ... | --suggest-name DIRECTORY NAME | --image-preview PATH | --rename-plan DIRECTORY NEEDLE REPLACEMENT NAME... | --scan-count PATH [REPEATS] | --version | --edition");
             Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "unsupported or missing command",

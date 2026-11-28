@@ -125,3 +125,21 @@ fn replaced_directory_link_is_refused() {
     assert_eq!(tree.rows().len(), 1);
     assert!(!tree.rows()[0].expanded);
 }
+
+#[cfg(unix)]
+#[test]
+fn replaced_root_directory_does_not_change_existing_tree() {
+    let f = Fixture::new();
+    let root = f.0.join("root");
+    fs::create_dir_all(root.join("a")).unwrap();
+    let mut tree = TreeModel::new(&root, false, Order::Name).unwrap();
+    fs::rename(&root, f.0.join("original")).unwrap();
+    fs::create_dir_all(root.join("a")).unwrap();
+    fs::write(root.join("a/new"), b"x").unwrap();
+    assert!(tree.expand().is_err());
+    assert!(tree.refresh().is_err());
+    assert_eq!(tree.rows().len(), 1);
+    assert_eq!(tree.rows()[0].entry.name, "a");
+    assert!(!tree.rows()[0].expanded);
+    assert_eq!(tree.selected(), 0);
+}

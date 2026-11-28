@@ -4,6 +4,7 @@ No timing assertion: CI machines and filesystem caches vary.
 """
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 import statistics
@@ -33,7 +34,10 @@ def timed(cmd, expected, rounds, timeout=120):
         samples.append((time.perf_counter() - start) * 1000)
         if result.stdout.strip() != str(expected):
             raise AssertionError(f"count mismatch: {cmd!r}: {result.stdout!r}")
-    return round(statistics.median(samples), 3)
+    median = statistics.median(samples)
+    if not math.isfinite(median) or median <= 0:
+        raise ValueError("invalid elapsed time")
+    return median
 
 
 def main():
@@ -77,9 +81,11 @@ def main():
                 if i % 2: pair.reverse()
                 for command, samples in pair:
                     samples.append(timed(command, entries*repeats, 1, args.timeout))
-            p_ms = round(statistics.median(p_samples), 3)
-            r_ms = round(statistics.median(r_samples), 3)
-            result[label] = {"python_ms": p_ms, "rust_ms": r_ms,
+            p_ms = statistics.median(p_samples)
+            r_ms = statistics.median(r_samples)
+            # Do not quantize timings before computing a ratio. Very short
+            # samples can round to zero; preserve raw finite samples for analysis.
+            result[label] = {"python_ms": round(p_ms, 3), "rust_ms": round(r_ms, 3),
                              "python_over_rust": round(p_ms / r_ms, 2),
                              "python_samples_ms": p_samples,
                              "rust_samples_ms": r_samples}

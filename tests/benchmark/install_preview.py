@@ -27,7 +27,9 @@ with tempfile.TemporaryDirectory(prefix="tt-preview-install-") as tmp:
     assert target.stat().st_mode & 0o777 == 0o700
     assert binary.stat().st_mode & 0o777 == 0o700
     assert integration.stat().st_mode & 0o777 == 0o600
-    assert {p.name for p in target.iterdir()} == {"terminal-tree", "integration.sh"}
+    manifest=target/"manifest.sha256"
+    assert manifest.stat().st_mode & 0o777 == 0o600
+    assert {p.name for p in target.iterdir()} == {"terminal-tree", "integration.sh", "manifest.sha256"}
     assert subprocess.run(["bash",str(ROOT/"rust/install-preview.sh"),str(target)],env=env,capture_output=True).returncode!=0
     assert binary.read_bytes()==before
     assert integration.read_bytes()==original_integration
@@ -53,4 +55,32 @@ with tempfile.TemporaryDirectory(prefix="tt-preview-install-") as tmp:
     assert integration.read_bytes()==original_integration
     subprocess.run([str(binary),"--version"],check=True,timeout=15)
     assert rc.read_bytes()==b"# untouched\n"
-    print("TT_PREVIEW_INSTALL side-by-side install, existing target refusal and untouched bashrc passed")
+    verify=ROOT/"rust/verify-preview-install.sh"
+    uninstall=ROOT/"rust/uninstall-preview.sh"
+    subprocess.run(["bash",str(verify),str(target)],check=True,env=env,timeout=15)
+    updated=base/"updated"
+    subprocess.run(["bash",str(ROOT/"rust/install-preview.sh"),"--update",str(target),str(updated)],
+                   check=True,env=env,timeout=300)
+    assert binary.read_bytes()==before
+    assert integration.read_bytes()==original_integration
+    subprocess.run(["bash",str(verify),str(updated)],check=True,env=env,timeout=15)
+    def refuse(*args):
+        result=subprocess.run(["bash",str(uninstall),*map(str,args)],
+                              capture_output=True,env=env,timeout=15)
+        assert result.returncode!=0
+    refuse(target)
+    refuse(alias,"--yes")
+    extra=target/"user-note"
+    extra.write_bytes(b"keep")
+    refuse(target,"--yes")
+    assert extra.read_bytes()==b"keep"
+    extra.unlink()
+    integration.write_bytes(b"changed")
+    refuse(target,"--yes")
+    assert integration.read_bytes()==b"changed"
+    integration.write_bytes(original_integration)
+    subprocess.run(["bash",str(uninstall),str(target),"--yes"],check=True,env=env,timeout=15)
+    assert target.is_dir() and not list(target.iterdir())
+    assert rc.read_bytes()==b"# untouched\n"
+    subprocess.run([str(updated/"terminal-tree"),"--version"],check=True,timeout=15)
+    print("TT_PREVIEW_INSTALL install, side-by-side update, guarded uninstall and untouched bashrc passed")

@@ -13,14 +13,28 @@ tt_rust_nav() {
         command rmdir -- "$tmp"
         return 1
     fi
-    "$_tt_rust_program" --result "$tmp/result"
-    rc=$?
+    # An error must reach cleanup even when the caller enabled errexit.
+    if "$_tt_rust_program" --result "$tmp/result"; then
+        rc=0
+    else
+        rc=$?
+    fi
     if (( rc == 0 )) && [[ -f "$tmp/result" && ! -L "$tmp/result" ]] && IFS= read -r -d '' dest < "$tmp/result"; then
         [[ "$dest" == /* ]] && builtin cd -- "$dest" || rc=1
     fi
     command rm -f -- "$tmp/result"
     command rmdir -- "$tmp"
     return "$rc"
+}
+# Read-only commands use the same installed binary and preserve argument boundaries.
+tt_rust_tree() {
+    "$_tt_rust_program" --tree "$@"
+}
+tt_rust_panes() {
+    "$_tt_rust_program" --panes "$@"
+}
+tt_rust_find() {
+    "$_tt_rust_program" --find "$@"
 }
 tt_rust_workspace() {
     "$_tt_rust_program" --workspace "$@"

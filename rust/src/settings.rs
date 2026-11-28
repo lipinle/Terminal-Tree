@@ -84,27 +84,38 @@ impl Store {
     }
     pub fn load(&self, m: &mut Model) -> io::Result<()> {
         let Some(v) = self.read()? else { return Ok(()) };
+        Self::apply(m, &v)
+    }
+
+    fn apply(m: &mut Model, v: &serde_json::Value) -> io::Result<()> {
         if v["version"].as_u64() != Some(1) {
             return Err(error("unsupported Rust view settings version"));
         }
-        m.hidden = v["hidden"]
+        let hidden = v["hidden"]
             .as_bool()
             .ok_or_else(|| error("invalid hidden setting"))?;
-        m.order = match v["order"].as_str() {
+        let order = match v["order"].as_str() {
             Some("Name") => Order::Name,
             Some("Size") => Order::Size,
             Some("Date") => Order::Date,
             Some("Type") => Order::Type,
             _ => return Err(error("invalid order setting")),
         };
-        m.kind_filter = match v["kind"].as_str() {
+        let kind_filter = match v["kind"].as_str() {
             Some("All") => KindFilter::All,
             Some("Directories") => KindFilter::Directories,
             Some("Files") => KindFilter::Files,
             Some("Links") => KindFilter::Links,
             _ => return Err(error("invalid kind setting")),
         };
-        m.reload()
+        let previous = (m.hidden, m.order, m.kind_filter);
+        (m.hidden, m.order, m.kind_filter) = (hidden, order, kind_filter);
+        // Model::reload scans before replacing its entries and selection.
+        if let Err(error) = m.reload() {
+            (m.hidden, m.order, m.kind_filter) = previous;
+            return Err(error);
+        }
+        Ok(())
     }
     pub fn save(&self, m: &Model) -> io::Result<()> {
         self.read()?; // refuse preexisting unsafe file before replacement
@@ -134,5 +145,29 @@ impl Store {
         // Never unlink a pathname on an error after an uncertain rename.
         // An orphaned private temp is harmless and can be inspected manually.
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invalid_settings_and_failed_scan_preserve_view_state() {
+        let mut model = Model::new(std::env::current_dir().unwrap()).unwrap();
+        let original = (model.hidden, model.order, model.kind_filter);
+        let original_rows = model.entries.len();
+        let mut value = serde_json::json!({
+            "version": 1, "hidden": true, "order": "Size", "kind": "invalid"
+        });
+        assert!(Store::apply(&mut model, &value).is_err());
+        assert_eq!((model.hidden, model.order, model.kind_filter), original);
+        assert_eq!(model.entries.len(), original_rows);
+        value["kind"] = serde_json::json!("Files");
+        // A regular file cannot be scanned as a directory.
+        model.directory = std::env::current_exe().unwrap();
+        assert!(Store::apply(&mut model, &value).is_err());
+        assert_eq!((model.hidden, model.order, model.kind_filter), original);
+        assert_eq!(model.entries.len(), original_rows);
     }
 }
