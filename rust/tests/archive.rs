@@ -176,3 +176,51 @@ fn native_listing_cli_rejects_aliases_and_malformed_data() {
     assert!(output.stdout.is_empty());
     assert_eq!(fs::read(&path).unwrap(), archive);
 }
+
+#[cfg(all(feature = "native-ops", target_os = "linux"))]
+#[test]
+fn layout_cli_includes_implicit_parents_without_writes() {
+    use std::fs;
+    use std::os::unix::fs::symlink;
+    use std::process::Command;
+
+    let root = std::env::temp_dir().join(format!("tt-archive-layout-{}", std::process::id()));
+    fs::create_dir(&root).unwrap();
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(root.clone());
+    let path = root.join("test.tar");
+    let mut archive = Vec::new();
+    append(&mut archive, "a/b/one", b'0', b"123");
+    append(&mut archive, "a/two", b'0', b"45");
+    finish(&mut archive);
+    fs::write(&path, &archive).unwrap();
+    let run = |path: &std::path::Path| {
+        Command::new(env!("CARGO_BIN_EXE_terminal-tree"))
+            .arg("--archive-layout")
+            .arg(path)
+            .current_dir(&root)
+            .output()
+            .unwrap()
+    };
+    let output = run(&path);
+    assert!(output.status.success());
+    assert_eq!(
+        output.stdout,
+        b"Layout (read-only): 2 directories, 2 files, 5 payload bytes\ndirectory\t0\ta\ndirectory\t0\ta/b\nfile\t3\ta/b/one\nfile\t2\ta/two\n"
+    );
+    assert!(!root.join("a").exists());
+    assert_eq!(fs::read(&path).unwrap(), archive);
+    symlink(&path, root.join("alias")).unwrap();
+    let damaged = root.join("damaged.tar");
+    fs::write(&damaged, b"bad").unwrap();
+    for bad in [root.join("alias"), damaged, root.clone()] {
+        let output = run(&bad);
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+    }
+}

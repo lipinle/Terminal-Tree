@@ -3,7 +3,7 @@
 use rustix::fs::{self as rx, Mode, OFlags};
 use std::fs::{File, Metadata};
 use std::io;
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::{ffi::OsStrExt, fs::MetadataExt};
 use std::path::{Component, Path};
 
 fn invalid(message: &str) -> io::Error {
@@ -13,6 +13,13 @@ fn invalid(message: &str) -> io::Error {
 fn parent(path: &Path) -> io::Result<File> {
     if !path.is_absolute() {
         return Err(invalid("absolute file path required"));
+    }
+    // Path::file_name and parent normalize trailing slash/dot components.
+    // Preserve the kernel's directory-only meaning rather than reading a
+    // regular file when the caller requested file/ or file/.
+    let raw = path.as_os_str().as_bytes();
+    if raw.ends_with(b"/") || raw.ends_with(b"/.") {
+        return Err(invalid("file path must end in a filename"));
     }
     let parent = path
         .parent()
@@ -167,6 +174,18 @@ mod tests {
         ] {
             assert!(ReadSession::open(&bad).is_err());
         }
+        assert_eq!(fs::read(&path).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn rejects_directory_only_suffix_on_regular_file() {
+        let f = Fixture::new();
+        let path = f.0.join("file");
+        fs::write(&path, b"keep").unwrap();
+        for bad in [f.0.join("file/"), f.0.join("file/."), f.0.join("file//.")] {
+            assert!(ReadSession::open(&bad).is_err());
+        }
+        assert!(ReadSession::open(&f.0.join("./file")).is_ok());
         assert_eq!(fs::read(&path).unwrap(), b"keep");
     }
 

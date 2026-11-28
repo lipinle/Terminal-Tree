@@ -1002,6 +1002,42 @@ fn run() -> io::Result<()> {
                 ))
             }
         }
+        Some("--archive-layout") => {
+            let path = path_arg(Some(
+                args.next()
+                    .ok_or_else(|| io::Error::other("archive path required"))?,
+            ))?;
+            if args.next().is_some() {
+                return Err(io::Error::other("unexpected archive argument"));
+            }
+            #[cfg(all(feature = "native-ops", target_os = "linux"))]
+            {
+                let layout = terminal_tree::archive::native::layout_file(&path)?;
+                let mut out = io::BufWriter::new(io::stdout().lock());
+                writeln!(
+                    out,
+                    "Layout (read-only): {} directories, {} files, {} payload bytes",
+                    layout.directories.len(),
+                    layout.files.len(),
+                    layout.payload_bytes
+                )?;
+                for directory in layout.directories {
+                    writeln!(out, "directory\t0\t{directory}")?;
+                }
+                for member in layout.files {
+                    writeln!(out, "file\t{}\t{}", member.size, member.name)?;
+                }
+                out.flush()
+            }
+            #[cfg(not(all(feature = "native-ops", target_os = "linux")))]
+            {
+                let _ = path;
+                Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "archive layout requires the native Linux build",
+                ))
+            }
+        }
         Some("--panes") => {
             use terminal_tree::keymap::Keymap;
             let mut paths = Vec::new();
@@ -1190,7 +1226,7 @@ fn run() -> io::Result<()> {
             Ok(())
         }
         _ => {
-            eprintln!("Experimental read-only Rust port\nUsage: terminal-tree --list [-a] [PATH] | --browse [PATH] | --tree [PATH] | --panes [LEFT] [RIGHT] [--keys SPEC] [--bookmarks-in PATH] [--bookmarks-out PATH] | --find PATH QUERY [--content] [--hidden] [--depth N] | --archive-list PATH | --image-preview PATH | --rename-plan DIRECTORY NEEDLE REPLACEMENT NAME... | --scan-count PATH [REPEATS] | --version | --edition");
+            eprintln!("Experimental read-only Rust port\nUsage: terminal-tree --list [-a] [PATH] | --browse [PATH] | --tree [PATH] | --panes [LEFT] [RIGHT] [--keys SPEC] [--bookmarks-in PATH] [--bookmarks-out PATH] | --find PATH QUERY [--content] [--hidden] [--depth N] | --archive-list PATH | --archive-layout PATH | --image-preview PATH | --rename-plan DIRECTORY NEEDLE REPLACEMENT NAME... | --scan-count PATH [REPEATS] | --version | --edition");
             Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "unsupported or missing command",
