@@ -29,6 +29,10 @@ impl Tool {
         }
     }
 
+    pub fn installed(self) -> bool {
+        resolve(self).is_ok()
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Eza => "eza",
