@@ -35,7 +35,7 @@ const TOPICS:&[Topic]=&[
         ("/","Filter the current directory by name; type to update results. Backspace removes text, Enter accepts, Esc restores the previous filter. Not recursive."),
         ("F7","Filter by entry type: All, Directories, non-directory non-links, or symbolic links."),
         ("i","Properties: path, mode, size, owner, modification time, inode and links."),
-        ("p / F3","Preview a regular non-link file (native build); up to 64 KiB. Binary data is displayed as hexadecimal."),
+        ("p / F3","Preview a regular non-link file (native build); up to 64 KiB. NUL bytes in the first 64 KiB trigger hexadecimal preview; F8 handles other binary data."),
         ("F8","Force hexadecimal preview of a regular non-link file (native build)."),
         ("S","Save hidden, sort and type preferences for the current Rust workspace/personal journal. The name query is not saved."),
         ("Menus","Up / Down, PgUp / PgDn, Home / End; Enter selects, q / Esc cancels."),
