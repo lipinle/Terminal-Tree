@@ -80,6 +80,11 @@ def main(binary):
             (b"\r", b"Tree View"),
             (b"\x14", b"[2 "),
             (b"\x17", b"[1 "),
+            (b"\x1bt", b"Terminal / Bash *"),
+            (b"printf panel-smoke\\\\n; pwd\r", b"exit status: 0"),
+            (b"\x1b", b"Terminal / Bash |"),
+            (b"\x1bh", b"Tree View"),
+            (b"\x1bh", b"Terminal / Bash |"),
         ])
         session(binary, ["--app", str(root)], root, b"Files *", [], width=45)
         config = root / ".config"

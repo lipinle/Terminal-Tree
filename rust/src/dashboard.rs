@@ -173,6 +173,8 @@ pub struct State {
     tabs: Vec<Option<Tab>>,
     active_tab: usize,
     dragging: Option<Divider>,
+    #[cfg(feature = "native-ops")]
+    terminal_panel: super::terminal_panel::Panel,
     icons: super::file_icons::Style,
     prefs: super::app_settings::Preferences,
     #[cfg(feature = "native-ops")]
@@ -192,6 +194,8 @@ impl State {
             dual: false, active_right: false, other: None, pane_switched: false,
             view: View::Tree, zoom: 1, location: None, expanded_tree: None,
             tabs: vec![None], active_tab: 0, dragging: None,
+            #[cfg(feature = "native-ops")]
+            terminal_panel: Default::default(),
             icons: super::file_icons::Style::from_environment(),
             prefs: Default::default(),
             #[cfg(feature = "native-ops")]
@@ -297,6 +301,23 @@ impl State {
         Ok(())
     }
 
+    fn panel_rows(&self,h:u16)->u16 {
+        if cfg!(feature = "native-ops") && self.prefs.terminal_visible && h>=16 {7.min(h/3)} else {0}
+    }
+    #[cfg(feature = "native-ops")]
+    pub fn terminal_running(&self)->bool {self.terminal_panel.running()}
+    #[cfg(feature = "native-ops")]
+    pub fn tick_terminal(&mut self)->io::Result<bool> {
+        let finished=self.terminal_panel.tick()?;
+        if finished {self.expanded_tree=None;self.preview_key=None;}
+        Ok(finished)
+    }
+    #[cfg(feature = "native-ops")]
+    fn draw_terminal(&self,out:&mut impl Write,h:u16,width:u16,model:&Model)->io::Result<()> {
+        let rows=self.panel_rows(h);
+        if rows>0 {self.terminal_panel.draw(out,h-rows,rows,width,&model.directory,&self.prefs)?;}
+        Ok(())
+    }
     fn layout(&self, w: u16, h: u16) -> Layout {
         let mut layout = Layout::new(w,h,self.preview_enabled);
         if !self.prefs.sidebar { layout.sidebar = 0; }
@@ -321,6 +342,8 @@ impl State {
     }
 
     pub fn remap_input(&self,mut event:Event,searching:bool)->Event {
+        #[cfg(feature = "native-ops")]
+        if self.terminal_panel.focused {return event;}
         if !searching && self.location.is_none() {
             if let Event::Key(key)=&mut event {
                 if key.modifiers==KeyModifiers::NONE {
@@ -479,6 +502,7 @@ impl State {
                 format!("Layout zoom: {}",self.zoom),
                 format!("File view: {}",self.view.name()),
                 "Reset panel sizes".into(),
+                format!("Terminal panel: {}",self.prefs.terminal_visible),
             ];
             match super::choose("Settings / Display (Enter toggles)",&labels)? {
                 None=>return Ok(()),
@@ -491,7 +515,8 @@ impl State {
                 Some(6)=>{model.set_view(!model.hidden,model.order,model.kind_filter,model.query.clone())?; self.pane_switched=true; self.expanded_tree=None;},
                 Some(7)=>self.zoom=self.zoom%3+1,
                 Some(8)=>self.choose_view(match self.view {View::Tree=>View::Grid,View::Grid=>View::List,View::List=>View::Tree}),
-                _=>{self.prefs.sidebar_width=19;self.prefs.preview_percent=33;self.prefs.dual_percent=50;},
+                Some(9)=>{self.prefs.sidebar_width=19;self.prefs.preview_percent=33;self.prefs.dual_percent=50;},
+                _=>{self.prefs.terminal_visible=!self.prefs.terminal_visible; #[cfg(feature = "native-ops")] {self.terminal_panel.focused=false;}},
             }
         }
     }
@@ -864,7 +889,8 @@ impl State {
         clipboard: usize,
         marked: &impl Fn(&std::path::Path) -> bool,
     ) -> io::Result<()> {
-        let (w, h) = terminal::size()?;
+        let (w, full_h) = terminal::size()?;
+        let h=full_h-self.panel_rows(full_h);
         let width = w.saturating_sub(1);
         let mut out = io::stdout().lock();
         queue!(out, MoveTo(0, 0), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background), Clear(ClearType::All),
@@ -908,6 +934,8 @@ impl State {
             } else {
                 "F8 Single  Tab Switch  F10 Menu  Ctrl+F Filter  q Exit"
             }, usize::from(width))))?;
+        #[cfg(feature = "native-ops")]
+        self.draw_terminal(&mut out,full_h,w.saturating_sub(1),model)?;
         queue!(out,ResetColor)?;
         out.flush()
     }
@@ -919,7 +947,8 @@ impl State {
         if self.dual {
             return self.draw_dual(model, message, searching, writable, personal, clipboard, &marked);
         }
-        let (w,h) = terminal::size()?;
+        let (w,full_h) = terminal::size()?;
+        let h=full_h-self.panel_rows(full_h);
         let l = self.layout(w,h);
         if l.sidebar == 0 { self.side_focus = false; }
         let mut out = io::stdout().lock();
@@ -1024,6 +1053,8 @@ impl State {
             } else {
                 "F1 Help  F3 Preview  F8 Dual  Ctrl+T Tab  Ctrl+K Commands  q Exit"
             },usize::from(l.width))))?;
+        #[cfg(feature = "native-ops")]
+        self.draw_terminal(&mut out,full_h,w.saturating_sub(1),model)?;
         queue!(out,ResetColor)?;
         out.flush()
     }
@@ -1062,6 +1093,8 @@ impl State {
             _ => vec![("Manage integrations",KeyCode::F(11),KeyModifiers::SHIFT)],
         };
         if category == 2 && cfg!(feature = "native-ops") {
+            commands.push(("Toggle terminal panel (Alt+H)",KeyCode::Char('h'),KeyModifiers::ALT));
+            commands.push(("Focus terminal (Alt+T)",KeyCode::Char('t'),KeyModifiers::ALT));
             commands.push(("Hex preview (Shift+F8)", KeyCode::F(8), KeyModifiers::SHIFT));
         }
         if category == 3 {
@@ -1119,9 +1152,42 @@ impl State {
     /// Handle shell-only interactions; translate file-list coordinates back to
     /// the existing navigator so the original review and write engine is used.
     pub fn input(&mut self, mut event: Event, model: &mut Model, searching: bool, writable: bool) -> io::Result<Option<Event>> {
-        let (w,h) = terminal::size()?;
+        let (w,full_h) = terminal::size()?;
+        let h=full_h-self.panel_rows(full_h);
         let l = self.layout(w,h);
         if searching { return Ok(Some(event)); }
+        #[cfg(feature = "native-ops")]
+        {
+            if self.panel_rows(full_h)==0 {self.terminal_panel.focused=false;}
+            if self.location.is_none() {
+                if let Event::Key(k)=&event {
+                    if k.kind==KeyEventKind::Press && k.modifiers==KeyModifiers::ALT {
+                        match k.code {
+                            KeyCode::Char('h')=>{self.prefs.terminal_visible=!self.prefs.terminal_visible;self.terminal_panel.focused=false;return Ok(None);}
+                            KeyCode::Char('t')=>{self.prefs.terminal_visible=true;if self.panel_rows(full_h)==0 {return Err(io::Error::other("terminal panel needs at least 16 rows"));}self.terminal_panel.focused=!self.terminal_panel.focused;self.side_focus=false;return Ok(None);}
+                            _=>(),
+                        }
+                    }
+                    if self.terminal_panel.focused {
+                        self.terminal_panel.input(*k,&model.directory)?;
+                        return Ok(None);
+                    }
+                }
+                if let Event::Mouse(mouse)=&event {
+                    if self.panel_rows(full_h)>0 && mouse.row>=h {
+                        match mouse.kind {
+                            MouseEventKind::Down(MouseButton::Left) if mouse.row==h && mouse.column<6=>{self.prefs.terminal_visible=false;self.terminal_panel.focused=false;}
+                            MouseEventKind::Down(MouseButton::Left)=>{self.terminal_panel.focused=true;self.side_focus=false;}
+                            MouseEventKind::ScrollUp=>self.terminal_panel.scroll(true),
+                            MouseEventKind::ScrollDown=>self.terminal_panel.scroll(false),
+                            _=>(),
+                        }
+                        return Ok(None);
+                    }
+                    if self.terminal_panel.focused && matches!(mouse.kind,MouseEventKind::Down(_)) {self.terminal_panel.focused=false;}
+                }
+            }
+        }
         if let Some(input) = &mut self.location {
             match &event {
                 Event::Key(k) if matches!(k.kind,KeyEventKind::Press | KeyEventKind::Repeat) => {

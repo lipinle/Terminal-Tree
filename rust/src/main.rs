@@ -33,6 +33,8 @@ mod recovery;
 mod settings;
 mod tree_ui;
 #[cfg(feature = "native-ops")]
+mod terminal_panel;
+#[cfg(feature = "native-ops")]
 mod tools_ui;
 #[cfg(feature = "native-ops")]
 mod worker;
@@ -441,6 +443,15 @@ fn browse_with_layout(
     #[cfg(feature = "native-ops")]
     if let Some(w)=&mut workspace { w.observe(&model); }
     loop {
+        #[cfg(feature = "native-ops")]
+        if let Some(ui)=&mut dashboard {
+            if ui.tick_terminal()? {
+                match model.reload() {
+                    Ok(())=>{if let Some(w)=&mut workspace {w.observe_pane(&model);}},
+                    Err(error)=>message=display_name(std::ffi::OsStr::new(&error.to_string())),
+                }
+            }
+        }
         if let Some(ui) = &mut dashboard {
             #[cfg(feature = "native-ops")]
             let clipboard = workspace.as_ref().map_or(0, |w| w.clipboard_count());
@@ -462,10 +473,12 @@ fn browse_with_layout(
                 workspace.as_ref(),
             )?;
         }
+        #[cfg(feature = "native-ops")]
+        if dashboard.as_ref().is_some_and(|ui|ui.terminal_running()) && !event::poll(std::time::Duration::from_millis(100))? { continue; }
         let mut event = event::read()?;
         if let Some(ui) = &mut dashboard {
             let previous = model.directory.clone();
-            let event = ui.remap_input(event, searching);
+            event = ui.remap_input(event, searching);
             let input = ui.input(event, &mut model, searching, writable);
             let switched = ui.take_pane_switch();
             #[cfg(feature = "native-ops")]

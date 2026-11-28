@@ -70,6 +70,12 @@ Ctrl+T opens a tab at the current location, Ctrl+W closes the active tab (the la
 
 Drag the vertical dividers to resize Sidebar, Preview or Dual Pane. Sizes are bounded and saved with application preferences. Settings > Display resets panel sizes. Settings > Navigation shortcuts lets you swap nine navigation bindings, without remapping file mutations, confirmation keys or cancellation. Menu actions use canonical shortcuts independently of these physical navigation bindings.
 
+### Bottom terminal panel (native Linux)
+
+The application displays a Bash command panel at the bottom by default when the terminal has at least 16 rows. Click the prompt or press Alt+T to focus it, type a command and press Enter. Esc returns focus to the file manager. Alt+H or the [Hide] button toggles visibility; View and Settings > Display also expose this option. The setting is saved with application preferences.
+
+Commands run explicitly in the active file pane's current directory, with your ordinary OS permissions; the file manager's read-only/scoped label does **not** restrict shell commands. No command runs just by browsing. Output is escaped, bounded to 32 KiB, and displayed with exit status; Up/Down recall session-only command history, PageUp/PageDown or wheel scroll output, Ctrl+C stops the current process group, Ctrl+L clears output. A command is limited to 60 seconds. This is a noninteractive Bash command console, not a full PTY emulator: stdin is closed, commands such as vim, top, password prompts and interactive shells require a normal terminal; each command starts a new Bash process, so cd/export do not persist between commands. Commands that intentionally detach from the process group may outlive the console. File rows refresh after completion. Legacy CLI views remain unchanged.
+
 ## Navigation and search
 
 Use the installed executable (examples below assume it is on your PATH), or substitute its full path.
