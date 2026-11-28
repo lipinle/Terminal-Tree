@@ -330,6 +330,7 @@ fn actions_menu(w: &mut workspace::Workspace, model: &mut Model) -> io::Result<O
         ('u', "Undo move"),
         ('j', "Recovery"),
         ('S', "Save Rust view settings"),
+        ('E', "Extract archive to new directory"),
     ];
     let labels: Vec<_> = actions.iter().map(|(_, label)| label.to_string()).collect();
     if let Some(i) = choose("Actions - writes require review", &labels)? {

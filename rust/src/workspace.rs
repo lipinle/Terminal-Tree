@@ -578,6 +578,58 @@ impl Workspace {
                 })?;
                 return self.refresh(model, format!("{outcome:?}"));
             }
+            'E' => {
+                if !self.marks.is_empty() {
+                    return Err(error("clear marks before extracting one archive"));
+                }
+                let source = self.selected(model)?;
+                self.ordinary(&source)?;
+                let bytes = worker::run(1, |progress| {
+                    progress.item(path_text(&source), 0)?;
+                    let bytes = self.engine.read_archive_for_extraction(&source)?;
+                    progress.cancelled()?;
+                    Ok(bytes)
+                })?;
+                self.selected(model)?;
+                let layout = terminal_tree::archive::portable_layout_preview(bytes.as_slice())?;
+                let mut rows = vec![format!(
+                    "{} directories, {} files, {} bytes; new directory only",
+                    layout.directories.len(),
+                    layout.files.len(),
+                    layout.payload_bytes
+                )];
+                rows.extend(layout.directories.iter().map(|d| format!("directory {d}")));
+                rows.extend(
+                    layout
+                        .files
+                        .iter()
+                        .map(|f| format!("file {} bytes {}", f.size, f.name)),
+                );
+                super::page("Archive layout (review)", &rows)?;
+                let Some(name) = filename()? else {
+                    return Ok("Cancelled".into());
+                };
+                let path = model.directory.join(name);
+                self.ordinary(&path)?;
+                let destination = self.engine.destination(&path)?;
+                if !confirm("Extract to new directory", &[&source, destination.path()], "yes")? {
+                    return Ok("Cancelled".into());
+                }
+                self.selected(model)?;
+                self.ordinary(&source)?;
+                self.ordinary(&path)?;
+                worker::run(1, |progress| {
+                    progress.item(path_text(&path), 0)?;
+                    self.engine.extract_archive_reviewed_with(
+                        &destination,
+                        &bytes,
+                        &mut |point| progress.checkpoint(point),
+                    )?;
+                    progress.finished(1);
+                    Ok(())
+                })?;
+                "Archive extracted"
+            }
             'S' => {
                 self.settings.save(model)?;
                 return Ok("Rust view settings saved".into());

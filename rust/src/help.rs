@@ -59,6 +59,7 @@ const TOPICS:&[Topic]=&[
         ("r / F2","Rename one item; clear marks first. Enter a new name, review and type yes."),
         ("n","Create a directory: enter one name, review and type yes."),
         ("t","Create an empty file: enter one name, review and type yes."),
+        ("Actions: Extract archive","Select one supported USTAR archive, review the layout, enter a new directory name and type yes. No overwrite or metadata restoration."),
         ("u","Undo the most recent eligible move/rename in this session. Review and type yes; changed results or occupied destinations are refused."),
         ("Example: copy","Select a file (or mark several), press c, navigate to the target, press v, review paths, then type yes."),
         ("Example: move","Use x instead of c. Cross-filesystem moves are refused. Existing destinations are never overwritten."),
