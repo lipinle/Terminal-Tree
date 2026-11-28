@@ -1,15 +1,14 @@
-//! Persistent Linux PTY, opt-in. TERM=dumb transcript, not a VT emulator.
+//! Persistent Linux PTY, opt-in. Bounded partial virtual screen (TERM=dumb).
 //! Child output is display data, never forwarded as host terminal controls.
 use crossterm::event::{KeyCode,KeyEvent,KeyEventKind,KeyModifiers};
 use rustix::{fs::{fcntl_getfl,fcntl_setfl,OFlags},pty::{OpenptFlags,openpt,grantpt,unlockpt,ioctl_tiocgptpeer},termios::{Winsize,tcsetwinsize}};
 use std::{fs::File,io::{self,Read,Write},path::{Path,PathBuf},process::{Child,Command,Stdio}};
-const OUTPUT_LIMIT:usize=128*1024;
 const INPUT_LIMIT:usize=8192;
 pub struct Shell {
     master:Option<File>,
     child:Child,
     input:Vec<u8>,
-    transcript:Vec<u8>,
+    screen:super::shell_text::Screen,
     initial_directory:PathBuf,
     size:(u16,u16),
 }
@@ -22,7 +21,7 @@ impl Shell {
         let master:File=fd.into();
         let flags=fcntl_getfl(&master)?;
         fcntl_setfl(&master,flags|OFlags::NONBLOCK)?;
-        let cols=cols.max(1);let rows=rows.max(1);
+        let (cols,rows)=super::shell_text::bounds(cols,rows);
         tcsetwinsize(&master,Winsize{ws_row:rows,ws_col:cols,ws_xpixel:0,ws_ypixel:0})?;
         // setsid acquires the slave as controlling terminal; no unsafe pre_exec.
         // No shell script construction; startup files deliberately bypassed.
@@ -32,23 +31,16 @@ impl Shell {
             .env("TERM","dumb").env("PS1","tt$ ").env("PS2","> ").env("HISTFILE","/dev/null")
             .current_dir(directory).stdin(Stdio::from(slave.try_clone()?))
             .stdout(Stdio::from(slave.try_clone()?)).stderr(Stdio::from(slave)).spawn()?;
-        Ok(Self{master:Some(master),child,input:Vec::new(),transcript:Vec::new(),initial_directory:directory.to_path_buf(),size:(cols,rows)})
+        Ok(Self{master:Some(master),child,input:Vec::new(),screen:super::shell_text::Screen::new(cols,rows),initial_directory:directory.to_path_buf(),size:(cols,rows)})
     }
     pub fn initial_directory(&self)->&Path{&self.initial_directory}
     pub fn resize(&mut self,cols:u16,rows:u16)->io::Result<()>{
-        let size=(cols.max(1),rows.max(1));
+        let size=super::shell_text::bounds(cols,rows);
         if self.size!=size{
             if let Some(master)=&self.master{tcsetwinsize(master,Winsize{ws_row:size.1,ws_col:size.0,ws_xpixel:0,ws_ypixel:0})?;}
-            self.size=size;
+            self.screen.resize(size.0,size.1);self.size=size;
         }
         Ok(())
-    }
-    fn append(&mut self,bytes:&[u8]){
-        self.transcript.extend_from_slice(bytes);
-        if self.transcript.len()>OUTPUT_LIMIT{
-            let cut=self.transcript.len()-OUTPUT_LIMIT;
-            self.transcript.drain(..cut);
-        }
     }
     pub fn tick(&mut self)->io::Result<bool>{
         let mut buffer=[0;4096];
@@ -56,7 +48,7 @@ impl Shell {
             let Some(master)=&mut self.master else{break;};
             match master.read(&mut buffer){
                 Ok(0)=>break,
-                Ok(n)=>self.append(&buffer[..n]),
+                Ok(n)=>self.screen.feed(&buffer[..n]),
                 Err(e) if e.kind()==io::ErrorKind::WouldBlock||e.raw_os_error()==Some(5)=>break,
                 Err(e) if e.kind()==io::ErrorKind::Interrupted=>continue,
                 Err(e)=>return Err(e),
@@ -96,7 +88,7 @@ impl Shell {
         self.input.extend(bytes);
         Ok(())
     }
-    pub fn styled_lines(&self)->Vec<super::shell_text::Line>{super::shell_text::parse(&self.transcript)}
+    pub fn styled_lines(&self)->Vec<super::shell_text::Line>{self.screen.lines()}
     #[cfg(test)]
     pub fn lines(&self)->Vec<String>{self.styled_lines().iter().map(|l|l.text()).collect()}
 

@@ -35,7 +35,7 @@ The Rust edition is the actively developed product; legacy Python editions are h
 
 Session and application preferences can be saved through Settings.
 
-Image/PDF previews require optional helpers. The embedded interactive Bash panel supports basic ANSI colors and bold text. It is experimental; full-screen terminal programs are not yet supported.
+Image/PDF previews require optional helpers. The embedded Bash panel supports ANSI colors, bold text, progress-line updates and basic cursor movement/erasing. It is experimental; full-screen terminal programs are not yet supported.
 
 <a id="system-requirements"></a>
 
