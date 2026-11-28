@@ -106,10 +106,35 @@ fn append_safe(out: &mut String, s: &str) {
 }
 
 pub fn scan(path: &Path, hidden: bool, order: Order, query: &str) -> io::Result<Vec<Entry>> {
+    scan_with_limit(path, hidden, order, query, None)
+}
+
+/// Read a directory with a bound on inspected entries, including filtered entries.
+/// Reject an over-budget directory rather than returning a partial listing.
+pub fn scan_bounded(
+    path: &Path,
+    hidden: bool,
+    order: Order,
+    query: &str,
+    max_entries: usize,
+) -> io::Result<Vec<Entry>> {
+    scan_with_limit(path, hidden, order, query, Some(max_entries))
+}
+
+fn scan_with_limit(
+    path: &Path,
+    hidden: bool,
+    order: Order,
+    query: &str,
+    max_entries: Option<usize>,
+) -> io::Result<Vec<Entry>> {
     let mut entries = Vec::new();
     let query = query.to_lowercase();
-    for item in fs::read_dir(path)? {
+    for (index, item) in fs::read_dir(path)?.enumerate() {
         let item = item?;
+        if max_entries.is_some_and(|limit| index >= limit) {
+            return Err(io::Error::other("directory scan entry limit exceeded"));
+        }
         let raw = item.file_name();
         if !hidden && raw.as_encoded_bytes().starts_with(b".") {
             continue;
@@ -333,6 +358,28 @@ mod tests {
         fn drop(&mut self) {
             fs::remove_dir_all(&self.0).unwrap();
         }
+    }
+
+    #[test]
+    fn bounded_scan_counts_hidden_and_filtered_entries() {
+        let f = Fixture::new();
+        fs::write(f.0.join("visible"), b"x").unwrap();
+        fs::write(f.0.join(".hidden"), b"x").unwrap();
+        assert!(scan_bounded(&f.0, false, Order::Name, "visible", 1).is_err());
+        let rows = scan_bounded(&f.0, false, Order::Name, "visible", 2).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "visible");
+        assert_eq!(scan(&f.0, true, Order::Name, "").unwrap().len(), 2);
+    }
+
+    #[test]
+    fn bounded_scan_zero_budget_only_accepts_empty_directory() {
+        let f = Fixture::new();
+        assert!(scan_bounded(&f.0, true, Order::Name, "", 0)
+            .unwrap()
+            .is_empty());
+        fs::write(f.0.join("entry"), b"x").unwrap();
+        assert!(scan_bounded(&f.0, true, Order::Name, "", 0).is_err());
     }
 
     #[test]
