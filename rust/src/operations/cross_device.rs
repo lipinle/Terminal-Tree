@@ -1,6 +1,8 @@
 //! Narrow read-only preflight for a future retained-source transfer protocol.
 //! It does not enable cross-device move, create a journal, or reserve names.
-use super::{attributes, dir_id, fd_path, identity, no_conflict, require, Destination, Engine, Review};
+use super::{
+    attributes, dir_id, fd_path, identity, no_conflict, require, Destination, Engine, Review,
+};
 use std::fs;
 use std::io;
 use std::os::unix::fs::MetadataExt;
@@ -19,7 +21,10 @@ impl FileTransferObservation {
 }
 
 fn eligible(m: &fs::Metadata) -> io::Result<()> {
-    require(m.is_file(), "retained-source preview requires a regular file")?;
+    require(
+        m.is_file(),
+        "retained-source preview requires a regular file",
+    )?;
     require(m.nlink() == 1, "multiply linked source refused")?;
     require(m.mode() & 0o7000 == 0, "special permission bits refused")
 }
@@ -61,12 +66,18 @@ impl Engine {
         .into();
         let opened = file.metadata()?;
         eligible(&opened)?;
-        require(identity(&opened) == review.identity, "reviewed source changed")?;
+        require(
+            identity(&opened) == review.identity,
+            "reviewed source changed",
+        )?;
         require(attributes(&file)?.is_empty(), "extended attributes refused")?;
         self.check(review)?;
         let after = file.metadata()?;
         eligible(&after)?;
-        require(identity(&after) == identity(&opened), "source changed during inspection")?;
+        require(
+            identity(&after) == identity(&opened),
+            "source changed during inspection",
+        )?;
         require(attributes(&file)?.is_empty(), "extended attributes changed")?;
         self.check_parent(&review.path, &src_parent)?;
         self.check_parent(&dst, &dst_parent)?;
@@ -119,7 +130,9 @@ mod tests {
         fs::remove_file(&target).unwrap();
         fs::hard_link(&source, workspace.join("hard")).unwrap();
         let reviewed = engine.review(&source).unwrap();
-        assert!(engine.inspect_file_transfer(&reviewed, &destination).is_err());
+        assert!(engine
+            .inspect_file_transfer(&reviewed, &destination)
+            .is_err());
         symlink(&source, workspace.join("link")).unwrap();
         let link = engine.review(&workspace.join("link")).unwrap();
         assert!(engine.inspect_file_transfer(&link, &destination).is_err());

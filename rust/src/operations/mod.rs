@@ -13,14 +13,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use xattr::FileExt;
 
-mod manifest;
 mod cross_device;
+mod manifest;
 mod policy;
 mod trash;
+pub use cross_device::FileTransferObservation;
 use manifest::{
     copy_tree, fd_path, manifest, manifest_with, snapshot, Identity, Manifest, Snapshot,
 };
-pub use cross_device::FileTransferObservation;
 pub use trash::{PurgeOutcome, PurgeReview, RestoreOutcome, RestoreReview, Trash};
 
 /// A pending journal entry and the result of validating and reading it.

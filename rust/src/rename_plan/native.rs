@@ -128,7 +128,10 @@ mod tests {
         assert_eq!(candidate, OsString::from_vec(b".name-\xff (2)".to_vec()));
         assert!(fs::symlink_metadata(root.join(candidate)).is_err());
         assert_eq!(fs::read(root.join(&raw)).unwrap(), b"keep");
-        assert!(fs::symlink_metadata(root.join(first)).unwrap().file_type().is_symlink());
+        assert!(fs::symlink_metadata(root.join(first))
+            .unwrap()
+            .file_type()
+            .is_symlink());
         assert_eq!(fs::read_dir(&root).unwrap().count(), 2);
         assert!(suggest(&root, OsStr::new("../escape")).is_err());
     }
