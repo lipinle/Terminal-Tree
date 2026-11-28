@@ -492,6 +492,52 @@ impl Workspace {
                     return self.finish_batch(model, done, total, "Transfer", failure);
                 }
             }
+            'M' => {
+                let (reviews, kind) = self
+                    .clipboard
+                    .as_ref()
+                    .ok_or_else(|| error("cut one regular file first"))?;
+                if reviews.len() != 1 || !matches!(kind, Transfer::Move) {
+                    return Err(error("cut one regular file first"));
+                }
+                let review = &reviews[0];
+                let path = model.directory.join(review.path().file_name().unwrap());
+                self.ordinary(review.path())?;
+                self.ordinary(&path)?;
+                let target = self.engine.destination(&path)?;
+                let observed = self.engine.inspect_file_transfer(review, &target)?;
+                if !observed.crosses_devices() {
+                    return Err(error("use normal paste for same-device moves"));
+                }
+                if !confirm(
+                    "Cross-device move: keep original in private retention",
+                    &[review.path(), target.path()],
+                    "yes",
+                )? {
+                    return Ok("Cancelled".into());
+                }
+                let retained = worker::run(1, |progress| {
+                    progress.item(path_text(review.path()), 0)?;
+                    let retained = self.engine.move_retaining_source(
+                        review,
+                        &target,
+                        &mut |point| progress.checkpoint(point),
+                    )?;
+                    progress.finished(1);
+                    Ok(retained)
+                });
+                self.clipboard = None;
+                let retained = retained?;
+                let (width, _) = terminal::size()?;
+                super::page(
+                    "Cross-device move: original retained",
+                    &wrap(
+                        &format!("Original preserved at {}. Do not delete until independently verified.", path_text(&retained)),
+                        usize::from(width).saturating_sub(1).max(1),
+                    ),
+                )?;
+                "Moved; original retained"
+            }
             'N' => {
                 use terminal_tree::rename_plan::native::reviewed::Batch;
 
