@@ -342,6 +342,54 @@ def pane_search(binary):
             os.close(slave)
 
 
+def pane_preferences(binary):
+    with tempfile.TemporaryDirectory(prefix="tt-pane-preferences-") as tmp:
+        root = Path(tmp)
+        left = root / "left"
+        left.mkdir()
+        (left / "a").touch()
+        (left / "b").touch()
+        prefs = root / "prefs"
+        prefs.mkdir(mode=0o700)
+        settings = prefs / "rust-pane-settings.json"
+
+        def session(options, initial, actions):
+            master, slave = pty.openpty()
+            process = None
+            try:
+                fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 160, 0, 0))
+                before = termios.tcgetattr(slave)
+                process = subprocess.Popen(
+                    [binary, "--panes", str(left), str(left), "--preferences", str(prefs), *options],
+                    stdin=slave, stdout=slave, stderr=slave,
+                    env=dict(os.environ, TERM="xterm-256color"),
+                )
+                wait_output(master, process, initial)
+                for keys, marker in actions:
+                    os.write(master, keys)
+                    wait_output(master, process, marker)
+                os.write(master, b"q")
+                assert process.wait(timeout=8) == 0
+                assert termios.tcgetattr(slave) == before
+            finally:
+                if process is not None and process.poll() is None:
+                    process.kill()
+                    process.wait()
+                os.close(master)
+                os.close(slave)
+
+        session(["--theme", "dark", "--keys", "up=down,down=up"], b"Theme: dark", [])
+        assert not settings.exists()
+        session(["--theme", "dark", "--keys", "up=down,down=up"], b"Theme: dark", [
+            (b"T", b"Pane preferences saved"),
+        ])
+        old = settings.read_bytes()
+        session([], b"Theme: dark", [(b"\x1b[A", b"Focus: Left | Row: 2")])
+        session(["--theme", "light"], b"Theme: light", [])
+        assert settings.read_bytes() == old
+        print("TT_PANE_PREFERENCES explicit save, reload and CLI precedence passed")
+
+
 if __name__ == "__main__":
     binary = str(Path(sys.argv[1]).resolve())
     main(binary)
@@ -350,3 +398,4 @@ if __name__ == "__main__":
     bookmark_snapshots(binary)
     pane_previews(binary)
     pane_search(binary)
+    pane_preferences(binary)

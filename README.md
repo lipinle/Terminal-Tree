@@ -1,6 +1,6 @@
-# Terminal Tree — Rust development preview
+# Terminal Tree — Standard 3.0.0-rc.1
 
-Terminal Tree is a terminal file navigator with explicitly scoped native Linux file operations. The current Rust build is a preview, not a stable release or a replacement for independent backups.
+Terminal Tree is a terminal file navigator with explicitly scoped native Linux file operations. This is a release candidate under validation, not a stable release or a replacement for independent backups. No stable release is implied by a successful build.
 
 ## Installation and updates
 

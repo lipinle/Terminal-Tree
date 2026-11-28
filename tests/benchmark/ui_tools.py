@@ -50,4 +50,66 @@ def main(binary):
         finally:
             if p and p.poll() is None:p.kill();p.wait()
             os.close(master);os.close(slave)
-if __name__=="__main__":main(str(Path(sys.argv[1]).resolve()))
+def retained_recovery(binary):
+    import shutil
+    with tempfile.TemporaryDirectory(prefix="tt-recovery-pty-") as tmp:
+        base = Path(tmp)
+        root, journal = base / "work", base / "journal"
+        root.mkdir(mode=0o700)
+        journal.mkdir(mode=0o700)
+        data = root / ".data"
+        data.mkdir(mode=0o700)
+        txid = "0" * 32 + "-" + "1" * 8 + "-" + "2" * 16
+        stage = root / (".terminal-tree-copy-" + txid)
+        stage.mkdir(mode=0o700)
+        retained = stage / "original"
+        retained.write_bytes(b"retained evidence")
+        published = root / "published"
+        shutil.copy2(retained, published)
+        original = root / "original-name"
+        record = journal / (txid + ".done.json")
+        payload = {"id": txid, "started": txid, "operation": "retained-move"}
+        for key, path in (("source", original), ("destination", published), ("stage", retained)):
+            payload[key] = str(path)
+            payload[key + "_bytes_hex"] = os.fsencode(path).hex()
+        record.write_text(json.dumps(payload))
+        record.chmod(0o600)
+        before_record = record.read_bytes()
+        master, slave = pty.openpty()
+        process = None
+        try:
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 28, 160, 0, 0))
+            before = termios.tcgetattr(slave)
+            process = subprocess.Popen([binary, "--workspace", str(root), str(journal), str(data)],
+                stdin=slave, stdout=slave, stderr=slave,
+                env=dict(os.environ, TERM="xterm-256color", HOME=str(root)))
+            wait_output(master, process, b"published")
+            def step(keys, marker):
+                os.write(master, keys)
+                wait_output(master, process, marker)
+            step(b"O", b"Original absolute path")
+            step(os.fsencode(original) + b"\r", b"Retained move transaction ID:")
+            step(txid.encode() + b"\r", b"Name:")
+            step(b"recovered\r", b"Recover verified retained copy")
+            step(b"\r", b"Type recover:")
+            step(b"recover\r", b"Recovery copy created")
+            os.write(master, b"q")
+            assert process.wait(timeout=8) == 0
+            assert termios.tcgetattr(slave) == before
+            assert record.read_bytes() == before_record
+            assert not original.exists()
+            assert all(p.read_bytes() == b"retained evidence" for p in
+                       (published, retained, root / "recovered"))
+            print("TT_RETAINED_RECOVERY_PTY explicit recovery and preservation passed")
+        finally:
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait()
+            os.close(master)
+            os.close(slave)
+
+
+if __name__=="__main__":
+    binary = str(Path(sys.argv[1]).resolve())
+    main(binary)
+    retained_recovery(binary)
