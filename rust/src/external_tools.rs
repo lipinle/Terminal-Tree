@@ -53,10 +53,15 @@ fn resolve(tool: Tool) -> io::Result<PathBuf> {
     tool.names()
         .iter()
         .find_map(|name| executable(name))
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!(
-            "{} is not installed in /usr/bin; install the distribution package",
-            tool.label()
-        )))
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "{} is not installed in /usr/bin; install the distribution package",
+                    tool.label()
+                ),
+            )
+        })
 }
 
 pub fn availability() -> Vec<String> {
@@ -81,9 +86,13 @@ fn safe_lines(bytes: &[u8]) -> io::Result<Vec<String>> {
 }
 
 fn run(program: &Path, arguments: &[OsString], directory: &Path) -> io::Result<Vec<String>> {
-    safe_lines(&run_bytes(program,arguments,directory)?)
+    safe_lines(&run_bytes(program, arguments, directory)?)
 }
-pub(crate) fn run_bytes(program: &Path, arguments: &[OsString], directory: &Path) -> io::Result<Vec<u8>> {
+pub(crate) fn run_bytes(
+    program: &Path,
+    arguments: &[OsString],
+    directory: &Path,
+) -> io::Result<Vec<u8>> {
     let timeout = executable("timeout")
         .ok_or_else(|| io::Error::other("GNU timeout is required for companion tools"))?;
     let mut child = Command::new(timeout)

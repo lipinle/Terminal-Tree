@@ -668,7 +668,9 @@ pub(crate) fn browse(
                         let model = layout.focused();
                         let selected = model.rows().get(model.selected()).map(|r| &r.entry);
                         let directory = match selected {
-                            Some(entry) if entry.directory && !entry.symlink => entry.path.as_path(),
+                            Some(entry) if entry.directory && !entry.symlink => {
+                                entry.path.as_path()
+                            }
                             Some(entry) => entry.path.parent().unwrap_or(model.root()),
                             None => model.root(),
                         };
@@ -754,9 +756,11 @@ pub(crate) fn browse(
                         code: key.code,
                         modifiers: key.modifiers,
                     }) {
-                        Some(action) => {
-                            navigate(layout.focused_mut(), action, usize::from(height.saturating_sub(4)).max(1))
-                        }
+                        Some(action) => navigate(
+                            layout.focused_mut(),
+                            action,
+                            usize::from(height.saturating_sub(4)).max(1),
+                        ),
                         None => Ok(()),
                     },
                 }

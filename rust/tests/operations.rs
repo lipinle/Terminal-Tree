@@ -849,7 +849,12 @@ fn invalid_operation_paths_leave_source_and_journal_unchanged() {
     fs::write(&source, b"unchanged").unwrap();
     let review = e.review(&source).unwrap();
 
-    for invalid in [Path::new(""), Path::new("/"), Path::new("."), f.root.as_path()] {
+    for invalid in [
+        Path::new(""),
+        Path::new("/"),
+        Path::new("."),
+        f.root.as_path(),
+    ] {
         assert!(e.review(invalid).is_err());
         assert!(e.destination(invalid).is_err());
         assert!(e.transfer(&review, invalid, Transfer::Move).is_err());

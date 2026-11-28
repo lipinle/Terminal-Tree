@@ -304,7 +304,10 @@ impl PersonalPolicy {
     // Only the Trash adapter can use this narrow bypass. Ordinary review,
     // destination, move, copy and create continue to reject the entire Trash.
     pub(super) fn trash_dir(&self, dir: &Path) -> io::Result<File> {
-        let root = self.roots.first().ok_or_else(|| fail("approved home root missing"))?;
+        let root = self
+            .roots
+            .first()
+            .ok_or_else(|| fail("approved home root missing"))?;
         root.check()?;
         let trash = self.data_home.join("Trash");
         require(
@@ -376,7 +379,11 @@ impl PersonalPolicy {
     }
     pub(super) fn parent(&self, p: &Path) -> io::Result<File> {
         let p = self.path(p)?;
-        let root = self.roots.iter().find(|r| p.starts_with(&r.path)).ok_or_else(|| fail("outside approved personal roots"))?;
+        let root = self
+            .roots
+            .iter()
+            .find(|r| p.starts_with(&r.path))
+            .ok_or_else(|| fail("outside approved personal roots"))?;
         let dir = open_absolute_dir(p.parent().ok_or_else(|| fail("missing parent"))?)?;
         require(mount_id(&dir)? == root.mount, "parent mount changed")?;
         Ok(dir)

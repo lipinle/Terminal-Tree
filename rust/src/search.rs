@@ -133,7 +133,8 @@ pub fn filenames(
         let entries = scan_bounded(&directory, true, Order::Name, "", remaining)?;
         check_directory(&root, &directory)?;
         check_root_identity(&root, &original)?;
-        remaining = remaining.checked_sub(entries.len())
+        remaining = remaining
+            .checked_sub(entries.len())
             .ok_or_else(|| io::Error::other("search entry budget exceeded"))?;
         for entry in entries {
             check_cancel(cancel)?;

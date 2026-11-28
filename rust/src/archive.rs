@@ -281,9 +281,12 @@ pub fn member_payload<'a>(bytes: &'a [u8], requested: &str) -> io::Result<&'a [u
     }
     let mut offset = 0usize;
     loop {
-        let start = offset.checked_add(BLOCK)
+        let start = offset
+            .checked_add(BLOCK)
             .ok_or_else(|| invalid("USTAR header offset overflow"))?;
-        let Some(header) = bytes.get(offset..start) else { break; };
+        let Some(header) = bytes.get(offset..start) else {
+            break;
+        };
         if header.iter().all(|&b| b == 0) {
             break;
         }

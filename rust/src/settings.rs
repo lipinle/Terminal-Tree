@@ -44,12 +44,18 @@ pub struct Store {
 impl Store {
     /// Create one explicitly approved private directory under an existing owned parent.
     pub fn create_app_directory(path: &Path) -> io::Result<Self> {
-        let parent = path.parent().ok_or_else(|| error("missing configuration parent"))?;
-        let name = path.file_name().ok_or_else(|| error("missing configuration directory name"))?;
+        let parent = path
+            .parent()
+            .ok_or_else(|| error("missing configuration parent"))?;
+        let name = path
+            .file_name()
+            .ok_or_else(|| error("missing configuration directory name"))?;
         let dir = open_chain(parent)?;
         let meta = dir.metadata()?;
         if meta.uid() != rustix::process::getuid().as_raw() || meta.mode() & 0o022 != 0 {
-            return Err(error("configuration parent must be owned and not group/world writable"));
+            return Err(error(
+                "configuration parent must be owned and not group/world writable",
+            ));
         }
         rx::mkdirat(&dir, name, Mode::from_bits_truncate(0o700))?;
         dir.sync_all()?;
