@@ -48,6 +48,8 @@ The application supports Ctrl+C/X/V (copy/cut/paste), Ctrl+A (mark all), Ctrl+Z 
 
 Press F8 in the application to switch between the three-column view and two independent file panes. Each pane retains its directory, selection, filter and navigation history. Tab changes the active pane (which is refreshed before use); a click on the inactive pane focuses it first. Copy or cut in one pane, switch to the destination, then paste with the shared clipboard. Scoped writes use the same existing review and operation engine. Marks are cleared when changing panes; the clipboard survives. Narrow terminals show the active pane only. F9 returns to the preview layout; Shift+F8 opens the existing hex preview. Read-only mode never grants write authorization.
 
+The application starts in Tree view. Use the clickable Path, Search, Grid, List and Tree buttons in the upper-right toolbar (Ctrl+1/2/3 also switch views). Path toggles an editable location field; Ctrl+A clears it and Enter navigates. Search filters the current directory. Grid shows colored text icons in cells; List shows names and sizes; Tree shows branches, and Right or a click on the branch expands the existing bounded read-only tree. Enter on an expanded row opens its directory or selects a file in its freshly loaded containing directory, before any operation can run. Esc closes expanded inspection. Ctrl+mouse wheel adjusts the application's row spacing/grid cell size from 1 to 3; Ctrl+0 resets. This is layout zoom, not terminal font resizing. The toolbar and these view modes apply to the single application pane; F8 retains the separate dual-pane workflow.
+
 ## Navigation and search
 
 Use the installed executable (examples below assume it is on your PATH), or substitute its full path.
