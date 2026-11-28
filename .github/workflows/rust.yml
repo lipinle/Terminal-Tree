@@ -69,6 +69,8 @@ jobs:
         run: python3 tests/benchmark/tree_navigation.py rust/target/release/terminal-tree
       - name: Exercise independent dual-pane and tab state through PTY
         run: python3 tests/benchmark/panes_navigation.py rust/target/release/terminal-tree
+      - name: Exercise bounded text and hexadecimal previews through PTY
+        run: python3 tests/benchmark/preview_ui.py rust/target/release/terminal-tree
       - name: Exercise scoped write UI through PTY
         run: python3 tests/benchmark/workspace.py rust/target/release/terminal-tree
       - name: Exercise copy, move, preview and Trash through PTY
