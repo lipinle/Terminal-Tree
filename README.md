@@ -96,6 +96,10 @@ Click a fully visible breadcrumb segment to navigate to its directory. In List v
 
 The bottom command console retains bounded session scrollback across commands (up to 128 KiB and 2048 lines). Left/Right, Home/End, Backspace/Delete and Ctrl+A/E/U edit the command without retyping it. Ctrl+L clears scrollback. The status bar reports available filesystem space for the active directory on native Linux, cached for two seconds. The console remains noninteractive Bash, not a persistent PTY shell.
 
+### Experimental persistent Bash PTY
+
+Alt+S starts or closes an explicitly approved interactive Bash session inside the terminal panel. The shell preserves working directory, variables and job control; it starts from the active file directory but subsequently navigates independently. Alt+T switches focus without terminating it, and Alt+H hides it. Ctrl+C and Ctrl+D reach the shell when focused. The original command console remains the default. Linux PTY allocation uses rustix and system setsid. The display is a bounded, escaped TERM=dumb transcript, not a VT100 emulator: full-screen editors and curses programs are not supported yet. Use F5 to refresh the file list after interactive shell changes. Shell commands run with ordinary OS permissions, outside the file-operation journal; detached descendants may survive closure.
+
 ## Navigation and search
 
 Use the installed executable (examples below assume it is on your PATH), or substitute its full path.

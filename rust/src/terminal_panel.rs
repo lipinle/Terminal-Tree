@@ -96,6 +96,7 @@ pub struct Panel {
     history:Vec<String>,
     history_at:Option<usize>,
     job:Option<Job>,
+    shell:Option<super::pty_shell::Shell>,
     output:Vec<String>,
     scroll:usize,
 }
@@ -103,7 +104,14 @@ fn visible(bytes:&[u8])->String {
     terminal_tree::display_name(std::ffi::OsStr::from_bytes(bytes))
 }
 impl Panel {
-    pub fn running(&self)->bool {self.job.is_some()}
+    pub fn running(&self)->bool {self.job.is_some()||self.shell.is_some()}
+    pub fn interactive(&self)->bool{self.shell.is_some()}
+    pub fn start_shell(&mut self,directory:&Path,cols:u16,rows:u16)->io::Result<()> {
+        if self.running(){return Err(io::Error::other("stop the current command or shell first"));}
+        self.shell=Some(super::pty_shell::Shell::start(directory,cols,rows)?);self.scroll=0;self.focused=true;Ok(())
+    }
+    pub fn close_shell(&mut self){self.shell=None;self.focused=false;self.scroll=0;}
+    pub fn resize_shell(&mut self,cols:u16,rows:u16)->io::Result<()>{if let Some(s)=&mut self.shell{s.resize(cols,rows)?;}Ok(())}
     fn previous_boundary(&self)->usize {
         self.input[..self.cursor].char_indices().next_back().map_or(0,|(i,_)|i)
     }
@@ -133,6 +141,15 @@ impl Panel {
         format!("$ {left}│{tail}")
     }
     pub fn tick(&mut self)->io::Result<bool> {
+        if let Some(shell)=&mut self.shell {
+            match shell.tick(){
+                Ok(false)=>return Ok(false),
+                Ok(true)=>self.output.extend(shell.lines()),
+                Err(e)=>self.output.push(format!("[PTY error: {}]",visible(e.to_string().as_bytes()))),
+            }
+            self.close_shell();self.output.push("[Interactive shell closed]".into());self.trim_scrollback();
+            return Ok(true);
+        }
         let Some(job)=&mut self.job else{return Ok(false);};
         if job.started.elapsed()>=Duration::from_secs(60) {job.stop("60-second limit");}
         job.collect()?;
@@ -149,6 +166,7 @@ impl Panel {
     }
     pub fn input(&mut self,key:KeyEvent,directory:&Path)->io::Result<()> {
         if !matches!(key.kind,KeyEventKind::Press|KeyEventKind::Repeat) {return Ok(());}
+        if let Some(shell)=&mut self.shell{return shell.key(key);}
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
                 KeyCode::Char('c')=>{
@@ -203,19 +221,20 @@ impl Panel {
         Ok(())
     }
     pub fn scroll(&mut self,up:bool){
-        if up {self.scroll=(self.scroll+1).min(self.output.len().saturating_sub(1));}
+        let len=self.shell.as_ref().map_or(self.output.len(),|s|s.lines().len());
+        if up {self.scroll=(self.scroll+1).min(len.saturating_sub(1));}
         else {self.scroll=self.scroll.saturating_sub(1);}
     }
     pub fn draw(&self,out:&mut impl Write,top:u16,rows:u16,width:u16,directory:&Path,prefs:&super::app_settings::Preferences)->io::Result<()> {
         let width=usize::from(width);
-        let header=format!("[Hide] Terminal / Bash{} | OS permissions (not scoped)",if self.focused{" *"}else{""});
+        let header=format!("[Hide] Terminal / {}{} | OS permissions (not scoped)",if self.interactive(){"PTY"}else{"Bash"},if self.focused{" *"}else{""});
         queue!(out,MoveTo(0,top),SetForegroundColor(prefs.accent),Print(super::clip(&header,width)),SetForegroundColor(prefs.foreground))?;
         if width>=84 {queue!(out,MoveTo((width-8) as u16,top),SetForegroundColor(prefs.accent),Print("[Resize]"),SetForegroundColor(prefs.foreground))?;}
         let directory=self.job.as_ref().map_or(directory,|job|job.directory.as_path());
-        let cwd=format!("cwd: {}",terminal_tree::display_name(directory.as_os_str()));
+        let cwd=if let Some(shell)=&self.shell {format!("Started in: {} | Alt+T focus | Alt+S close",terminal_tree::display_name(shell.initial_directory().as_os_str()))}else{format!("cwd: {}",terminal_tree::display_name(directory.as_os_str()))};
         queue!(out,MoveTo(0,top+1),Print(super::clip(&cwd,width)))?;
         let live;
-        let lines=if let Some(job)=&self.job {
+        let lines=if let Some(shell)=&self.shell{live=shell.lines();&live}else if let Some(job)=&self.job {
             let mut current=self.output.clone();
             current.push(format!("$ {}",visible(job.command.as_bytes())));
             current.extend(job.bytes.split(|&b|b==b'\n').filter(|line|!line.is_empty()).map(visible));
@@ -228,9 +247,10 @@ impl Panel {
         for (row,line) in lines[start..end].iter().enumerate(){
             queue!(out,MoveTo(0,top+2+row as u16),Print(super::clip(line,width)))?;
         }
-        let prompt=if self.running(){"Running Bash... Ctrl+C to stop".into()}
+        let prompt=if self.interactive(){"Interactive Bash (TERM=dumb) | Alt+T file manager | Alt+S close".into()}
+        else if self.running(){"Running Bash... Ctrl+C to stop".into()}
         else if self.focused{self.prompt_text(width)}
-        else {"$ (click or Alt+T to type; Alt+H hide)".into()};
+        else {"$ (click or Alt+T to type; Alt+S interactive; Alt+H hide)".into()};
         queue!(out,MoveTo(0,top+rows-1))?;
         if self.focused {queue!(out,SetBackgroundColor(prefs.selection))?;}
         queue!(out,Print(super::clip(&prompt,width)),SetBackgroundColor(prefs.background))?;

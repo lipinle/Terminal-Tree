@@ -95,6 +95,13 @@ def main(binary):
             (b"\x1bh", b"Terminal / Bash |"),
             (b"\x1b[<0;64;1M", b"[Terminal +]"),
             (b"\x1b[<0;64;1M", b"[Terminal -]"),
+            (b"\x1bs", b"Interactive shell uses OS permissions"),
+            (b"\x1b[B\r", b"Terminal / PTY *"),
+            (b"export TT_UI=kept; cd /\r", b"tt$"),
+            (b"printf '%s:%s\\n' \"$TT_UI\" \"$PWD\"\r", b"kept:/"),
+            (b"\x1bt", b"Terminal / PTY |"),
+            (b"\x1bs", b"Close interactive shell?"),
+            (b"\x1b[B\r", b"Terminal / Bash |"),
         ])
         session(binary, ["--app", str(root)], root, b"Files *", [], width=45)
         config = root / ".config"

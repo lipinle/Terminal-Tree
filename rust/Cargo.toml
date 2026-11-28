@@ -29,7 +29,7 @@ required-features = ["native-ops"]
 
 [dependencies.rustix]
 version = "=0.38.44"
-features = ["fs", "process"]
+features = ["fs", "process", "pty", "termios"]
 optional = true
 
 [dependencies.sha2]

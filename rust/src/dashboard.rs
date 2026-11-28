@@ -421,9 +421,9 @@ impl State {
         Ok(finished)
     }
     #[cfg(feature = "native-ops")]
-    fn draw_terminal(&self,out:&mut impl Write,h:u16,width:u16,model:&Model)->io::Result<()> {
+    fn draw_terminal(&mut self,out:&mut impl Write,h:u16,width:u16,model:&Model)->io::Result<()> {
         let rows=self.panel_rows(h);
-        if rows>0 {self.terminal_panel.draw(out,h-rows,rows,width,&model.directory,&self.prefs)?;}
+        if rows>0 {self.terminal_panel.resize_shell(width,rows.saturating_sub(3))?;self.terminal_panel.draw(out,h-rows,rows,width,&model.directory,&self.prefs)?;}
         Ok(())
     }
     #[cfg(feature = "native-ops")]
@@ -453,6 +453,8 @@ impl State {
         {let _=path;String::new()}
     }
     fn task_label(&self)->&'static str {
+        #[cfg(feature = "native-ops")]
+        if self.terminal_panel.interactive(){return "PTY active";}
         #[cfg(feature = "native-ops")]
         if self.terminal_panel.running(){return "Bash running";}
         "idle"
@@ -1305,6 +1307,7 @@ impl State {
         if category == 2 && cfg!(feature = "native-ops") {
             commands.push(("Toggle terminal panel (Alt+H)",KeyCode::Char('h'),KeyModifiers::ALT));
             commands.push(("Focus terminal (Alt+T)",KeyCode::Char('t'),KeyModifiers::ALT));
+            commands.push(("Start or close interactive shell (Alt+S)",KeyCode::Char('s'),KeyModifiers::ALT));
             commands.push(("Hex preview (Shift+F8)", KeyCode::F(8), KeyModifiers::SHIFT));
         }
         if category == 3 {
@@ -1396,6 +1399,21 @@ impl State {
                 if let Event::Key(k)=&event {
                     if k.kind==KeyEventKind::Press && k.modifiers==KeyModifiers::ALT {
                         match k.code {
+                            KeyCode::Char('s')=>{
+                                if self.terminal_panel.interactive(){
+                                    if super::choose("Close interactive shell? Running jobs may be interrupted",&["Cancel".into(),"Close shell".into()])?==Some(1){
+                                        self.terminal_panel.close_shell();model.reload()?;self.pane_switched=true;self.preview_key=None;
+                                    }
+                                }else{
+                                    if full_h<16{return Err(io::Error::other("terminal panel needs at least 16 rows"));}
+                                    if super::choose("Interactive shell uses OS permissions, outside file journal",&["Cancel".into(),"Start Bash PTY".into()])?==Some(1){
+                                        self.prefs.terminal_visible=true;
+                                        self.terminal_panel.start_shell(&model.directory,l.width,self.panel_rows(full_h).saturating_sub(3))?;
+                                        self.side_focus=false;
+                                    }
+                                }
+                                return Ok(None);
+                            }
                             KeyCode::Char('h')=>{self.prefs.terminal_visible=!self.prefs.terminal_visible;self.terminal_panel.focused=false;return Ok(None);}
                             KeyCode::Char('t')=>{self.prefs.terminal_visible=true;if self.panel_rows(full_h)==0 {return Err(io::Error::other("terminal panel needs at least 16 rows"));}self.terminal_panel.focused=!self.terminal_panel.focused;self.side_focus=false;return Ok(None);}
                             _=>(),

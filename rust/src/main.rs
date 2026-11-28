@@ -35,6 +35,8 @@ mod tree_ui;
 #[cfg(feature = "native-ops")]
 mod terminal_panel;
 #[cfg(feature = "native-ops")]
+mod pty_shell;
+#[cfg(feature = "native-ops")]
 mod tools_ui;
 #[cfg(feature = "native-ops")]
 mod git_ui;
