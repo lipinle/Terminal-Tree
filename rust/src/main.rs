@@ -331,6 +331,8 @@ fn actions_menu(w: &mut workspace::Workspace, model: &mut Model) -> io::Result<O
         ('j', "Recovery"),
         ('S', "Save Rust view settings"),
         ('E', "Extract archive to new directory"),
+        ('N', "Bulk rename marked items"),
+        ('V', "Paste one item (keep both)"),
     ];
     let labels: Vec<_> = actions.iter().map(|(_, label)| label.to_string()).collect();
     if let Some(i) = choose("Actions - writes require review", &labels)? {
@@ -568,12 +570,13 @@ fn browse(
                         #[cfg(feature = "native-ops")]
                         KeyCode::F(6) => {
                             if let Some(w) = &mut workspace {
-                                match actions_menu(w, &mut model)? {
-                                    Some(msg) => {
+                                match actions_menu(w, &mut model) {
+                                    Ok(Some(msg)) => {
                                         message = msg;
                                         Ok(())
                                     }
-                                    None => Ok(()),
+                                    Ok(None) => Ok(()),
+                                    Err(error) => Err(error),
                                 }
                             } else {
                                 Ok(())

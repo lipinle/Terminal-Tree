@@ -103,6 +103,108 @@ pub fn preview(
     Ok(plan)
 }
 
+#[cfg(feature = "native-ops")]
+pub mod reviewed {
+    use super::preview;
+    use crate::operations::{Destination, Engine, Review, Transfer, Undo};
+    use std::ffi::{OsStr, OsString};
+    use std::io;
+    use std::path::{Path, PathBuf};
+
+    /// The exact source/destination pairs that must be shown to the user
+    /// before execution. No names are reserved by preparation.
+    pub struct Batch {
+        items: Vec<(Review, Destination)>,
+    }
+
+    pub struct Outcome {
+        pub completed: usize,
+        pub failure: Option<(PathBuf, io::Error)>,
+        pub undos: Vec<Undo>,
+    }
+
+    impl Batch {
+        /// Prepare a conservative literal rename using already reviewed
+        /// sources in one directory. Existing names and aliases are refused.
+        pub fn prepare(
+            engine: &Engine,
+            directory: &Path,
+            sources: &[Review],
+            needle: &OsStr,
+            replacement: &OsStr,
+        ) -> io::Result<Self> {
+            if sources.is_empty() || sources.len() > super::MAX_ITEMS {
+                return Err(io::Error::other("select 1..=1000 reviewed items"));
+            }
+            let mut names = Vec::<OsString>::with_capacity(sources.len());
+            for source in sources {
+                if source.path().parent() != Some(directory) {
+                    return Err(io::Error::other("rename requires one reviewed directory"));
+                }
+                names.push(
+                    source
+                        .path()
+                        .file_name()
+                        .ok_or_else(|| io::Error::other("missing source name"))?
+                        .to_os_string(),
+                );
+            }
+            let plan = preview(directory, &names, needle, replacement)?;
+            let mut items = Vec::with_capacity(plan.len());
+            for (source, item) in sources.iter().zip(plan) {
+                if source.path().file_name() != Some(item.source.as_os_str()) {
+                    return Err(io::Error::other("rename plan source mismatch"));
+                }
+                let target = engine.destination(&directory.join(item.destination))?;
+                items.push((source.clone(), target));
+            }
+            engine.validate_batch(&items, Transfer::Move)?;
+            Ok(Self { items })
+        }
+
+        pub fn paths(&self) -> impl Iterator<Item = (&Path, &Path)> {
+            self.items.iter().map(|(r, d)| (r.path(), d.path()))
+        }
+
+        /// Call only after explicit confirmation of every pair. Revalidate
+        /// the entire batch first; each move commits independently. Stop on
+        /// the first error, preserve completed moves and never auto-rollback.
+        pub fn execute(
+            &self,
+            engine: &Engine,
+            checkpoint: &mut dyn FnMut(usize, &Path, &str) -> io::Result<()>,
+        ) -> io::Result<Outcome> {
+            engine.validate_batch(&self.items, Transfer::Move)?;
+            let mut outcome = Outcome {
+                completed: 0,
+                failure: None,
+                undos: Vec::new(),
+            };
+            for (source, target) in &self.items {
+                let index = outcome.completed;
+                let result = checkpoint(index, source.path(), "rename-item").and_then(|_| {
+                    engine.transfer_reviewed_with(source, target, Transfer::Move, &mut |point| {
+                        checkpoint(index, source.path(), point)
+                    })
+                });
+                match result {
+                    Ok(undo) => {
+                        outcome.completed += 1;
+                        if let Some(undo) = undo {
+                            outcome.undos.push(undo);
+                        }
+                    }
+                    Err(error) => {
+                        outcome.failure = Some((source.path().to_path_buf(), error));
+                        break;
+                    }
+                }
+            }
+            Ok(outcome)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
