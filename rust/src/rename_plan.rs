@@ -190,10 +190,7 @@ mod tests {
     #[test]
     fn suggests_only_unoccupied_names_without_changing_raw_bytes() {
         let raw = OsString::from_vec(b"file-\xff".to_vec());
-        let occupied = [
-            raw.clone(),
-            OsString::from_vec(b"file-\xff (1)".to_vec()),
-        ];
+        let occupied = [raw.clone(), OsString::from_vec(b"file-\xff (1)".to_vec())];
         assert_eq!(
             suggest_available_name(&occupied, &raw).unwrap().as_bytes(),
             b"file-\xff (2)"

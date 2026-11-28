@@ -99,7 +99,13 @@ fn enforces_member_and_declared_byte_limits() {
 
 #[test]
 fn rejects_controls_and_dot_components() {
-    for name in ["a/./b", "./file", "file\nname", "file\x1bname", "file\rname"] {
+    for name in [
+        "a/./b",
+        "./file",
+        "file\nname",
+        "file\x1bname",
+        "file\rname",
+    ] {
         let mut archive = Vec::new();
         append(&mut archive, name, b'0', b"");
         finish(&mut archive);
