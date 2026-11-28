@@ -29,6 +29,8 @@ mod visual_ui;
 #[cfg(feature = "native-ops")]
 mod native_graphics;
 #[cfg(feature = "native-ops")]
+mod sixel;
+#[cfg(feature = "native-ops")]
 mod x11_overlay;
 #[cfg(feature = "native-ops")]
 mod preview_worker;

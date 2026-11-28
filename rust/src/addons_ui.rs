@@ -34,6 +34,7 @@ pub fn show(prefs:&mut super::app_settings::Preferences,last:Option<&str>)->io::
             let x11=if !super::x11_overlay::installed(){"Not installed"}else if !super::x11_overlay::requested(){"Installed / start with TT_GRAPHICS=x11"}else if super::x11_overlay::supported(){"Installed / calibrated"}else{"Calibration unavailable / Unicode fallback"};
             queue!(out,MoveTo(0,7),Print(super::clip(&format!("X11 Overlay: {x11}"),width)))?;
         }
+        if h>10{queue!(out,MoveTo(0,9),Print(super::clip(&format!("Graphics: {}",super::native_graphics::backend().label()),width)))?;}
         if h>9{
             queue!(out,MoveTo(0,8),Print(super::clip(&format!("Last run: {}",last.unwrap_or("None")),width)))?;
         }
@@ -68,6 +69,8 @@ pub fn show(prefs:&mut super::app_settings::Preferences,last:Option<&str>)->io::
                 "X11: cargo +stable build --release --manifest-path x11-overlay/Cargo.toml".into(),
                 "sudo install -m 755 x11-overlay/target/release/tt-x11-overlay /usr/local/bin/tt-x11-overlay".into(),
                 "Open a dedicated GNOME Terminal on X11; start with TT_GRAPHICS=x11.".into(),
+                "Graphics: auto, unicode, kitty, sixel, x11 via TT_GRAPHICS.".into(),
+                "Sixel: expanded preview only. Use only on a compatible terminal.".into(),
                 "No add-on is installed or updated automatically.".into(),
             ])?,
             _=>(),

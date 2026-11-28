@@ -124,6 +124,10 @@ Optional [X11 helper](x11-overlay/README.md) adds high-resolution bitmap preview
 
 The default dashboard uses a dark neutral palette with blue selection, full-width tree/list selection, neutral file names with colored icons, and distinct Places icons. Tree and List share responsive Name/Size/Type columns; wide panes also show Modified (UTC). Metadata is read without following symlinks for visible rows only; sorting remains the existing model. The wide toolbar has Back/Forward/Parent buttons, tabs have clickable close controls, and wide Preview headers expose Auto/Info/Hex/Expand. Terminal defaults and light colors remain available in Appearance. This remains a terminal-cell interface, not a GTK desktop window; exact font and widget rendering depend on the host terminal. Existing scoped write paths and expanded-tree read-only inspection are unchanged.
 
+### Cross-terminal graphics compatibility
+
+The same dashboard, key bindings, file-operation engine and preview helper are shared. Auto mode uses Kitty RGB on identified direct Kitty/Ghostty sessions, Sixel for expanded previews on identified foot/mlterm sessions, and Unicode elsewhere. Explicit TT_GRAPHICS=kitty or sixel is available for compatible terminals such as configured WezTerm/Konsole/xterm; do not force an unsupported protocol. TT_GRAPHICS=x11 is the experimental GNOME Terminal X11 path, including expanded preview. TT_GRAPHICS=unicode forces the portable renderer. tmux/screen use Unicode. Sixel uses a 216-color palette and is confined to the expanded screen until inline image cleanup has been validated across emulators. The live panel uses Unicode on Sixel terminals. Add-ons reports the selected backend. Actual emulator compatibility still needs physical tests; protocol unit tests are not equivalent to visual testing.
+
 ## Navigation and search
 
 Use the installed executable (examples below assume it is on your PATH), or substitute its full path.

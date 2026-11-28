@@ -6,13 +6,15 @@ use terminal_tree::{display_name,visual_preview};
 pub fn show(path:&Path)->io::Result<()>{
     let mut page=1u32;
     let mut slot=super::native_graphics::Slot::new(2);
+    let mut force_unicode=false;
     loop{
         let (w,h)=terminal::size()?;
         if w<8||h<6{return Err(io::Error::other("preview needs a larger terminal"));}
         let width=u32::from(w-1).min(160);
         let height=u32::from(h-4).saturating_mul(2).min(160);
         slot.clear()?;
-        let native=if super::native_graphics::supported()&&!super::x11_overlay::supported(){
+        let backend=super::native_graphics::backend();
+        let native=if !force_unicode&&super::native_graphics::expanded_supported(){
             let (pw,ph)=super::native_graphics::pixel_bounds(w-1,h-4);
             visual_preview::render_hd(path,page,pw,ph).ok()
         }else{None};
@@ -20,7 +22,7 @@ pub fn show(path:&Path)->io::Result<()>{
         let frame=match native{Some(f)=>f,None=>visual_preview::render(path,page,width,height)?};
         let mut out=Vec::new();
         queue!(out,MoveTo(0,0),ResetColor,Clear(ClearType::All),SetForegroundColor(Color::Cyan),Print(super::clip(&format!("Expanded Preview | {}",display_name(path.as_os_str())),usize::from(w-1))),ResetColor)?;
-        queue!(out,MoveTo(0,1),Print(super::clip(&format!("Page {page}/{} | {}x{} {}",frame.pages,frame.width,frame.height,if bitmap{"Kitty RGB"}else{"terminal pixels"}),usize::from(w-1))))?;
+        queue!(out,MoveTo(0,1),Print(super::clip(&format!("Page {page}/{} | {}x{} {}",frame.pages,frame.width,frame.height,if bitmap{backend.label()}else{"terminal pixels"}),usize::from(w-1))))?;
         let left=(usize::from(w-1).saturating_sub(frame.width)/2) as u16;
         if !bitmap {for y in (0..frame.height).step_by(2){
             queue!(out,MoveTo(left,2+(y/2) as u16))?;
@@ -32,12 +34,19 @@ pub fn show(path:&Path)->io::Result<()>{
         }
         queue!(out,ResetColor,MoveTo(0,h-1),Print(super::clip("Esc back | Left/Right page | O open original in desktop viewer",usize::from(w-1))))?;
         let mut stdout=io::stdout().lock();stdout.write_all(&out)?;stdout.flush()?;drop(stdout);
-        if bitmap{let (cols,rows)=super::native_graphics::fit(&frame,w-1,h-4);slot.show(&frame,(w-1-cols)/2,2,cols,rows)?;}
+        if bitmap{
+            use super::native_graphics::Backend;
+            let (cols,rows)=if backend==Backend::X11{(w-1,h-4)}else{super::native_graphics::fit(&frame,w-1,h-4)};
+            let result=if backend==Backend::Sixel{super::sixel::show(&frame,(w-1-cols)/2,2)}else{slot.show(&frame,(w-1-cols)/2,2,cols,rows)};
+            if result.is_err(){force_unicode=true;continue;}
+        }
         loop{
             match event::read()?{
-                Event::Resize(_,_)=>break,
+                Event::Resize(_,_)=>{super::x11_overlay::refresh();force_unicode=false;break;},
+                Event::FocusLost=>{slot.clear()?;},
+                Event::FocusGained=>{super::x11_overlay::refresh();force_unicode=false;break;},
                 Event::Key(k) if matches!(k.kind,KeyEventKind::Press|KeyEventKind::Repeat)=>match k.code{
-                    KeyCode::Esc|KeyCode::Char('q')=>return Ok(()),
+                    KeyCode::Esc|KeyCode::Char('q')=>{slot.clear()?;if backend==super::native_graphics::Backend::Sixel{crossterm::execute!(io::stdout(),Clear(ClearType::All))?;}return Ok(());},
                     KeyCode::Left|KeyCode::PageUp if page>1=>{page-=1;break;},
                     KeyCode::Right|KeyCode::PageDown if page<frame.pages=>{page+=1;break;},
                     KeyCode::Char('o'|'O')=>{

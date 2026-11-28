@@ -3,14 +3,36 @@
 use crossterm::{cursor::MoveTo,queue};
 use std::io::{self,Write};
 use terminal_tree::visual_preview::Frame;
-pub fn supported()->bool{
-    if std::env::var_os("TMUX").is_some()||std::env::var_os("STY").is_some(){return false;}
-    match std::env::var("TT_GRAPHICS").as_deref(){
-        Ok("kitty")=>true,Ok("unicode")=>false,
-        Ok("x11")=>super::x11_overlay::supported(),
-        _=>std::env::var("TERM").as_deref()==Ok("xterm-kitty")&&std::env::var_os("KITTY_WINDOW_ID").is_some(),
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub enum Backend{Unicode,Kitty,X11,Sixel}
+impl Backend{
+    pub fn label(self)->&'static str{match self{Self::Unicode=>"Unicode",Self::Kitty=>"Kitty RGB",Self::X11=>"X11 RGB",Self::Sixel=>"Sixel (expanded only)"}}
+}
+fn select(mode:&str,term:&str,program:&str,kitty:bool,x11:bool,multiplexed:bool)->Backend{
+    if multiplexed{return Backend::Unicode;}
+    match mode{
+        "unicode"=>Backend::Unicode,
+        "kitty"=>Backend::Kitty,
+        "sixel"=>Backend::Sixel,
+        "x11"=>if x11{Backend::X11}else{Backend::Unicode},
+        ""|"auto"=>{
+            if (term=="xterm-kitty"&&kitty)||term=="xterm-ghostty"||program=="ghostty"{Backend::Kitty}
+            else if term=="foot"||term=="foot-extra"||term=="mlterm"{Backend::Sixel}
+            else{Backend::Unicode}
+        }
+        _=>Backend::Unicode,
     }
 }
+pub fn backend()->Backend{
+    select(&std::env::var("TT_GRAPHICS").unwrap_or_default(),
+        &std::env::var("TERM").unwrap_or_default(),
+        &std::env::var("TERM_PROGRAM").unwrap_or_default(),
+        std::env::var_os("KITTY_WINDOW_ID").is_some(),
+        super::x11_overlay::supported(),
+        std::env::var_os("TMUX").is_some()||std::env::var_os("STY").is_some())
+}
+pub fn supported()->bool{matches!(backend(),Backend::Kitty|Backend::X11)}
+pub fn expanded_supported()->bool{backend()!=Backend::Unicode}
 pub fn pixel_bounds(cols:u16,rows:u16)->(u32,u32){
     // Actual window pixel dimensions when available; conservative estimate otherwise.
     let (cw,ch)=super::x11_overlay::cell_size().unwrap_or_else(||crossterm::terminal::window_size().ok().filter(|s|s.width>0&&s.height>0&&s.columns>0&&s.rows>0)
@@ -73,6 +95,18 @@ impl Drop for Slot{fn drop(&mut self){let _=self.clear();}}
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[test]fn conservative_backend_selection(){
+        use Backend::*;
+        assert_eq!(select("","xterm-256color","",false,false,false),Unicode);
+        assert_eq!(select("","xterm-kitty","",true,false,false),Kitty);
+        assert_eq!(select("","xterm-ghostty","",false,false,false),Kitty);
+        assert_eq!(select("","foot","",false,false,false),Sixel);
+        assert_eq!(select("sixel","xterm","",false,false,false),Sixel);
+        assert_eq!(select("x11","xterm","",false,false,false),Unicode);
+        assert_eq!(select("x11","xterm","",false,true,false),X11);
+        assert_eq!(select("kitty","xterm","",false,false,true),Unicode);
+        assert_eq!(select("unknown","xterm-kitty","",true,false,false),Unicode);
+    }
     #[test]fn base64_and_chunk_bounds(){
         assert_eq!(b64(b"f"),b"Zg==");assert_eq!(b64(b"foo"),b"Zm9v");
         let mut out=Vec::new();encode(&mut out,42,40,40,&vec![0;4800],4,4).unwrap();
