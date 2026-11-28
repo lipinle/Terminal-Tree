@@ -258,6 +258,8 @@ pub struct State {
     #[cfg(feature = "native-ops")]
     visual_frame: Option<terminal_tree::visual_preview::Frame>,
     #[cfg(feature = "native-ops")]
+    preview_worker: super::preview_worker::Queue,
+    #[cfg(feature = "native-ops")]
     visual_bitmap: bool,
     #[cfg(feature = "native-ops")]
     graphics_slot: super::native_graphics::Slot,
@@ -301,6 +303,8 @@ impl State {
             preview_key: None, preview_lines: Vec::new(), preview_scroll: 0, preview_styles: Vec::new(), preview_mode: 0,
             #[cfg(feature = "native-ops")]
             visual_frame: None,
+            #[cfg(feature = "native-ops")]
+            preview_worker: Default::default(),
             #[cfg(feature = "native-ops")]
             visual_bitmap: false,
             #[cfg(feature = "native-ops")]
@@ -427,7 +431,7 @@ impl State {
         if cfg!(feature = "native-ops") && self.prefs.terminal_visible && h>=16 {percent(h,self.prefs.terminal_percent).clamp(5,h-9)} else {0}
     }
     #[cfg(feature = "native-ops")]
-    pub fn terminal_running(&self)->bool {self.terminal_panel.running()}
+    pub fn needs_poll(&self)->bool {self.terminal_panel.running()||self.preview_worker.busy()}
     #[cfg(feature = "native-ops")]
     pub fn tick_terminal(&mut self)->io::Result<bool> {
         let finished=self.terminal_panel.tick()?;
@@ -471,6 +475,8 @@ impl State {
         if self.terminal_panel.interactive(){return "PTY active";}
         #[cfg(feature = "native-ops")]
         if self.terminal_panel.running(){return "Bash running";}
+        #[cfg(feature = "native-ops")]
+        if self.preview_worker.busy(){return "Preview loading";}
         "idle"
     }
     fn layout(&self, w: u16, h: u16) -> Layout {
@@ -869,6 +875,7 @@ impl State {
         self.preview_styles.clear();
         #[cfg(feature = "native-ops")]
         {
+            self.preview_worker.cancel();
             self.visual_frame=None;self.visual_bitmap=false;self.graphics_placed=false;
             if let Some(e)=entry.filter(|e|self.preview_mode==0&&!e.directory&&!e.symlink&&terminal_tree::visual_preview::format(&e.path).is_some()) {
                 if !self.prefs.visual_preview || !terminal_tree::visual_preview::installed() {
@@ -877,17 +884,13 @@ impl State {
                 }
                 if self.prefs.visual_preview {
                     let page=if terminal_tree::visual_preview::format(&e.path)==Some("pdf"){self.visual_page}else{1};
-                    let hd=if super::native_graphics::supported(){terminal_tree::visual_preview::render_hd(&e.path,page,self.visual_size.0,self.visual_size.1).ok()}else{None};
-                    self.visual_bitmap=hd.is_some();
-                    let result=match hd{Some(f)=>Ok(f),None=>terminal_tree::visual_preview::render(&e.path,page,u32::from(width).clamp(1,160),(rows.saturating_sub(2)*2).clamp(1,160) as u32)};
-                    match result {
-                        Ok(frame)=>{
-                            let label=if terminal_tree::visual_preview::format(&e.path)==Some("pdf"){format!("Page {page}/{} | Scroll | Alt+V",frame.pages)}else{format!("Thumbnail {}x{} {} | Alt+V",frame.width,frame.height,if self.visual_bitmap{"RGB"}else{""})};
-                            self.preview_lines=vec![e.name.clone(),label];
-                            self.visual_frame=Some(frame);
-                        }
-                        Err(error)=>self.preview_lines=vec![e.name.clone(),display_name(std::ffi::OsStr::new(&error.to_string()))],
-                    }
+                    self.preview_worker.request(super::preview_worker::Request{
+                        path:e.path.clone(),name:e.name.clone(),page,
+                        pdf:terminal_tree::visual_preview::format(&e.path)==Some("pdf"),
+                        hd:super::native_graphics::supported().then_some(self.visual_size),
+                        fallback:(u32::from(width).clamp(1,160),(rows.saturating_sub(2)*2).clamp(1,160) as u32),
+                    });
+                    self.preview_lines=vec![e.name.clone(),"Loading visual preview...".into()];
                     return;
                 }
             }
@@ -921,6 +924,31 @@ impl State {
                 vec![e.name.clone(), format!("{} bytes", e.size), "Content preview requires native Linux".into()]
             }
         };
+    }
+
+    #[cfg(feature = "native-ops")]
+    fn poll_visual_preview(&mut self){
+        if let Some(done)=self.preview_worker.poll(){
+            self.visual_bitmap=done.bitmap;
+            self.visual_frame=None;self.graphics_placed=false;
+            match done.result{
+                Ok(frame)=>{
+                    let label=if done.pdf{format!("Page {}/{} | Scroll | Alt+V",done.page,frame.pages)}
+                        else{format!("Thumbnail {}x{} {} | Alt+V",frame.width,frame.height,if done.bitmap{"RGB"}else{""})};
+                    self.preview_lines=vec![done.name,label];
+                    self.visual_frame=Some(frame);
+                }
+                Err(error)=>self.preview_lines=vec![done.name,display_name(std::ffi::OsStr::new(&error.to_string()))],
+            }
+        }
+    }
+
+    #[cfg(feature = "native-ops")]
+    fn suspend_visual_preview(&mut self){
+        // Invalidate only if loading; cached completed previews may be reused.
+        if self.preview_worker.busy(){self.preview_key=None;self.preview_lines.clear();}
+        self.preview_worker.cancel();
+        let _=self.preview_worker.poll(); // reap completed obsolete work
     }
 
     fn choose_icons(&mut self) -> io::Result<()> {
@@ -1143,7 +1171,7 @@ impl State {
     ) -> io::Result<()> {
         if self.dual {
             #[cfg(feature = "native-ops")]
-            {self.graphics_slot.clear()?;self.graphics_placed=false;}
+            {self.suspend_visual_preview();self.graphics_slot.clear()?;self.graphics_placed=false;}
             return self.draw_dual(model, message, searching, writable, personal, clipboard, &marked);
         }
         let (w,full_h) = terminal::size()?;
@@ -1155,7 +1183,7 @@ impl State {
             SetForegroundColor(self.prefs.accent), Print(super::clip("Terminal Tree  File  Edit  View  Go  Tools  Settings  Add-ons", usize::from(l.width))), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
         #[cfg(feature = "native-ops")]
         self.terminal_button(&mut out,l.width)?;
-        if h < 8 { #[cfg(feature = "native-ops")] {self.graphics_slot.clear()?;self.graphics_placed=false;} queue!(out,ResetColor)?; return self.frame_cache.present(out,w,full_h,self.prefs.background); }
+        if h < 8 { #[cfg(feature = "native-ops")] {self.suspend_visual_preview();self.graphics_slot.clear()?;self.graphics_placed=false;} queue!(out,ResetColor)?; return self.frame_cache.present(out,w,full_h,self.prefs.background); }
         let mode = if personal { "Personal" } else if writable { "Workspace" } else { "Read-only" };
         let path_width = if self.prefs.toolbar { draw_toolbar(&mut out,l.width,self.view,&self.prefs)? } else { l.width };
         let path = if let Some(input) = &self.location {
@@ -1177,6 +1205,11 @@ impl State {
                 tree.rows().get(tree.selected()).map(|r| r.entry.clone())
             } else { model.entries.get(model.selected).cloned() };
             self.preview(entry.as_ref(),l.preview,l.capacity());
+            #[cfg(feature = "native-ops")]
+            self.poll_visual_preview();
+        } else {
+            #[cfg(feature = "native-ops")]
+            self.suspend_visual_preview();
         }
         let cap = l.capacity();
         let cells = Cells::new(l.end()-l.first(), cap, self.view, self.zoom);
@@ -1571,7 +1604,11 @@ impl State {
                 if k.code == KeyCode::Char('v') && k.modifiers == KeyModifiers::ALT {
                     if !self.prefs.visual_preview{return Err(io::Error::other("Enable Visual Preview in Add-ons first"));}
                     let entry=if let Some(tree)=&self.expanded_tree{tree.rows().get(tree.selected()).map(|r|&r.entry)}else{model.entries.get(model.selected)};
-                    if let Some(e)=entry.filter(|e|!e.directory&&!e.symlink&&terminal_tree::visual_preview::format(&e.path).is_some()){super::visual_ui::show(&e.path)?;}
+                    if let Some(path)=entry.filter(|e|!e.directory&&!e.symlink&&terminal_tree::visual_preview::format(&e.path).is_some()).map(|e|e.path.clone()){
+                        self.suspend_visual_preview();
+                        if self.preview_worker.busy(){return Err(io::Error::other("Preview finishing; press Alt+V again"));}
+                        super::visual_ui::show(&path)?;
+                    }
                     return Ok(None);
                 }
                 #[cfg(feature = "native-ops")]

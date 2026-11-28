@@ -186,6 +186,7 @@ def main(binary):
                 (b"\x1b[<0;55;1M",b"Add-ons / Integrations"),
                 (b"\x1b[<0;2;5M",b"Visual Preview | Installed | Enabled"),
                 (b"\x1b",b"Page 1/2"),
+                (b"\x1b[B\x1b[A",b"Page 1/2"),
                 (b"\x1b[<65;100;8M",b"Page 2/2"),
                 (b"\x1b[<64;100;8M",b"Page 1/2"),
                 (b"\x1b[B",b"Thumbnail"),

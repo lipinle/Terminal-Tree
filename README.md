@@ -112,6 +112,10 @@ The native Add-ons screen separates the four companion states from their descrip
 
 The optional visual helper supports RGB v2 up to 1024 pixels per side. In a direct Kitty session (TERM=xterm-kitty and KITTY_WINDOW_ID), the dashboard and expanded viewer use native RGB bitmap placement. Set TT_GRAPHICS=unicode to force the existing half-block renderer, or TT_GRAPHICS=kitty only when you know your terminal supports the Kitty protocol. tmux/screen are excluded. Old helpers or failed HD decodes fall back to v1. Rebuild the helper as well as the core. The core generates the graphics commands itself, chunks bounded pixel data, suppresses terminal replies, and deletes its own placement when leaving the view. GNOME Terminal/VTE and other non-Kitty terminals continue to use the half-block preview or the original-resolution desktop viewer. No Sixel support yet. See https://sw.kovidgoyal.net/kitty/graphics-protocol.html.
 
+### Responsive visual previews
+
+The live image/PDF panel queues the latest selection after a 120 ms debounce. At most one decoder runs at a time, with one replaceable pending request. The dashboard remains interactive while loading and shows the current task status; obsolete results are discarded rather than painted over a newer selection. Hidden panels cancel pending work; already-running helpers may finish under the existing resource limits. Expanded preview remains synchronous and waits for an in-flight decoder to finish before opening. No new runtime dependency or change to the file-operation engine.
+
 ## Navigation and search
 
 Use the installed executable (examples below assume it is on your PATH), or substitute its full path.

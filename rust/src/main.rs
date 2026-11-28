@@ -28,6 +28,8 @@ mod addons_ui;
 mod visual_ui;
 #[cfg(feature = "native-ops")]
 mod native_graphics;
+#[cfg(feature = "native-ops")]
+mod preview_worker;
 mod edition;
 mod file_icons;
 mod help;
@@ -486,7 +488,7 @@ fn browse_with_layout(
         }
         let next_event=loop {
             #[cfg(feature = "native-ops")]
-            if dashboard.as_ref().is_some_and(|ui|ui.terminal_running()) && !event::poll(std::time::Duration::from_millis(100))? {break None;}
+            if dashboard.as_ref().is_some_and(|ui|ui.needs_poll()) && !event::poll(std::time::Duration::from_millis(100))? {break None;}
             let input=event::read()?;
             // Mouse motion without a button does not alter the dashboard.
             // Drag, scroll, resize and all key events are still delivered.
