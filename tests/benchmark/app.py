@@ -72,8 +72,31 @@ def main(binary):
             (b"\x1b", b"Clipboard: 0 files"),
             (b"\x1b[21~", b"Menu"),
             (b"\x1b", b"Clipboard: 0 files"),
+            (b"\x0b", b"Command Palette"),
+            (b"grid", b"Search: grid | 1 actions"),
+            (b"\r", b"Grid View"),
+            (b"\x0b", b"Command Palette"),
+            (b"tree view", b"Search: tree view | 1 actions"),
+            (b"\r", b"Tree View"),
         ])
         session(binary, ["--app", str(root)], root, b"Files *", [], width=45)
+        config = root / ".config"
+        config.mkdir(mode=0o700)
+        session(binary, ["--app", str(root)], root, b"Tree View", [
+            (b"b", b"BOOKMARKS"),
+            (b"\x1b[<0;45;1M", b"Settings Center"),
+            (b"\x1b[B" * 4, b"Save application preferences"),
+            (b"\r", b"Save application preferences in this private directory?"),
+            (b"\x1b[B", b"Create or use"),
+            (b"\r", b"Preferences saved"),
+            (b"\x1b", b"Settings Center"),
+            (b"\x1b", b"Tree View"),
+        ])
+        assert (config / "terminal-tree" / "rust-app-settings.json").is_file()
+        session(binary, ["--app", str(root)], root, b"Tree View", [
+            (b"B", b"Session bookmarks"),
+            (b"\x1b", b"Tree View"),
+        ])
         folder = root / "tree-folder"
         folder.mkdir()
         (folder / "nested.txt").write_text("nested")

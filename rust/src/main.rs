@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use terminal_tree::{display_name, scan, KindFilter, Model, Order};
 use unicode_width::UnicodeWidthChar;
 mod app_settings;
+mod command_palette;
 mod dashboard;
 mod edition;
 mod file_icons;
@@ -433,10 +434,12 @@ fn browse_with_layout(
     let mut dashboard = application.then(|| dashboard::State::new(trash));
     #[cfg(feature = "native-ops")]
     if let Some(ui) = &mut dashboard {
-        if let Err(error) = ui.load_preferences() {
+        if let Err(error) = ui.load_preferences(&mut model) {
             message = display_name(std::ffi::OsStr::new(&error.to_string()));
         }
     }
+    #[cfg(feature = "native-ops")]
+    if let Some(w)=&mut workspace { w.observe(&model); }
     loop {
         if let Some(ui) = &mut dashboard {
             #[cfg(feature = "native-ops")]
@@ -810,6 +813,8 @@ fn browse_with_layout(
             message = display_name(std::ffi::OsStr::new(&e.to_string()));
         }
     }
+    #[cfg(feature = "native-ops")]
+    if let Some(ui)=&mut dashboard { ui.save_on_exit(&model)?; }
     Ok(None)
 }
 

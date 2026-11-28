@@ -161,6 +161,8 @@ pub struct State {
     store: Option<super::settings::Store>,
     #[cfg(feature = "native-ops")]
     last_tool: Option<String>,
+    #[cfg(feature = "native-ops")]
+    last_saved: Option<serde_json::Value>,
 }
 
 impl State {
@@ -177,30 +179,102 @@ impl State {
             store: None,
             #[cfg(feature = "native-ops")]
             last_tool: None,
+            #[cfg(feature = "native-ops")]
+            last_saved: None,
         };
         state.refresh_places();
         state
     }
 
     #[cfg(feature = "native-ops")]
-    pub fn load_preferences(&mut self) -> io::Result<()> {
-        let Some(path) = std::env::var_os("TT_APP_CONFIG_DIR").map(PathBuf::from).or_else(|| {
+    fn config_path() -> Option<PathBuf> {
+        std::env::var_os("TT_APP_CONFIG_DIR").map(PathBuf::from).or_else(|| {
             super::platform::home_dir().map(|home| {
                 std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from)
                     .filter(|p| p.is_absolute()).unwrap_or_else(|| home.join(".config"))
                     .join("terminal-tree")
-            }).filter(|p| p.exists())
-        }) else { return Ok(()); };
-        let store = super::settings::Store::new(&path)?;
+            })
+        })
+    }
+
+    #[cfg(feature = "native-ops")]
+    pub fn load_preferences(&mut self, model: &mut Model) -> io::Result<()> {
+        let Some(path)=Self::config_path() else { return Ok(()); };
+        let store=match super::settings::Store::new(&path) {
+            Ok(store)=>store,
+            Err(error) if error.kind()==io::ErrorKind::NotFound=>return Ok(()),
+            Err(error)=>return Err(error),
+        };
         if let Some(value) = store.load_app()? {
             let (prefs,icons,preview,view,zoom) = super::app_settings::Preferences::decode(&value)?;
+            let bookmarks=super::app_settings::decode_bookmarks(&value)?;
+            let hidden=value.get("hidden").map(|v| v.as_bool().ok_or_else(||io::Error::other("invalid hidden setting"))).transpose()?.unwrap_or(model.hidden);
+            let order=match value.get("order").and_then(|v|v.as_str()) {
+                None=>model.order,Some("Name")=>terminal_tree::Order::Name,Some("Size")=>terminal_tree::Order::Size,
+                Some("Date")=>terminal_tree::Order::Date,Some("Type")=>terminal_tree::Order::Type,
+                _=>return Err(io::Error::other("invalid sort setting")),
+            };
+            model.set_view(hidden,order,model.kind_filter,model.query.clone())?;
             self.prefs = prefs;
             if std::env::var_os("TT_ICON_STYLE").is_none() { self.icons = icons; }
             self.preview_enabled = preview;
             self.view = match view.as_str() { "Grid" => View::Grid, "List" => View::List, _ => View::Tree };
             self.zoom = zoom;
+            self.bookmarks=bookmarks;
+            self.refresh_places();
+            self.last_saved=Some(self.preference_value(model)?);
         }
         self.store = Some(store);
+        Ok(())
+    }
+
+    #[cfg(feature = "native-ops")]
+    fn preference_value(&self, model: &Model) -> io::Result<serde_json::Value> {
+        let mut v=self.prefs.encode(self.icons,self.preview_enabled,self.view.name(),self.zoom);
+        v["bookmarks"]=super::app_settings::encode_bookmarks(&self.bookmarks)?;
+        v["hidden"]=serde_json::json!(model.hidden);
+        v["order"]=serde_json::json!(format!("{:?}",model.order));
+        Ok(v)
+    }
+
+    #[cfg(feature = "native-ops")]
+    fn save_preferences(&mut self, model: &Model) -> io::Result<()> {
+        if self.store.is_none() {
+            let path=Self::config_path().ok_or_else(||io::Error::other("configuration location unavailable"))?;
+            if !path.is_absolute() { return Err(io::Error::other("configuration directory must be absolute")); }
+            let label=format!("Create or use {}",display_name(path.as_os_str()));
+            if super::choose("Save application preferences in this private directory?", &["Cancel".into(),label])?!=Some(1) {
+                return Ok(());
+            }
+            let store=match super::settings::Store::new(&path) {
+                Ok(store)=>store,
+                Err(error) if error.kind()==io::ErrorKind::NotFound=>super::settings::Store::create_app_directory(&path)?,
+                Err(error)=>return Err(error),
+            };
+            if store.load_app()?.is_some() {
+                return Err(io::Error::other("existing preferences found; restart to load before saving"));
+            }
+            self.store=Some(store);
+        }
+        let value=self.preference_value(model)?;
+        if let Some(store)=&self.store {
+            store.save_app(&value)?;
+            self.last_saved=Some(value);
+            super::page("Preferences saved",&["Application preferences saved.".into()])?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "native-ops")]
+    pub fn save_on_exit(&mut self, model: &Model) -> io::Result<()> {
+        if !self.prefs.autosave { return Ok(()); }
+        if let Some(store)=&self.store {
+            let value=self.preference_value(model)?;
+            if self.last_saved.as_ref()!=Some(&value) {
+                store.save_app(&value)?;
+                self.last_saved=Some(value);
+            }
+        }
         Ok(())
     }
 
@@ -345,6 +419,8 @@ impl State {
                 "Display / panels and view".into(),
                 "Add-ons / integration status".into(),
                 "Save application preferences".into(),
+                format!("Autosave on normal exit: {}",self.prefs.autosave),
+                "Manage bookmarks".into(),
                 "Reset application preferences (session)".into(),
             ];
             match super::choose("Settings Center",&labels)? {
@@ -355,19 +431,25 @@ impl State {
                 Some(3)=>self.integrations()?,
                 Some(4)=>{
                     #[cfg(feature = "native-ops")]
-                    {
-                        if self.store.is_none() {
-                            super::page("Save preferences",&["Create an owned private directory (mode 0700), set TT_APP_CONFIG_DIR to it, and restart.".into(),
-                                "Or create ~/.config/terminal-tree with mode 0700. No automatic configuration directory creation.".into()])?;
-                        } else if let Some(store)=&self.store {
-                            let value=self.prefs.encode(self.icons,self.preview_enabled,self.view.name(),self.zoom);
-                            store.save_app(&value)?;
-                            super::page("Preferences saved",&["Application preferences saved.".into()])?;
-                        }
-                    }
+                    self.save_preferences(model)?;
                     #[cfg(not(feature = "native-ops"))]
                     super::page("Save preferences",&["Session only on portable builds.".into()])?;
                 }
+                Some(5)=>{
+                    #[cfg(feature = "native-ops")]
+                    {
+                        if self.store.is_none() {
+                            super::page("Autosave",&["Save application preferences once to establish the private configuration directory.".into()])?;
+                        } else {
+                            self.prefs.autosave=!self.prefs.autosave;
+                            // Persist the explicit opt-in/out now, including when turning autosave off.
+                            self.save_preferences(model)?;
+                        }
+                    }
+                    #[cfg(not(feature = "native-ops"))]
+                    super::page("Autosave",&["Session only on portable builds.".into()])?;
+                }
+                Some(6)=>self.manage_bookmarks()?,
                 _=>{
                     let labels=["Cancel".into(),"Reset all application display and companion options".into()];
                     if super::choose("Reset preferences?",&labels)?==Some(1) {
@@ -376,6 +458,24 @@ impl State {
                     }
                 }
             }
+        }
+    }
+
+    fn manage_bookmarks(&mut self) -> io::Result<()> {
+        loop {
+            let labels:Vec<_>=self.bookmarks.iter().map(|p|display_name(p.as_os_str())).collect();
+            if labels.is_empty() {
+                return super::page("Manage bookmarks",&["No bookmarks. Press b in a directory to add it.".into()]);
+            }
+            let Some(index)=super::choose("Manage bookmarks",&labels)? else { return Ok(()); };
+            let actions=["Move up".into(),"Move down".into(),"Remove bookmark".into(),"Cancel".into()];
+            match super::choose("Bookmark actions",&actions)? {
+                Some(0) if index>0=>self.bookmarks.swap(index,index-1),
+                Some(1) if index+1<self.bookmarks.len()=>self.bookmarks.swap(index,index+1),
+                Some(2)=>{self.bookmarks.remove(index);},
+                _=>(),
+            }
+            self.refresh_places();
         }
     }
 
@@ -781,9 +881,9 @@ impl State {
             MoveTo(0,h-1), Print(super::clip(if searching {
                 "Filter: type text | Enter accept | Esc cancel"
             } else if writable {
-                "F1 Help  F2 Rename  F3 Preview  F4 Actions  F8 Dual  F10 Menu  Ctrl+C/X/V"
+                "F1 Help  F2 Rename  F3 Preview  F4 Actions  F8 Dual  F10 Menu  Ctrl+K Commands"
             } else {
-                "F1 Help  F3 Preview  F8 Dual  F10 Menu  Tab Focus  Ctrl+F Filter  q Exit"
+                "F1 Help  F3 Preview  F8 Dual  F10 Menu  Ctrl+K Commands  q Exit"
             },usize::from(l.width))))?;
         queue!(out,ResetColor)?;
         out.flush()
@@ -797,9 +897,16 @@ impl State {
                 match super::choose("Menu", &labels)? { Some(i) => i, None => return Ok(None) }
             }
         };
-        let plain = KeyModifiers::NONE;
-        if category == 5 { return Ok(Some(Event::Key(KeyEvent::new(KeyCode::Char(','),KeyModifiers::CONTROL)))); }
-        if category == 6 { return Ok(Some(Event::Key(KeyEvent::new(KeyCode::F(11),KeyModifiers::SHIFT)))); }
+        let commands = self.commands(category,writable);
+        let labels: Vec<_> = commands.iter().map(|(label,_,_)| label.to_string()).collect();
+        Ok(super::choose(MENUS[category].0,&labels)?.map(|i| {
+            let (_,key,modifiers) = commands[i];
+            Event::Key(KeyEvent::new(key,modifiers))
+        }))
+    }
+
+    fn commands(&self,category:usize,writable:bool)->Vec<(&'static str,KeyCode,KeyModifiers)> {
+        let plain=KeyModifiers::NONE;
         let mut commands = match category {
             0 => vec![("Open",KeyCode::Enter,plain),("Properties",KeyCode::Char('i'),plain),("Exit",KeyCode::Char('q'),plain)],
             1 if writable => vec![("Copy (Ctrl+C)",KeyCode::Char('c'),plain),("Cut (Ctrl+X)",KeyCode::Char('x'),plain),("Paste (Ctrl+V)",KeyCode::Char('v'),plain),("View clipboard",KeyCode::F(12),plain),("Rename",KeyCode::F(2),plain),("New folder",KeyCode::Char('n'),plain),("New file",KeyCode::Char('t'),plain),("Trash",KeyCode::Delete,plain),("Undo",KeyCode::Char('u'),plain)],
@@ -807,24 +914,37 @@ impl State {
             2 => vec![("Tree view (Ctrl+3)",KeyCode::Char('3'),KeyModifiers::CONTROL),("Grid view (Ctrl+1)",KeyCode::Char('1'),KeyModifiers::CONTROL),("List view (Ctrl+2)",KeyCode::Char('2'),KeyModifiers::CONTROL),("Toggle dual pane (F8)",KeyCode::F(8),plain),("Toggle live preview",KeyCode::F(9),plain),("Open preview",KeyCode::F(3),plain),("Hidden files",KeyCode::Char('h'),plain),("Sort",KeyCode::Char('s'),plain),("Refresh",KeyCode::F(5),plain),("Filter",KeyCode::Char('/'),plain)],
             3 => vec![("Parent",KeyCode::Left,plain),("Back",KeyCode::Char('['),plain),("Forward",KeyCode::Char(']'),plain),("Locations",KeyCode::Char('m'),plain),("Bookmark current directory",KeyCode::Char('b'),plain),("Bookmarks",KeyCode::Char('B'),plain)],
             4 => vec![("Companion tools",KeyCode::Char('p'),KeyModifiers::CONTROL),("Help",KeyCode::F(1),plain)],
-            _ => vec![("Toggle live preview",KeyCode::F(9),plain),("Hidden files",KeyCode::Char('h'),plain),("Sort",KeyCode::Char('s'),plain)],
+            5 => vec![("Settings Center",KeyCode::Char(','),KeyModifiers::CONTROL)],
+            _ => vec![("Manage integrations",KeyCode::F(11),KeyModifiers::SHIFT)],
         };
         if category == 2 && cfg!(feature = "native-ops") {
             commands.push(("Hex preview (Shift+F8)", KeyCode::F(8), KeyModifiers::SHIFT));
         }
-        if category == 3 && cfg!(feature = "native-ops") {
-            commands.insert(0,("Go to path",KeyCode::Char('g'),plain));
+        if category == 3 {
+            commands.insert(0,("Go to path (Ctrl+L)",KeyCode::Char('l'),KeyModifiers::CONTROL));
         }
         if category == 4 && writable { commands.push(("File actions",KeyCode::F(6),plain)); commands.push(("Recovery",KeyCode::Char('j'),plain)); }
 
         if !cfg!(feature = "native-ops") {
             commands.retain(|(_,key,mods)| *key != KeyCode::F(3) && !(*mods == KeyModifiers::CONTROL && *key == KeyCode::Char('p')));
         }
-        let labels: Vec<_> = commands.iter().map(|(label,_,_)| label.to_string()).collect();
-        Ok(super::choose(MENUS[category].0,&labels)?.map(|i| {
-            let (_,key,modifiers) = commands[i];
-            Event::Key(KeyEvent::new(key,modifiers))
-        }))
+        commands.retain(|(_,key,_)|*key!=KeyCode::Null);
+        // Keep a readable explanation in the Edit menu when writes are disabled.
+        if commands.is_empty() { commands.push(("Select a scoped workspace to enable file operations",KeyCode::Null,plain)); }
+        commands
+    }
+
+    fn palette(&self,writable:bool)->io::Result<Option<Event>> {
+        let mut actions=Vec::new();
+        let mut labels=Vec::new();
+        for (category,(name,_)) in MENUS.iter().enumerate() {
+            for (label,key,mods) in self.commands(category,writable) {
+                if key==KeyCode::Null { continue; }
+                labels.push(format!("{name} / {label}"));
+                actions.push(Event::Key(KeyEvent::new(key,mods)));
+            }
+        }
+        Ok(super::command_palette::choose(&labels)?.map(|i|actions.remove(i)))
     }
 
     fn context_menu(&self, writable: bool) -> io::Result<Option<Event>> {
@@ -931,6 +1051,12 @@ impl State {
         }
         if let Event::Key(k) = &event {
             if k.kind == KeyEventKind::Press {
+                if k.code == KeyCode::Char('k') && k.modifiers == KeyModifiers::CONTROL {
+                    self.expanded_tree=None;
+                    self.side_focus=false;
+                    let Some(selected)=self.palette(writable)? else { return Ok(None); };
+                    return self.input(selected,model,false,writable);
+                }
                 if k.code == KeyCode::Char(',') && k.modifiers == KeyModifiers::CONTROL {
                     self.expanded_tree=None;
                     self.settings_center(model)?;
@@ -1129,7 +1255,7 @@ impl State {
             }
             if code == KeyCode::Char('B') {
                 let labels: Vec<_> = self.bookmarks.iter().map(|p| display_name(p.as_os_str())).collect();
-                if let Some(i) = super::choose("Session bookmarks",&labels)? { model.go(self.bookmarks[i].clone())?; }
+                if let Some(i) = super::choose("Session bookmarks / Saved locations",&labels)? { model.go(self.bookmarks[i].clone())?; }
                 return Ok(None);
             }
             if !self.dual && key.modifiers == KeyModifiers::NONE {

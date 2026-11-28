@@ -18,6 +18,7 @@ pub struct Preferences {
     pub status_details: bool,
     pub companions: [bool; 3],
     pub custom: BTreeMap<String, String>,
+    pub autosave: bool,
 }
 
 impl Default for Preferences {
@@ -26,7 +27,7 @@ impl Default for Preferences {
             foreground: Color::Reset, background: Color::Reset, accent: Color::Cyan,
             selection: Color::DarkGrey, sidebar: true, toolbar: true,
             show_icons: true, file_colors: true, status_details: true,
-            companions: [true; 3], custom: BTreeMap::new(),
+            companions: [true; 3], custom: BTreeMap::new(), autosave: false,
         }
     }
 }
@@ -101,7 +102,7 @@ impl Preferences {
             "accent":encode_color(self.accent), "selection":encode_color(self.selection),
             "sidebar":self.sidebar, "toolbar":self.toolbar, "show_icons":self.show_icons,
             "file_colors":self.file_colors, "status_details":self.status_details,
-            "companions":self.companions, "custom":self.custom, "icons":icons.name(), "preview":preview,
+            "companions":self.companions, "custom":self.custom, "autosave":self.autosave, "icons":icons.name(), "preview":preview,
             "view":view, "zoom":zoom
         })
     }
@@ -125,13 +126,42 @@ impl Preferences {
             sidebar:boolean("sidebar")?, toolbar:boolean("toolbar")?, show_icons:boolean("show_icons")?,
             file_colors:boolean("file_colors")?, status_details:boolean("status_details")?,
             companions, custom:parse_pack(&v["custom"])?,
+            autosave: if v.get("autosave").is_some() { boolean("autosave")? } else { false },
         }, icons, boolean("preview")?, view.to_owned(), zoom))
     }
+}
+
+#[cfg(feature = "native-ops")]
+pub fn encode_bookmarks(paths:&[std::path::PathBuf])->io::Result<serde_json::Value> {
+    let mut marks=terminal_tree::bookmarks::Bookmarks::default();
+    for path in paths { marks.add(path.clone()).map_err(|_|io::Error::other("invalid bookmark"))?; }
+    let bytes=terminal_tree::bookmarks::snapshot::encode(&marks);
+    if bytes.len()>28_000 { return Err(io::Error::other("saved bookmark byte budget exceeded")); }
+    Ok(serde_json::json!(bytes.iter().map(|b|format!("{b:02x}")).collect::<String>()))
+}
+
+#[cfg(feature = "native-ops")]
+pub fn decode_bookmarks(value:&serde_json::Value)->io::Result<Vec<std::path::PathBuf>> {
+    let Some(raw)=value.get("bookmarks") else { return Ok(Vec::new()); };
+    let hex=raw.as_str().filter(|s|s.len()<=56_000&&s.len()%2==0&&s.bytes().all(|b|b.is_ascii_hexdigit())).ok_or_else(||io::Error::other("invalid saved bookmarks"))?;
+    let bytes=(0..hex.len()).step_by(2).map(|i|u8::from_str_radix(&hex[i..i+2],16).map_err(io::Error::other)).collect::<io::Result<Vec<_>>>()?;
+    let marks=terminal_tree::bookmarks::snapshot::decode(&bytes)?;
+    if marks.paths().len()>64 { return Err(io::Error::other("too many application bookmarks")); }
+    Ok(marks.paths().to_vec())
 }
 
 #[cfg(all(test,feature = "native-ops"))]
 mod tests {
     use super::*;
+    #[test]
+    fn bookmarks_preserve_native_paths_and_reject_corruption() {
+        use std::os::unix::ffi::OsStringExt;
+        let path=std::path::PathBuf::from(std::ffi::OsString::from_vec(b"/tmp/raw-\xff".to_vec()));
+        let value=serde_json::json!({"bookmarks":encode_bookmarks(&[path.clone()]).unwrap()});
+        assert_eq!(decode_bookmarks(&value).unwrap(),vec![path]);
+        assert!(decode_bookmarks(&serde_json::json!({"bookmarks":"00"})).is_err());
+        assert!(decode_bookmarks(&serde_json::json!({"bookmarks":"\u{e613}"})).is_err());
+    }
     #[test]
     fn preferences_round_trip_and_reject_invalid_pack() {
         let mut p = Preferences::default();
