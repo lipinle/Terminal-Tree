@@ -7,13 +7,14 @@ pub fn supported()->bool{
     if std::env::var_os("TMUX").is_some()||std::env::var_os("STY").is_some(){return false;}
     match std::env::var("TT_GRAPHICS").as_deref(){
         Ok("kitty")=>true,Ok("unicode")=>false,
+        Ok("x11")=>super::x11_overlay::supported(),
         _=>std::env::var("TERM").as_deref()==Ok("xterm-kitty")&&std::env::var_os("KITTY_WINDOW_ID").is_some(),
     }
 }
 pub fn pixel_bounds(cols:u16,rows:u16)->(u32,u32){
     // Actual window pixel dimensions when available; conservative estimate otherwise.
-    let (cw,ch)=crossterm::terminal::window_size().ok().filter(|s|s.width>0&&s.height>0&&s.columns>0&&s.rows>0)
-        .map(|s|((u32::from(s.width)/u32::from(s.columns)).clamp(1,64),(u32::from(s.height)/u32::from(s.rows)).clamp(1,128))).unwrap_or((10,20));
+    let (cw,ch)=super::x11_overlay::cell_size().unwrap_or_else(||crossterm::terminal::window_size().ok().filter(|s|s.width>0&&s.height>0&&s.columns>0&&s.rows>0)
+        .map(|s|((u32::from(s.width)/u32::from(s.columns)).clamp(1,64),(u32::from(s.height)/u32::from(s.rows)).clamp(1,128))).unwrap_or((10,20)));
     ((u32::from(cols)*cw).clamp(1,1024),(u32::from(rows)*ch).clamp(1,1024))
 }
 fn b64(input:&[u8])->Vec<u8>{
@@ -47,18 +48,21 @@ pub fn fit(frame:&Frame,cols:u16,rows:u16)->(u16,u16){
     let r=((frame.height as f64*scale/f64::from(h))*f64::from(rows)).round() as u16;
     (c.clamp(1,cols.max(1)),r.clamp(1,rows.max(1)))
 }
-pub struct Slot {id:u32,visible:bool}
+pub struct Slot {id:u32,visible:bool,overlay:Option<super::x11_overlay::Overlay>}
 impl Slot{
-    pub fn new(salt:u32)->Self{Self{id:(std::process::id().wrapping_mul(2654435761)^salt).max(1),visible:false}}
+    pub fn new(salt:u32)->Self{Self{id:(std::process::id().wrapping_mul(2654435761)^salt).max(1),visible:false,overlay:None}}
     pub fn clear(&mut self)->io::Result<()>{
+        self.overlay=None;
         if self.visible{
             let mut out=io::stdout().lock();
             write!(out,"\x1b_Ga=d,d=I,i={},q=2;\x1b\\",self.id)?;out.flush()?;self.visible=false;
         }
         Ok(())
     }
+    pub fn overlay_expired(&mut self)->bool{if let Some(o)=&mut self.overlay{if !o.alive(){self.overlay=None;return true;}}false}
     pub fn show(&mut self,frame:&Frame,x:u16,y:u16,cols:u16,rows:u16)->io::Result<()>{
         self.clear()?;
+        if super::x11_overlay::supported(){self.overlay=Some(super::x11_overlay::Overlay::start(frame,x,y,cols,rows)?);return Ok(());}
         let mut buf=Vec::new();queue!(buf,MoveTo(x,y))?;
         encode(&mut buf,self.id,frame.width,frame.height,frame.rgb(),cols,rows)?;
         self.visible=true; // cleanup even on a partial write

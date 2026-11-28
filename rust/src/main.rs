@@ -29,6 +29,8 @@ mod visual_ui;
 #[cfg(feature = "native-ops")]
 mod native_graphics;
 #[cfg(feature = "native-ops")]
+mod x11_overlay;
+#[cfg(feature = "native-ops")]
 mod preview_worker;
 mod edition;
 mod file_icons;
@@ -110,11 +112,15 @@ impl Terminal {
         terminal::enable_raw_mode()?;
         let guard = Self;
         execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture, Hide)?;
+        #[cfg(feature = "native-ops")]
+        if x11_overlay::supported(){execute!(io::stdout(),crossterm::event::EnableFocusChange)?;}
         Ok(guard)
     }
 }
 impl Drop for Terminal {
     fn drop(&mut self) {
+        #[cfg(feature = "native-ops")]
+        if x11_overlay::supported(){let _=execute!(io::stdout(),crossterm::event::DisableFocusChange);}
         let _ = execute!(
             io::stdout(),
             ResetColor,

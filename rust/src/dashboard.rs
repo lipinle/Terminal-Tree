@@ -266,6 +266,10 @@ pub struct State {
     #[cfg(feature = "native-ops")]
     graphics_placed: bool,
     #[cfg(feature = "native-ops")]
+    graphics_focused: bool,
+    #[cfg(feature = "native-ops")]
+    graphics_failed: bool,
+    #[cfg(feature = "native-ops")]
     visual_size: (u32,u32),
     #[cfg(feature = "native-ops")]
     visual_page: u32,
@@ -311,6 +315,10 @@ impl State {
             graphics_slot: super::native_graphics::Slot::new(1),
             #[cfg(feature = "native-ops")]
             graphics_placed: false,
+            #[cfg(feature = "native-ops")]
+            graphics_focused: true,
+            #[cfg(feature = "native-ops")]
+            graphics_failed: false,
             #[cfg(feature = "native-ops")]
             visual_size: (0,0),
             #[cfg(feature = "native-ops")]
@@ -431,7 +439,7 @@ impl State {
         if cfg!(feature = "native-ops") && self.prefs.terminal_visible && h>=16 {percent(h,self.prefs.terminal_percent).clamp(5,h-9)} else {0}
     }
     #[cfg(feature = "native-ops")]
-    pub fn needs_poll(&self)->bool {self.terminal_panel.running()||self.preview_worker.busy()}
+    pub fn needs_poll(&self)->bool {self.terminal_panel.running()||self.preview_worker.busy()||(super::x11_overlay::supported()&&self.graphics_placed)}
     #[cfg(feature = "native-ops")]
     pub fn tick_terminal(&mut self)->io::Result<bool> {
         let finished=self.terminal_panel.tick()?;
@@ -864,7 +872,7 @@ impl State {
         if key!=self.preview_key {self.preview_scroll=0;}
         #[cfg(feature = "native-ops")]
         {
-            let size=if super::native_graphics::supported(){super::native_graphics::pixel_bounds(width,rows.saturating_sub(2).min(u16::MAX as usize) as u16)}else{(u32::from(width).clamp(1,160),(rows.saturating_sub(2)*2).clamp(1,160) as u32)};
+            let size=if super::native_graphics::supported()&&!self.graphics_failed{super::native_graphics::pixel_bounds(width,rows.saturating_sub(2).min(u16::MAX as usize) as u16)}else{(u32::from(width).clamp(1,160),(rows.saturating_sub(2)*2).clamp(1,160) as u32)};
             if key != self.preview_key {self.visual_page=1;}
             if size!=self.visual_size {self.visual_size=size;self.preview_lines.clear();self.preview_scroll=0;}
         }
@@ -887,7 +895,7 @@ impl State {
                     self.preview_worker.request(super::preview_worker::Request{
                         path:e.path.clone(),name:e.name.clone(),page,
                         pdf:terminal_tree::visual_preview::format(&e.path)==Some("pdf"),
-                        hd:super::native_graphics::supported().then_some(self.visual_size),
+                        hd:(super::native_graphics::supported()&&!self.graphics_failed).then_some(self.visual_size),
                         fallback:(u32::from(width).clamp(1,160),(rows.saturating_sub(2)*2).clamp(1,160) as u32),
                     });
                     self.preview_lines=vec![e.name.clone(),"Loading visual preview...".into()];
@@ -1206,7 +1214,7 @@ impl State {
             } else { model.entries.get(model.selected).cloned() };
             self.preview(entry.as_ref(),l.preview,l.capacity());
             #[cfg(feature = "native-ops")]
-            self.poll_visual_preview();
+            {self.poll_visual_preview();if self.graphics_slot.overlay_expired(){self.graphics_placed=false;self.graphics_focused=false;}}
         } else {
             #[cfg(feature = "native-ops")]
             self.suspend_visual_preview();
@@ -1317,11 +1325,20 @@ impl State {
         if l.preview==0||!self.visual_bitmap||self.visual_frame.is_none()||!self.graphics_placed{self.graphics_slot.clear()?;self.graphics_placed=false;}
         self.frame_cache.present(out,w,full_h,self.prefs.background)?;
         #[cfg(feature = "native-ops")]
-        if l.preview>0 && self.visual_bitmap && !self.graphics_placed && cap>2 {
+        if l.preview>0 && self.visual_bitmap && !self.graphics_placed && self.graphics_focused && cap>2 {
             if let Some(frame)=&self.visual_frame{
                 let (cols,rows)=super::native_graphics::fit(frame,l.preview,(cap-2).min(u16::MAX as usize) as u16);
-                self.graphics_slot.show(frame,l.end()+1+(l.preview-cols)/2,6,cols,rows)?;
-                self.graphics_placed=true;
+                match self.graphics_slot.show(frame,l.end()+1+(l.preview-cols)/2,6,cols,rows){
+                    Ok(())=>self.graphics_placed=true,
+                    Err(_) if super::x11_overlay::supported()=>{
+                        self.graphics_failed=true;self.visual_bitmap=false;self.visual_frame=None;
+                        self.preview_key=None;self.preview_lines=vec!["X11 placement unavailable; using Unicode".into()];
+                        // Queue the fallback now so the idle event loop will poll it.
+                        let e=if let Some(tree)=&self.expanded_tree{tree.rows().get(tree.selected()).map(|r|r.entry.clone())}else{model.entries.get(model.selected).cloned()};
+                        self.preview(e.as_ref(),l.preview,cap);
+                    }
+                    Err(e)=>return Err(e),
+                }
             }
         }
         Ok(())
@@ -1422,6 +1439,13 @@ impl State {
     /// Handle shell-only interactions; translate file-list coordinates back to
     /// the existing navigator so the original review and write engine is used.
     pub fn input(&mut self, mut event: Event, model: &mut Model, searching: bool, writable: bool) -> io::Result<Option<Event>> {
+        #[cfg(feature = "native-ops")]
+        if super::x11_overlay::supported(){match &event {
+            Event::FocusLost=>{self.graphics_slot.clear()?;self.graphics_placed=false;self.graphics_focused=false;return Ok(None);},
+            Event::FocusGained=>{self.graphics_focused=true;self.graphics_placed=false;return Ok(None);},
+            Event::Resize(_,_)=>{self.graphics_focused=true;self.graphics_failed=false;},
+            Event::Key(_)|Event::Mouse(_)=>{self.graphics_focused=true;},_=>(),
+        }}
         // Modal actions can repaint the physical screen. Plain navigation and
         // passive mouse events cannot, so keep the row cache for those.
         let passive=matches!(&event,Event::Mouse(mouse) if matches!(mouse.kind,MouseEventKind::Moved|MouseEventKind::Up(_)));

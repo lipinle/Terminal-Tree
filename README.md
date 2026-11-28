@@ -116,6 +116,10 @@ The optional visual helper supports RGB v2 up to 1024 pixels per side. In a dire
 
 The live image/PDF panel queues the latest selection after a 120 ms debounce. At most one decoder runs at a time, with one replaceable pending request. The dashboard remains interactive while loading and shows the current task status; obsolete results are discarded rather than painted over a newer selection. Hidden panels cancel pending work; already-running helpers may finish under the existing resource limits. Expanded preview remains synchronous and waits for an in-flight decoder to finish before opening. No new runtime dependency or change to the file-operation engine.
 
+### Experimental GNOME Terminal / X11 overlay
+
+Optional [X11 helper](x11-overlay/README.md) adds high-resolution bitmap previews to an explicitly selected GNOME Terminal client. Manual geometry calibration and a dedicated single-tab X11 window are required; this is not automatic VTE detection or Wayland support. See the helper instructions for setup. No change to the core dependency graph or the existing add-on architecture.
+
 ## Navigation and search
 
 Use the installed executable (examples below assume it is on your PATH), or substitute its full path.

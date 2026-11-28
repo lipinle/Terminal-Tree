@@ -12,7 +12,7 @@ pub fn show(path:&Path)->io::Result<()>{
         let width=u32::from(w-1).min(160);
         let height=u32::from(h-4).saturating_mul(2).min(160);
         slot.clear()?;
-        let native=if super::native_graphics::supported(){
+        let native=if super::native_graphics::supported()&&!super::x11_overlay::supported(){
             let (pw,ph)=super::native_graphics::pixel_bounds(w-1,h-4);
             visual_preview::render_hd(path,page,pw,ph).ok()
         }else{None};
