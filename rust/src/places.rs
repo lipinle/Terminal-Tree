@@ -35,7 +35,7 @@ fn decode(raw: &[u8]) -> io::Result<PathBuf> {
     Ok(path)
 }
 #[cfg(target_os = "linux")]
-fn media_mounts(bytes: &[u8]) -> io::Result<Vec<PathBuf>> {
+pub(crate) fn media_mounts(bytes: &[u8]) -> io::Result<Vec<PathBuf>> {
     let mut out = BTreeSet::new();
     for line in bytes.split(|&b| b == b'\n').filter(|l| !l.is_empty()) {
         let fields: Vec<_> = line.split(|&b| b == b' ').collect();

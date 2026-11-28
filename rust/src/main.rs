@@ -18,6 +18,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use terminal_tree::{display_name, scan, KindFilter, Model, Order};
 use unicode_width::UnicodeWidthChar;
+mod dashboard;
 mod edition;
 mod help;
 mod panes_ui;
@@ -357,6 +358,19 @@ fn preview(path: &Path, mode: terminal_tree::preview::Mode) -> io::Result<()> {
 fn browse(
     path: PathBuf,
     return_on_enter: bool,
+    #[cfg(feature = "native-ops")] workspace: Option<workspace::Workspace>,
+) -> io::Result<Option<PathBuf>> {
+    browse_with_layout(
+        path, return_on_enter, false,
+        #[cfg(feature = "native-ops")]
+        workspace,
+    )
+}
+
+fn browse_with_layout(
+    path: PathBuf,
+    return_on_enter: bool,
+    application: bool,
     #[cfg(feature = "native-ops")] mut workspace: Option<workspace::Workspace>,
 ) -> io::Result<Option<PathBuf>> {
     #[cfg(feature = "native-ops")]
@@ -389,16 +403,53 @@ fn browse(
     });
     let mut searching = false;
     let mut previous_query = String::new();
+    #[cfg(feature = "native-ops")]
+    let trash = workspace.as_ref().map(|w| w.trash_path());
+    #[cfg(not(feature = "native-ops"))]
+    let trash = None;
+    let mut dashboard = application.then(|| dashboard::State::new(trash));
     loop {
-        draw(
-            &mut model,
-            &message,
-            searching,
-            writable,
+        if let Some(ui) = &mut dashboard {
             #[cfg(feature = "native-ops")]
-            workspace.as_ref(),
-        )?;
-        let event = event::read()?;
+            let clipboard = workspace.as_ref().map_or(0, |w| w.clipboard_count());
+            #[cfg(not(feature = "native-ops"))]
+            let clipboard = 0;
+            ui.draw(&mut model, &message, searching, writable, personal, clipboard, |path| {
+                #[cfg(feature = "native-ops")]
+                { workspace.as_ref().is_some_and(|w| w.marked(path)) }
+                #[cfg(not(feature = "native-ops"))]
+                { let _ = path; false }
+            })?;
+        } else {
+            draw(
+                &mut model,
+                &message,
+                searching,
+                writable,
+                #[cfg(feature = "native-ops")]
+                workspace.as_ref(),
+            )?;
+        }
+        let mut event = event::read()?;
+        if let Some(ui) = &mut dashboard {
+            let previous = model.directory.clone();
+            match ui.input(event, &mut model, searching, writable) {
+                Ok(Some(next)) => event = next,
+                Ok(None) => {
+                    #[cfg(feature = "native-ops")]
+                    if previous != model.directory {
+                        if let Some(w) = &mut workspace { w.observe(&model); }
+                    }
+                    #[cfg(not(feature = "native-ops"))]
+                    let _ = previous;
+                    continue;
+                }
+                Err(error) => {
+                    message = display_name(std::ffi::OsStr::new(&error.to_string()));
+                    continue;
+                }
+            }
+        }
         #[cfg(feature = "native-ops")]
         let reload_event = match &event {
             Event::Key(k) => {

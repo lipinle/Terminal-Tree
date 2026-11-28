@@ -38,6 +38,12 @@ bash rust/uninstall-preview.sh "$HOME/terminal-tree-preview" --yes
 
 The local manifest detects changes; it is not a signature or proof of origin. If an old preview has no manifest, install a new directory rather than attempting to update or uninstall it using these scripts. Keep legacy Python installations and their settings intact until you have independently verified the new workflow.
 
+## Application view
+
+Run `terminal-tree` or `terminal-tree --app PATH` to open the responsive application. Wide terminals display Places, Files and a bounded live preview; smaller terminals hide the preview or sidebar. Click a menu title or press F10, Tab switches Places/Files focus, Enter opens a selected item, and F9 toggles live preview. Press b to bookmark the current directory for this session, B to select a bookmark, Ctrl+L to go to a path (native Linux), Ctrl+F to filter and Ctrl+P for optional tools. Mouse clicks select file rows without opening files. F5 refreshes; preview does not follow links. The existing --browse, --tree and --panes views remain available.
+
+For writes, explicitly start `terminal-tree --app-workspace ROOT JOURNAL DATA` or `terminal-tree --app-personal JOURNAL [MOUNT ...]`. File and Edit menus use the existing reviewed operations and clipboard; F4 opens the existing action menu. The sidebar does not grant write authorization. Task status is idle while browsing; operations still show their existing progress dialog. Bookmarks are session-local.
+
 ## Navigation and search
 
 Use the installed executable (examples below assume it is on your PATH), or substitute its full path.

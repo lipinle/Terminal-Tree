@@ -132,8 +132,10 @@ fn print_help() -> io::Result<()> {
         out,
         "Terminal Tree — terminal file navigator
 
-Usage: terminal-tree COMMAND [ARGUMENTS]
+Usage: terminal-tree [COMMAND] [ARGUMENTS]
 
+  (no arguments)                  Open the application in the current directory
+  --app [PATH]                     Open the three-column application
   --browse [PATH]                  Browse files and folders (F1 for controls)
   --list [-a] [PATH]               Show a directory summary
   --tree [PATH]                    Explore a directory tree
@@ -149,6 +151,8 @@ Pane options: --theme NAME, --keys SPEC"
         "
 Native Linux options
   --find PATH QUERY --content      Search inside text files
+  --app-workspace ROOT JOURNAL DATA   Application with scoped writes
+  --app-personal JOURNAL [MOUNT ...]  Application with approved personal roots
   --workspace ROOT JOURNAL DATA    Manage files inside a workspace
   --personal JOURNAL [MOUNT ...]   Manage files in explicitly approved locations
   --panes options: --preferences DIR, --bookmarks-in PATH, --bookmarks-out PATH
@@ -175,7 +179,25 @@ File tools
 
 pub(super) fn run() -> io::Result<()> {
     let mut args = env::args_os().skip(1);
-    match args.next().as_deref().and_then(|x| x.to_str()) {
+    let command = args.next();
+    match command.as_deref().and_then(|x| x.to_str()) {
+        None if command.is_none() => {
+            if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+                return print_help();
+            }
+            super::browse_with_layout(env::current_dir()?, false, true,
+                #[cfg(feature = "native-ops")]
+                None,
+            ).map(|_| ())
+        }
+        Some("--app") => {
+            let path = path_arg(args.next())?;
+            end_of_args(&mut args)?;
+            super::browse_with_layout(path, false, true,
+                #[cfg(feature = "native-ops")]
+                None,
+            ).map(|_| ())
+        }
         Some("--help" | "-h") => {
             end_of_args(&mut args)?;
             print_help()
@@ -576,7 +598,7 @@ pub(super) fn run() -> io::Result<()> {
             }
         }
         #[cfg(feature = "native-ops")]
-        Some("--personal") => {
+        Some(mode @ ("--personal" | "--app-personal")) => {
             // Never infer a broader scope from an arbitrary HOME override.
             // Resolve the real account's home from NSS via getent, then require
             // the environment HOME to agree. This mode is explicitly opt-in.
@@ -605,10 +627,10 @@ pub(super) fn run() -> io::Result<()> {
                 .map(|p| path_arg(Some(p)))
                 .collect::<io::Result<Vec<_>>>()?;
             let w = workspace::Workspace::personal(&home, &journal, &extras)?;
-            browse(home, false, Some(w)).map(|_| ())
+            super::browse_with_layout(home, false, mode == "--app-personal", Some(w)).map(|_| ())
         }
         #[cfg(feature = "native-ops")]
-        Some("--workspace") => {
+        Some(mode @ ("--workspace" | "--app-workspace")) => {
             let root = path_arg(args.next())?;
             let journal = path_arg(Some(
                 args.next()
@@ -622,7 +644,7 @@ pub(super) fn run() -> io::Result<()> {
                 return Err(io::Error::other("unexpected argument"));
             }
             let w = workspace::Workspace::new(&root, &journal, &data)?;
-            browse(w.root().to_path_buf(), false, Some(w)).map(|_| ())
+            super::browse_with_layout(w.root().to_path_buf(), false, mode == "--app-workspace", Some(w)).map(|_| ())
         }
         #[cfg(feature = "native-ops")]
         Some("--result") => {
