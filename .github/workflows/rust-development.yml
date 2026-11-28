@@ -53,3 +53,23 @@ jobs:
       - name: Validate shell script syntax
         run: |
           for script in rust/*.sh; do bash -n "$script"; done
+      - name: Package UX preview for side-by-side testing
+        run: |
+          cargo build --locked --release --manifest-path rust/Cargo.toml --features native-ops --bin terminal-tree
+          TT_TEST_VISUAL_PREVIEW=1 python3 tests/benchmark/app.py rust/target/release/terminal-tree
+          mkdir -p preview-dist/payload
+          install -m 755 rust/target/release/terminal-tree preview-dist/payload/terminal-tree
+          cp LICENSE README.md ICON-NOTICES.md OPTIONAL-TOOLS.md preview-dist/payload/
+          git rev-parse HEAD > preview-dist/payload/BUILD-COMMIT
+          printf '%s\n' 'Experimental UX preview; not a stable release. Keep existing installation intact.' 'Run: TT_APP_CONFIG_DIR="$HOME/.config/terminal-tree-ux-preview" ./terminal-tree --app "$HOME"' 'Visual preview helper is not bundled; build separately from source pending license audit.' > preview-dist/payload/TESTING.txt
+          tar -czf preview-dist/terminal-tree-ux-preview-linux-x86_64.tar.gz -C preview-dist/payload .
+          (cd preview-dist && sha256sum terminal-tree-ux-preview-linux-x86_64.tar.gz > SHA256SUMS)
+      - name: Upload UX preview artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: terminal-tree-ux-preview-linux-x86_64
+          path: |
+            preview-dist/terminal-tree-ux-preview-linux-x86_64.tar.gz
+            preview-dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
