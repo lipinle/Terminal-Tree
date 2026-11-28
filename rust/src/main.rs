@@ -893,6 +893,34 @@ fn run() -> io::Result<()> {
             list(&path, hidden)
         }
         Some("--find") => find(args),
+        Some("--image-preview") => {
+            let path = path_arg(Some(
+                args.next()
+                    .ok_or_else(|| io::Error::other("image path required"))?,
+            ))?;
+            if args.next().is_some() {
+                return Err(io::Error::other("unexpected image argument"));
+            }
+            #[cfg(all(feature = "native-ops", target_os = "linux"))]
+            {
+                let thumbnail =
+                    terminal_tree::image_preview::native::thumbnail_file(&path, 80, 40)?;
+                let mut out = io::BufWriter::new(io::stdout().lock());
+                writeln!(out, "PPM {}x{}", thumbnail.width, thumbnail.height)?;
+                for row in thumbnail.rows {
+                    writeln!(out, "{row}")?;
+                }
+                out.flush()
+            }
+            #[cfg(not(all(feature = "native-ops", target_os = "linux")))]
+            {
+                let _ = path;
+                Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "image file preview requires the native Linux build",
+                ))
+            }
+        }
         Some("--archive-list") => {
             let path = path_arg(Some(
                 args.next()
@@ -1113,7 +1141,7 @@ fn run() -> io::Result<()> {
             Ok(())
         }
         _ => {
-            eprintln!("Experimental read-only Rust port\nUsage: terminal-tree --list [-a] [PATH] | --browse [PATH] | --tree [PATH] | --panes [LEFT] [RIGHT] [--keys SPEC] [--bookmarks-in PATH] [--bookmarks-out PATH] | --find PATH QUERY [--content] [--hidden] [--depth N] | --archive-list PATH | --scan-count PATH [REPEATS] | --version | --edition");
+            eprintln!("Experimental read-only Rust port\nUsage: terminal-tree --list [-a] [PATH] | --browse [PATH] | --tree [PATH] | --panes [LEFT] [RIGHT] [--keys SPEC] [--bookmarks-in PATH] [--bookmarks-out PATH] | --find PATH QUERY [--content] [--hidden] [--depth N] | --archive-list PATH | --image-preview PATH | --scan-count PATH [REPEATS] | --version | --edition");
             Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "unsupported or missing command",
