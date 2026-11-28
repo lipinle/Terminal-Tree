@@ -134,6 +134,21 @@ impl Layout {
     }
 }
 
+const NAV_KEYS: [KeyCode;9]=[KeyCode::Up,KeyCode::Down,KeyCode::PageUp,KeyCode::PageDown,KeyCode::Home,KeyCode::End,KeyCode::Right,KeyCode::Left,KeyCode::F(5)];
+const NAV_LABELS: [&str;9]=["Up","Down","Page up","Page down","First","Last","Expand / right","Collapse / left","Refresh"];
+#[derive(Clone,Copy)]
+enum Divider { Sidebar, Preview, Dual, Terminal }
+
+struct Tab {
+    model: Model,
+    other: Option<Model>,
+    dual: bool,
+    active_right: bool,
+}
+
+fn percent(width:u16, ratio:u16)->u16 { (u32::from(width)*u32::from(ratio)/100) as u16 }
+fn dual_split(width:u16, ratio:u16)->u16 { percent(width,ratio).clamp(16,width.saturating_sub(17).max(16)) }
+
 type Place = (String, Option<PathBuf>);
 type PreviewKey = (PathBuf, u64, Option<SystemTime>);
 
@@ -155,12 +170,19 @@ pub struct State {
     zoom: usize,
     location: Option<String>,
     expanded_tree: Option<TreeModel>,
+    tabs: Vec<Option<Tab>>,
+    active_tab: usize,
+    dragging: Option<Divider>,
+    #[cfg(feature = "native-ops")]
+    terminal_panel: super::terminal_panel::Panel,
     icons: super::file_icons::Style,
     prefs: super::app_settings::Preferences,
     #[cfg(feature = "native-ops")]
     store: Option<super::settings::Store>,
     #[cfg(feature = "native-ops")]
     last_tool: Option<String>,
+    #[cfg(feature = "native-ops")]
+    last_saved: Option<serde_json::Value>,
 }
 
 impl State {
@@ -171,43 +193,263 @@ impl State {
             preview_key: None, preview_lines: Vec::new(),
             dual: false, active_right: false, other: None, pane_switched: false,
             view: View::Tree, zoom: 1, location: None, expanded_tree: None,
+            tabs: vec![None], active_tab: 0, dragging: None,
+            #[cfg(feature = "native-ops")]
+            terminal_panel: Default::default(),
             icons: super::file_icons::Style::from_environment(),
             prefs: Default::default(),
             #[cfg(feature = "native-ops")]
             store: None,
             #[cfg(feature = "native-ops")]
             last_tool: None,
+            #[cfg(feature = "native-ops")]
+            last_saved: None,
         };
         state.refresh_places();
         state
     }
 
     #[cfg(feature = "native-ops")]
-    pub fn load_preferences(&mut self) -> io::Result<()> {
-        let Some(path) = std::env::var_os("TT_APP_CONFIG_DIR").map(PathBuf::from).or_else(|| {
+    fn config_path() -> Option<PathBuf> {
+        std::env::var_os("TT_APP_CONFIG_DIR").map(PathBuf::from).or_else(|| {
             super::platform::home_dir().map(|home| {
                 std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from)
                     .filter(|p| p.is_absolute()).unwrap_or_else(|| home.join(".config"))
                     .join("terminal-tree")
-            }).filter(|p| p.exists())
-        }) else { return Ok(()); };
-        let store = super::settings::Store::new(&path)?;
+            })
+        })
+    }
+
+    #[cfg(feature = "native-ops")]
+    pub fn load_preferences(&mut self, model: &mut Model) -> io::Result<()> {
+        let Some(path)=Self::config_path() else { return Ok(()); };
+        let store=match super::settings::Store::new(&path) {
+            Ok(store)=>store,
+            Err(error) if error.kind()==io::ErrorKind::NotFound=>return Ok(()),
+            Err(error)=>return Err(error),
+        };
         if let Some(value) = store.load_app()? {
             let (prefs,icons,preview,view,zoom) = super::app_settings::Preferences::decode(&value)?;
+            let bookmarks=super::app_settings::decode_bookmarks(&value)?;
+            let hidden=value.get("hidden").map(|v| v.as_bool().ok_or_else(||io::Error::other("invalid hidden setting"))).transpose()?.unwrap_or(model.hidden);
+            let order=match value.get("order").and_then(|v|v.as_str()) {
+                None=>model.order,Some("Name")=>terminal_tree::Order::Name,Some("Size")=>terminal_tree::Order::Size,
+                Some("Date")=>terminal_tree::Order::Date,Some("Type")=>terminal_tree::Order::Type,
+                _=>return Err(io::Error::other("invalid sort setting")),
+            };
+            model.set_view(hidden,order,model.kind_filter,model.query.clone())?;
             self.prefs = prefs;
             if std::env::var_os("TT_ICON_STYLE").is_none() { self.icons = icons; }
             self.preview_enabled = preview;
             self.view = match view.as_str() { "Grid" => View::Grid, "List" => View::List, _ => View::Tree };
             self.zoom = zoom;
+            self.bookmarks=bookmarks;
+            self.refresh_places();
+            self.last_saved=Some(self.preference_value(model)?);
         }
         self.store = Some(store);
         Ok(())
     }
 
+    #[cfg(feature = "native-ops")]
+    fn preference_value(&self, model: &Model) -> io::Result<serde_json::Value> {
+        let mut v=self.prefs.encode(self.icons,self.preview_enabled,self.view.name(),self.zoom);
+        v["bookmarks"]=super::app_settings::encode_bookmarks(&self.bookmarks)?;
+        v["hidden"]=serde_json::json!(model.hidden);
+        v["order"]=serde_json::json!(format!("{:?}",model.order));
+        Ok(v)
+    }
+
+    #[cfg(feature = "native-ops")]
+    fn save_preferences(&mut self, model: &Model) -> io::Result<()> {
+        if self.store.is_none() {
+            let path=Self::config_path().ok_or_else(||io::Error::other("configuration location unavailable"))?;
+            if !path.is_absolute() { return Err(io::Error::other("configuration directory must be absolute")); }
+            let label=format!("Create or use {}",display_name(path.as_os_str()));
+            if super::choose("Save application preferences in this private directory?", &["Cancel".into(),label])?!=Some(1) {
+                return Ok(());
+            }
+            let store=match super::settings::Store::new(&path) {
+                Ok(store)=>store,
+                Err(error) if error.kind()==io::ErrorKind::NotFound=>super::settings::Store::create_app_directory(&path)?,
+                Err(error)=>return Err(error),
+            };
+            if store.load_app()?.is_some() {
+                return Err(io::Error::other("existing preferences found; restart to load before saving"));
+            }
+            self.store=Some(store);
+        }
+        let value=self.preference_value(model)?;
+        if let Some(store)=&self.store {
+            store.save_app(&value)?;
+            self.last_saved=Some(value);
+            super::page("Preferences saved",&["Application preferences saved.".into()])?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "native-ops")]
+    pub fn save_on_exit(&mut self, model: &Model) -> io::Result<()> {
+        if !self.prefs.autosave { return Ok(()); }
+        if let Some(store)=&self.store {
+            let value=self.preference_value(model)?;
+            if self.last_saved.as_ref()!=Some(&value) {
+                store.save_app(&value)?;
+                self.last_saved=Some(value);
+            }
+        }
+        Ok(())
+    }
+
+    fn panel_rows(&self,h:u16)->u16 {
+        if cfg!(feature = "native-ops") && self.prefs.terminal_visible && h>=16 {percent(h,self.prefs.terminal_percent).clamp(5,h-9)} else {0}
+    }
+    #[cfg(feature = "native-ops")]
+    pub fn terminal_running(&self)->bool {self.terminal_panel.running()}
+    #[cfg(feature = "native-ops")]
+    pub fn tick_terminal(&mut self)->io::Result<bool> {
+        let finished=self.terminal_panel.tick()?;
+        if finished {self.expanded_tree=None;self.preview_key=None;}
+        Ok(finished)
+    }
+    #[cfg(feature = "native-ops")]
+    fn draw_terminal(&self,out:&mut impl Write,h:u16,width:u16,model:&Model)->io::Result<()> {
+        let rows=self.panel_rows(h);
+        if rows>0 {self.terminal_panel.draw(out,h-rows,rows,width,&model.directory,&self.prefs)?;}
+        Ok(())
+    }
+    #[cfg(feature = "native-ops")]
+    fn terminal_button(&self,out:&mut impl Write,width:u16)->io::Result<()> {
+        const X:u16=63;
+        let label=if self.terminal_panel.running() {"[Terminal*]"}else if self.prefs.terminal_visible {"[Terminal -]"}else{"[Terminal +]"};
+        if width>=X+label.len() as u16 {
+            queue!(out,MoveTo(X,0),SetForegroundColor(self.prefs.accent),Print(label),SetForegroundColor(self.prefs.foreground))?;
+        }
+        Ok(())
+    }
     fn layout(&self, w: u16, h: u16) -> Layout {
         let mut layout = Layout::new(w,h,self.preview_enabled);
         if !self.prefs.sidebar { layout.sidebar = 0; }
+        else if layout.sidebar > 0 { layout.sidebar=self.prefs.sidebar_width.min(layout.width/3); }
+        if layout.preview>0 { layout.preview=percent(layout.width,self.prefs.preview_percent); }
         layout
+    }
+
+    fn key_settings(&mut self)->io::Result<()> {
+        loop {
+            let mut labels:Vec<_>=NAV_LABELS.iter().enumerate().map(|(i,name)|format!("{name}: {:?}",NAV_KEYS[self.prefs.navigation[i]])).collect();
+            labels.push("Reset navigation shortcuts".into());
+            let Some(action)=super::choose("Settings / Navigation shortcuts",&labels)? else {return Ok(());};
+            if action==9 {self.prefs.navigation=[0,1,2,3,4,5,6,7,8];continue;}
+            let keys:Vec<_>=NAV_KEYS.iter().map(|key|format!("{key:?}")).collect();
+            if let Some(key)=super::choose("Select key (swaps existing navigation binding)",&keys)? {
+                if let Some(other)=self.prefs.navigation.iter().position(|&n|n==key) {
+                    self.prefs.navigation.swap(action,other);
+                }
+            }
+        }
+    }
+
+    pub fn remap_input(&self,mut event:Event,searching:bool)->Event {
+        #[cfg(feature = "native-ops")]
+        if self.terminal_panel.focused {return event;}
+        if !searching && self.location.is_none() {
+            if let Event::Key(key)=&mut event {
+                if key.modifiers==KeyModifiers::NONE {
+                    if let Some(index)=NAV_KEYS.iter().position(|&code|code==key.code) {
+                        if let Some(action)=self.prefs.navigation.iter().position(|&n|n==index) {
+                            key.code=NAV_KEYS[action];
+                        }
+                    }
+                }
+            }
+        }
+        event
+    }
+
+    fn tab_slots(&self,width:u16)->(usize,u16,usize) {
+        // Keep the active tab visible even on a compact terminal.
+        let cell=18u16.min(width.saturating_sub(4).max(4));
+        let count=usize::from(width.saturating_sub(4)/cell).max(1).min(self.tabs.len());
+        let first=self.active_tab.saturating_sub(count-1).min(self.tabs.len()-count);
+        (first,cell,count)
+    }
+
+    fn draw_tabs(&self,out:&mut impl Write,model:&Model,width:u16)->io::Result<()> {
+        if width<8 {return Ok(());}
+        let (first,cell,count)=self.tab_slots(width);
+        for (slot,index) in (first..first+count).enumerate() {
+            let path=if index==self.active_tab { &model.directory } else if let Some(tab)=&self.tabs[index] { &tab.model.directory } else {continue};
+            let name=path.file_name().map(display_name).unwrap_or_else(||display_name(path.as_os_str()));
+            let label=format!("[{} {}]",index+1,name);
+            queue!(out,MoveTo(slot as u16*cell,2))?;
+            if index==self.active_tab {queue!(out,SetBackgroundColor(self.prefs.selection),SetForegroundColor(self.prefs.accent))?;}
+            queue!(out,Print(super::clip(&label,usize::from(cell.saturating_sub(1)))),SetForegroundColor(self.prefs.foreground),SetBackgroundColor(self.prefs.background))?;
+        }
+        if count as u16*cell+3<=width {
+            queue!(out,MoveTo(count as u16*cell,2),Print("[+]"))?;
+        }
+        Ok(())
+    }
+
+    fn clear_tab_transients(&mut self) {
+        self.side_focus=false;
+        self.expanded_tree=None;
+        self.location=None;
+        self.preview_key=None;
+        self.dragging=None;
+        self.pane_switched=true;
+    }
+
+    fn park(&mut self,model:&mut Model,mut incoming:Tab)->Tab {
+        std::mem::swap(model,&mut incoming.model);
+        std::mem::swap(&mut self.other,&mut incoming.other);
+        std::mem::swap(&mut self.dual,&mut incoming.dual);
+        std::mem::swap(&mut self.active_right,&mut incoming.active_right);
+        self.clear_tab_transients();
+        incoming
+    }
+
+    fn new_tab(&mut self,model:&mut Model)->io::Result<()> {
+        if self.tabs.len()>=8 {return Err(io::Error::other("maximum eight tabs"));}
+        let mut next=Model::new(model.directory.clone())?;
+        next.set_view(model.hidden,model.order,model.kind_filter,String::new())?;
+        let parked=self.park(model,Tab{model:next,other:None,dual:false,active_right:false});
+        self.tabs[self.active_tab]=Some(parked);
+        self.tabs.push(None);
+        self.active_tab=self.tabs.len()-1;
+        Ok(())
+    }
+
+    fn switch_tab(&mut self,model:&mut Model,index:usize)->io::Result<()> {
+        if index==self.active_tab || index>=self.tabs.len() {return Ok(());}
+        let tab=self.tabs[index].as_mut().ok_or_else(||io::Error::other("tab unavailable"))?;
+        tab.model.reload()?;
+        let incoming=self.tabs[index].take().ok_or_else(||io::Error::other("tab unavailable"))?;
+        let parked=self.park(model,incoming);
+        self.tabs[self.active_tab]=Some(parked);
+        self.active_tab=index;
+        Ok(())
+    }
+
+    fn close_tab(&mut self,model:&mut Model)->io::Result<()> {
+        if self.tabs.len()==1 {return Ok(());}
+        let previous=self.active_tab;
+        let next=if previous>0 {previous-1}else{1};
+        self.switch_tab(model,next)?;
+        self.tabs.remove(previous);
+        if previous<self.active_tab {self.active_tab-=1;}
+        Ok(())
+    }
+
+    fn resize_drag(&mut self,divider:Divider,x:u16,width:u16,y:u16,height:u16) {
+        let ratio=if width==0 {50}else{(u32::from(x.min(width))*100/u32::from(width)) as u16};
+        match divider {
+            Divider::Sidebar=>self.prefs.sidebar_width=x.clamp(12,48),
+            Divider::Preview=>self.prefs.preview_percent=(100-ratio).clamp(18,45),
+            Divider::Dual=>self.prefs.dual_percent=ratio.clamp(25,75),
+            Divider::Terminal=>if height>0 {self.prefs.terminal_percent=(u32::from(height.saturating_sub(y))*100/u32::from(height)).clamp(20,60) as u16;},
+        }
     }
 
     fn appearance(&mut self) -> io::Result<()> {
@@ -269,6 +511,8 @@ impl State {
                 format!("Hidden files: {}",model.hidden),
                 format!("Layout zoom: {}",self.zoom),
                 format!("File view: {}",self.view.name()),
+                "Reset panel sizes".into(),
+                format!("Terminal panel: {}",self.prefs.terminal_visible),
             ];
             match super::choose("Settings / Display (Enter toggles)",&labels)? {
                 None=>return Ok(()),
@@ -280,7 +524,9 @@ impl State {
                 Some(5)=>self.prefs.status_details=!self.prefs.status_details,
                 Some(6)=>{model.set_view(!model.hidden,model.order,model.kind_filter,model.query.clone())?; self.pane_switched=true; self.expanded_tree=None;},
                 Some(7)=>self.zoom=self.zoom%3+1,
-                _=>self.choose_view(match self.view {View::Tree=>View::Grid,View::Grid=>View::List,View::List=>View::Tree}),
+                Some(8)=>self.choose_view(match self.view {View::Tree=>View::Grid,View::Grid=>View::List,View::List=>View::Tree}),
+                Some(9)=>{self.prefs.sidebar_width=19;self.prefs.preview_percent=33;self.prefs.dual_percent=50;self.prefs.terminal_percent=28;},
+                _=>{self.prefs.terminal_visible=!self.prefs.terminal_visible; #[cfg(feature = "native-ops")] {self.terminal_panel.focused=false;}},
             }
         }
     }
@@ -345,6 +591,9 @@ impl State {
                 "Display / panels and view".into(),
                 "Add-ons / integration status".into(),
                 "Save application preferences".into(),
+                format!("Autosave on normal exit: {}",self.prefs.autosave),
+                "Manage bookmarks".into(),
+                "Navigation shortcuts".into(),
                 "Reset application preferences (session)".into(),
             ];
             match super::choose("Settings Center",&labels)? {
@@ -355,19 +604,26 @@ impl State {
                 Some(3)=>self.integrations()?,
                 Some(4)=>{
                     #[cfg(feature = "native-ops")]
-                    {
-                        if self.store.is_none() {
-                            super::page("Save preferences",&["Create an owned private directory (mode 0700), set TT_APP_CONFIG_DIR to it, and restart.".into(),
-                                "Or create ~/.config/terminal-tree with mode 0700. No automatic configuration directory creation.".into()])?;
-                        } else if let Some(store)=&self.store {
-                            let value=self.prefs.encode(self.icons,self.preview_enabled,self.view.name(),self.zoom);
-                            store.save_app(&value)?;
-                            super::page("Preferences saved",&["Application preferences saved.".into()])?;
-                        }
-                    }
+                    self.save_preferences(model)?;
                     #[cfg(not(feature = "native-ops"))]
                     super::page("Save preferences",&["Session only on portable builds.".into()])?;
                 }
+                Some(5)=>{
+                    #[cfg(feature = "native-ops")]
+                    {
+                        if self.store.is_none() {
+                            super::page("Autosave",&["Save application preferences once to establish the private configuration directory.".into()])?;
+                        } else {
+                            self.prefs.autosave=!self.prefs.autosave;
+                            // Persist the explicit opt-in/out now, including when turning autosave off.
+                            self.save_preferences(model)?;
+                        }
+                    }
+                    #[cfg(not(feature = "native-ops"))]
+                    super::page("Autosave",&["Session only on portable builds.".into()])?;
+                }
+                Some(6)=>self.manage_bookmarks()?,
+                Some(7)=>self.key_settings()?,
                 _=>{
                     let labels=["Cancel".into(),"Reset all application display and companion options".into()];
                     if super::choose("Reset preferences?",&labels)?==Some(1) {
@@ -376,6 +632,24 @@ impl State {
                     }
                 }
             }
+        }
+    }
+
+    fn manage_bookmarks(&mut self) -> io::Result<()> {
+        loop {
+            let labels:Vec<_>=self.bookmarks.iter().map(|p|display_name(p.as_os_str())).collect();
+            if labels.is_empty() {
+                return super::page("Manage bookmarks",&["No bookmarks. Press b in a directory to add it.".into()]);
+            }
+            let Some(index)=super::choose("Manage bookmarks",&labels)? else { return Ok(()); };
+            let actions=["Move up".into(),"Move down".into(),"Remove bookmark".into(),"Cancel".into()];
+            match super::choose("Bookmark actions",&actions)? {
+                Some(0) if index>0=>self.bookmarks.swap(index,index-1),
+                Some(1) if index+1<self.bookmarks.len()=>self.bookmarks.swap(index,index+1),
+                Some(2)=>{self.bookmarks.remove(index);},
+                _=>(),
+            }
+            self.refresh_places();
         }
     }
 
@@ -625,22 +899,25 @@ impl State {
         clipboard: usize,
         marked: &impl Fn(&std::path::Path) -> bool,
     ) -> io::Result<()> {
-        let (w, h) = terminal::size()?;
+        let (w, full_h) = terminal::size()?;
+        let h=full_h-self.panel_rows(full_h);
         let width = w.saturating_sub(1);
         let mut out = io::stdout().lock();
         queue!(out, MoveTo(0, 0), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background), Clear(ClearType::All),
             SetForegroundColor(self.prefs.accent),
             Print(super::clip("Terminal Tree  File  Edit  View  Go  Tools  Settings  Add-ons", usize::from(width))),
             SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
+        #[cfg(feature = "native-ops")]
+        self.terminal_button(&mut out,width)?;
         if h < 8 { queue!(out,ResetColor)?; return out.flush(); }
         let side = if self.active_right { "Right" } else { "Left" };
         let mode = if personal { "Personal" } else if writable { "Workspace" } else { "Read-only" };
         let header = format!("Dual Pane | Active: {side} | [{} / {mode}]", super::edition::NAME);
-        queue!(out, MoveTo(0, 1), Print(super::clip(&header, usize::from(width))),
-            MoveTo(0, 2), Print("─".repeat(usize::from(width))))?;
+        queue!(out, MoveTo(0, 1), Print(super::clip(&header, usize::from(width))))?;
+        self.draw_tabs(&mut out,model,width)?;
         let cap = usize::from(h - 7);
         if width >= 54 {
-            let split = width / 2;
+            let split = dual_split(width,self.prefs.dual_percent);
             let other = self.other.as_mut().ok_or_else(|| io::Error::other("second pane unavailable"))?;
             if self.active_right {
                 draw_column(&mut out, other, "Left", false, 0, split, cap, marked, self.icons, &self.prefs)?;
@@ -669,6 +946,8 @@ impl State {
             } else {
                 "F8 Single  Tab Switch  F10 Menu  Ctrl+F Filter  q Exit"
             }, usize::from(width))))?;
+        #[cfg(feature = "native-ops")]
+        self.draw_terminal(&mut out,full_h,w.saturating_sub(1),model)?;
         queue!(out,ResetColor)?;
         out.flush()
     }
@@ -680,12 +959,15 @@ impl State {
         if self.dual {
             return self.draw_dual(model, message, searching, writable, personal, clipboard, &marked);
         }
-        let (w,h) = terminal::size()?;
+        let (w,full_h) = terminal::size()?;
+        let h=full_h-self.panel_rows(full_h);
         let l = self.layout(w,h);
         if l.sidebar == 0 { self.side_focus = false; }
         let mut out = io::stdout().lock();
         queue!(out, MoveTo(0,0), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background), Clear(ClearType::All),
             SetForegroundColor(self.prefs.accent), Print(super::clip("Terminal Tree  File  Edit  View  Go  Tools  Settings  Add-ons", usize::from(l.width))), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
+        #[cfg(feature = "native-ops")]
+        self.terminal_button(&mut out,l.width)?;
         if h < 8 { queue!(out,ResetColor)?; return out.flush(); }
         let mode = if personal { "Personal" } else if writable { "Workspace" } else { "Read-only" };
         let path_width = if self.prefs.toolbar { draw_toolbar(&mut out,l.width,self.view,&self.prefs)? } else { l.width };
@@ -695,7 +977,7 @@ impl State {
             breadcrumb(&model.directory)
         };
         queue!(out, MoveTo(0,1), Print(super::clip(&path,usize::from(path_width))))?;
-        queue!(out, MoveTo(0,2), Print("─".repeat(usize::from(l.width))))?;
+        self.draw_tabs(&mut out,model,l.width)?;
         if l.sidebar > 0 {
             queue!(out, MoveTo(0,3), SetForegroundColor(self.prefs.accent),
                 Print(if self.side_focus { "Places *" } else { "Places" }), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
@@ -781,10 +1063,12 @@ impl State {
             MoveTo(0,h-1), Print(super::clip(if searching {
                 "Filter: type text | Enter accept | Esc cancel"
             } else if writable {
-                "F1 Help  F2 Rename  F3 Preview  F4 Actions  F8 Dual  F10 Menu  Ctrl+C/X/V"
+                "F1 Help  F2 Rename  F3 Preview  F8 Dual  Ctrl+T Tab  Ctrl+K Commands"
             } else {
-                "F1 Help  F3 Preview  F8 Dual  F10 Menu  Tab Focus  Ctrl+F Filter  q Exit"
+                "F1 Help  F3 Preview  F8 Dual  Ctrl+T Tab  Ctrl+K Commands  q Exit"
             },usize::from(l.width))))?;
+        #[cfg(feature = "native-ops")]
+        self.draw_terminal(&mut out,full_h,w.saturating_sub(1),model)?;
         queue!(out,ResetColor)?;
         out.flush()
     }
@@ -797,34 +1081,61 @@ impl State {
                 match super::choose("Menu", &labels)? { Some(i) => i, None => return Ok(None) }
             }
         };
-        let plain = KeyModifiers::NONE;
-        if category == 5 { return Ok(Some(Event::Key(KeyEvent::new(KeyCode::Char(','),KeyModifiers::CONTROL)))); }
-        if category == 6 { return Ok(Some(Event::Key(KeyEvent::new(KeyCode::F(11),KeyModifiers::SHIFT)))); }
-        let mut commands = match category {
-            0 => vec![("Open",KeyCode::Enter,plain),("Properties",KeyCode::Char('i'),plain),("Exit",KeyCode::Char('q'),plain)],
-            1 if writable => vec![("Copy (Ctrl+C)",KeyCode::Char('c'),plain),("Cut (Ctrl+X)",KeyCode::Char('x'),plain),("Paste (Ctrl+V)",KeyCode::Char('v'),plain),("View clipboard",KeyCode::F(12),plain),("Rename",KeyCode::F(2),plain),("New folder",KeyCode::Char('n'),plain),("New file",KeyCode::Char('t'),plain),("Trash",KeyCode::Delete,plain),("Undo",KeyCode::Char('u'),plain)],
-            1 => vec![("Select a scoped workspace to enable file operations",KeyCode::Null,plain)],
-            2 => vec![("Tree view (Ctrl+3)",KeyCode::Char('3'),KeyModifiers::CONTROL),("Grid view (Ctrl+1)",KeyCode::Char('1'),KeyModifiers::CONTROL),("List view (Ctrl+2)",KeyCode::Char('2'),KeyModifiers::CONTROL),("Toggle dual pane (F8)",KeyCode::F(8),plain),("Toggle live preview",KeyCode::F(9),plain),("Open preview",KeyCode::F(3),plain),("Hidden files",KeyCode::Char('h'),plain),("Sort",KeyCode::Char('s'),plain),("Refresh",KeyCode::F(5),plain),("Filter",KeyCode::Char('/'),plain)],
-            3 => vec![("Parent",KeyCode::Left,plain),("Back",KeyCode::Char('['),plain),("Forward",KeyCode::Char(']'),plain),("Locations",KeyCode::Char('m'),plain),("Bookmark current directory",KeyCode::Char('b'),plain),("Bookmarks",KeyCode::Char('B'),plain)],
-            4 => vec![("Companion tools",KeyCode::Char('p'),KeyModifiers::CONTROL),("Help",KeyCode::F(1),plain)],
-            _ => vec![("Toggle live preview",KeyCode::F(9),plain),("Hidden files",KeyCode::Char('h'),plain),("Sort",KeyCode::Char('s'),plain)],
-        };
-        if category == 2 && cfg!(feature = "native-ops") {
-            commands.push(("Hex preview (Shift+F8)", KeyCode::F(8), KeyModifiers::SHIFT));
-        }
-        if category == 3 && cfg!(feature = "native-ops") {
-            commands.insert(0,("Go to path",KeyCode::Char('g'),plain));
-        }
-        if category == 4 && writable { commands.push(("File actions",KeyCode::F(6),plain)); commands.push(("Recovery",KeyCode::Char('j'),plain)); }
-
-        if !cfg!(feature = "native-ops") {
-            commands.retain(|(_,key,mods)| *key != KeyCode::F(3) && !(*mods == KeyModifiers::CONTROL && *key == KeyCode::Char('p')));
+        let commands = self.commands(category,writable);
+        // Settings and Add-ons remain direct one-click destinations.
+        if category == 5 || category == 6 {
+            let (_,key,mods)=commands[0];
+            return Ok(Some(Event::Key(KeyEvent::new(key,mods))));
         }
         let labels: Vec<_> = commands.iter().map(|(label,_,_)| label.to_string()).collect();
         Ok(super::choose(MENUS[category].0,&labels)?.map(|i| {
             let (_,key,modifiers) = commands[i];
             Event::Key(KeyEvent::new(key,modifiers))
         }))
+    }
+
+    fn commands(&self,category:usize,writable:bool)->Vec<(&'static str,KeyCode,KeyModifiers)> {
+        let plain=KeyModifiers::NONE;
+        let mut commands = match category {
+            0 => vec![("New tab (Ctrl+T)",KeyCode::Char('t'),KeyModifiers::CONTROL),("Close tab (Ctrl+W)",KeyCode::Char('w'),KeyModifiers::CONTROL),("Next tab (Ctrl+Tab)",KeyCode::Tab,KeyModifiers::CONTROL),("Open",KeyCode::Enter,plain),("Properties",KeyCode::Char('i'),plain),("Exit",KeyCode::Char('q'),plain)],
+            1 if writable => vec![("Copy (Ctrl+C)",KeyCode::Char('c'),plain),("Cut (Ctrl+X)",KeyCode::Char('x'),plain),("Paste (Ctrl+V)",KeyCode::Char('v'),plain),("View clipboard",KeyCode::F(12),plain),("Rename",KeyCode::F(2),plain),("New folder",KeyCode::Char('n'),plain),("New file",KeyCode::Char('t'),plain),("Trash",KeyCode::Delete,plain),("Undo",KeyCode::Char('u'),plain)],
+            1 => vec![("Select a scoped workspace to enable file operations",KeyCode::Null,plain)],
+            2 => vec![("Tree view (Ctrl+3)",KeyCode::Char('3'),KeyModifiers::CONTROL),("Grid view (Ctrl+1)",KeyCode::Char('1'),KeyModifiers::CONTROL),("List view (Ctrl+2)",KeyCode::Char('2'),KeyModifiers::CONTROL),("Toggle dual pane (F8)",KeyCode::F(8),plain),("Toggle live preview",KeyCode::F(9),plain),("Open preview",KeyCode::F(3),plain),("Hidden files",KeyCode::Char('h'),plain),("Sort",KeyCode::Char('s'),plain),("Refresh",KeyCode::F(5),plain),("Filter",KeyCode::Char('/'),plain)],
+            3 => vec![("Parent",KeyCode::Left,plain),("Back",KeyCode::Char('['),plain),("Forward",KeyCode::Char(']'),plain),("Locations",KeyCode::Char('m'),plain),("Bookmark current directory",KeyCode::Char('b'),plain),("Bookmarks",KeyCode::Char('B'),plain)],
+            4 => vec![("Companion tools",KeyCode::Char('p'),KeyModifiers::CONTROL),("Help",KeyCode::F(1),plain)],
+            5 => vec![("Settings Center",KeyCode::Char(','),KeyModifiers::CONTROL)],
+            _ => vec![("Manage integrations",KeyCode::F(11),KeyModifiers::SHIFT)],
+        };
+        if category == 2 && cfg!(feature = "native-ops") {
+            commands.push(("Toggle terminal panel (Alt+H)",KeyCode::Char('h'),KeyModifiers::ALT));
+            commands.push(("Focus terminal (Alt+T)",KeyCode::Char('t'),KeyModifiers::ALT));
+            commands.push(("Hex preview (Shift+F8)", KeyCode::F(8), KeyModifiers::SHIFT));
+        }
+        if category == 3 {
+            commands.insert(0,("Go to path (Ctrl+L)",KeyCode::Char('l'),KeyModifiers::CONTROL));
+        }
+        if category == 4 && writable { commands.push(("File actions",KeyCode::F(6),plain)); commands.push(("Recovery",KeyCode::Char('j'),plain)); }
+
+        if !cfg!(feature = "native-ops") {
+            commands.retain(|(_,key,mods)| *key != KeyCode::F(3) && !(*mods == KeyModifiers::CONTROL && *key == KeyCode::Char('p')));
+        }
+        commands.retain(|(_,key,_)|*key!=KeyCode::Null);
+        // Keep a readable explanation in the Edit menu when writes are disabled.
+        if commands.is_empty() { commands.push(("Select a scoped workspace to enable file operations",KeyCode::Null,plain)); }
+        commands
+    }
+
+    fn palette(&self,writable:bool)->io::Result<Option<Event>> {
+        let mut actions=Vec::new();
+        let mut labels=Vec::new();
+        for (category,(name,_)) in MENUS.iter().enumerate() {
+            for (label,key,mods) in self.commands(category,writable) {
+                if key==KeyCode::Null { continue; }
+                labels.push(format!("{name} / {label}"));
+                actions.push(Event::Key(KeyEvent::new(key,mods)));
+            }
+        }
+        Ok(super::command_palette::choose(&labels)?.map(|i|actions.remove(i)))
     }
 
     fn context_menu(&self, writable: bool) -> io::Result<Option<Event>> {
@@ -855,9 +1166,60 @@ impl State {
     /// Handle shell-only interactions; translate file-list coordinates back to
     /// the existing navigator so the original review and write engine is used.
     pub fn input(&mut self, mut event: Event, model: &mut Model, searching: bool, writable: bool) -> io::Result<Option<Event>> {
-        let (w,h) = terminal::size()?;
+        let (w,full_h) = terminal::size()?;
+        let h=full_h-self.panel_rows(full_h);
         let l = self.layout(w,h);
         if searching { return Ok(Some(event)); }
+        #[cfg(feature = "native-ops")]
+        {
+            if self.panel_rows(full_h)==0 {self.terminal_panel.focused=false;}
+            if let Event::Mouse(mouse)=&event {
+                if matches!(self.dragging,Some(Divider::Terminal)) {
+                    match mouse.kind {
+                        MouseEventKind::Drag(MouseButton::Left)=>self.resize_drag(Divider::Terminal,mouse.column,l.width,mouse.row,full_h),
+                        MouseEventKind::Up(MouseButton::Left)=>{self.resize_drag(Divider::Terminal,mouse.column,l.width,mouse.row,full_h);self.dragging=None;},
+                        _=>self.dragging=None,
+                    }
+                    return Ok(None);
+                }
+                if self.location.is_none() && mouse.kind==MouseEventKind::Down(MouseButton::Left) && mouse.modifiers==KeyModifiers::NONE {
+                    if mouse.row==0 && l.width>=75 && mouse.column>=63 && mouse.column<75 {
+                        self.prefs.terminal_visible=!self.prefs.terminal_visible;self.terminal_panel.focused=false;return Ok(None);
+                    }
+                    if self.panel_rows(full_h)>0 && mouse.row==h && l.width>=84 && mouse.column>=l.width-8 && mouse.column<l.width {
+                        self.dragging=Some(Divider::Terminal);return Ok(None);
+                    }
+                }
+            }
+            if self.location.is_none() {
+                if let Event::Key(k)=&event {
+                    if k.kind==KeyEventKind::Press && k.modifiers==KeyModifiers::ALT {
+                        match k.code {
+                            KeyCode::Char('h')=>{self.prefs.terminal_visible=!self.prefs.terminal_visible;self.terminal_panel.focused=false;return Ok(None);}
+                            KeyCode::Char('t')=>{self.prefs.terminal_visible=true;if self.panel_rows(full_h)==0 {return Err(io::Error::other("terminal panel needs at least 16 rows"));}self.terminal_panel.focused=!self.terminal_panel.focused;self.side_focus=false;return Ok(None);}
+                            _=>(),
+                        }
+                    }
+                    if self.terminal_panel.focused {
+                        self.terminal_panel.input(*k,&model.directory)?;
+                        return Ok(None);
+                    }
+                }
+                if let Event::Mouse(mouse)=&event {
+                    if self.panel_rows(full_h)>0 && mouse.row>=h {
+                        match mouse.kind {
+                            MouseEventKind::Down(MouseButton::Left) if mouse.row==h && mouse.column<6=>{self.prefs.terminal_visible=false;self.terminal_panel.focused=false;}
+                            MouseEventKind::Down(MouseButton::Left)=>{self.terminal_panel.focused=true;self.side_focus=false;}
+                            MouseEventKind::ScrollUp=>self.terminal_panel.scroll(true),
+                            MouseEventKind::ScrollDown=>self.terminal_panel.scroll(false),
+                            _=>(),
+                        }
+                        return Ok(None);
+                    }
+                    if self.terminal_panel.focused && matches!(mouse.kind,MouseEventKind::Down(_)) {self.terminal_panel.focused=false;}
+                }
+            }
+        }
         if let Some(input) = &mut self.location {
             match &event {
                 Event::Key(k) if matches!(k.kind,KeyEventKind::Press | KeyEventKind::Repeat) => {
@@ -931,6 +1293,12 @@ impl State {
         }
         if let Event::Key(k) = &event {
             if k.kind == KeyEventKind::Press {
+                if k.code == KeyCode::Char('k') && k.modifiers == KeyModifiers::CONTROL {
+                    self.expanded_tree=None;
+                    self.side_focus=false;
+                    let Some(selected)=self.palette(writable)? else { return Ok(None); };
+                    return self.input(selected,model,false,writable);
+                }
                 if k.code == KeyCode::Char(',') && k.modifiers == KeyModifiers::CONTROL {
                     self.expanded_tree=None;
                     self.settings_center(model)?;
@@ -945,6 +1313,46 @@ impl State {
                     self.expanded_tree=None;
                     super::tools_ui::show_filtered(&model.directory,model.entries.get(model.selected).map(|e| e.path.as_path()),self.prefs.companions,&mut self.last_tool)?;
                     return Ok(None);
+                }
+            }
+        }
+        if let Event::Key(k)=&event {
+            if k.kind==KeyEventKind::Press && k.modifiers.contains(KeyModifiers::CONTROL) {
+                match k.code {
+                    KeyCode::Char('t') if k.modifiers==KeyModifiers::CONTROL=>{self.new_tab(model)?;return Ok(None);}
+                    KeyCode::Char('w') if k.modifiers==KeyModifiers::CONTROL=>{self.close_tab(model)?;return Ok(None);}
+                    KeyCode::Tab|KeyCode::BackTab=>{
+                        let n=self.tabs.len();
+                        let index=if k.modifiers.contains(KeyModifiers::SHIFT)||k.code==KeyCode::BackTab {(self.active_tab+n-1)%n}else{(self.active_tab+1)%n};
+                        self.switch_tab(model,index)?;return Ok(None);
+                    }
+                    _=>(),
+                }
+            }
+        }
+        if let Event::Mouse(mouse)=&event {
+            if let Some(divider)=self.dragging {
+                match mouse.kind {
+                    MouseEventKind::Drag(MouseButton::Left)=>self.resize_drag(divider,mouse.column,l.width,mouse.row,full_h),
+                    MouseEventKind::Up(MouseButton::Left)=>{self.resize_drag(divider,mouse.column,l.width,mouse.row,full_h);self.dragging=None;},
+                    _=>self.dragging=None,
+                }
+                return Ok(None);
+            }
+            if mouse.kind==MouseEventKind::Down(MouseButton::Left) && mouse.modifiers==KeyModifiers::NONE {
+                if mouse.row==2 && l.width>=8 {
+                    let (first,cell,count)=self.tab_slots(l.width);
+                    let slot=usize::from(mouse.column/cell);
+                    if slot<count {self.switch_tab(model,first+slot)?;}
+                    else if mouse.column>=count as u16*cell&&mouse.column<count as u16*cell+3 {self.new_tab(model)?;}
+                    return Ok(None);
+                }
+                if h>=8 && mouse.row>=3&&mouse.row<h-3 {
+                    self.dragging=if self.dual {
+                        (l.width>=54&&mouse.column==dual_split(l.width,self.prefs.dual_percent)).then_some(Divider::Dual)
+                    } else if l.sidebar>0&&mouse.column==l.sidebar {Some(Divider::Sidebar)}
+                    else if l.preview>0&&mouse.column==l.end(){Some(Divider::Preview)}else{None};
+                    if self.dragging.is_some(){return Ok(None);}
                 }
             }
         }
@@ -964,7 +1372,7 @@ impl State {
                     return Ok(None);
                 }
                 if width >= 54 {
-                    let split = width / 2;
+                    let split = dual_split(width,self.prefs.dual_percent);
                     if mouse.column == split { return Ok(None); }
                     let right = mouse.column > split;
                     if right != self.active_right {
@@ -1129,7 +1537,7 @@ impl State {
             }
             if code == KeyCode::Char('B') {
                 let labels: Vec<_> = self.bookmarks.iter().map(|p| display_name(p.as_os_str())).collect();
-                if let Some(i) = super::choose("Session bookmarks",&labels)? { model.go(self.bookmarks[i].clone())?; }
+                if let Some(i) = super::choose("Session bookmarks / Saved locations",&labels)? { model.go(self.bookmarks[i].clone())?; }
                 return Ok(None);
             }
             if !self.dual && key.modifiers == KeyModifiers::NONE {

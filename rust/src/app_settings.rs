@@ -18,6 +18,13 @@ pub struct Preferences {
     pub status_details: bool,
     pub companions: [bool; 3],
     pub custom: BTreeMap<String, String>,
+    pub autosave: bool,
+    pub terminal_visible: bool,
+    pub terminal_percent: u16,
+    pub sidebar_width: u16,
+    pub preview_percent: u16,
+    pub dual_percent: u16,
+    pub navigation: [usize; 9],
 }
 
 impl Default for Preferences {
@@ -26,7 +33,9 @@ impl Default for Preferences {
             foreground: Color::Reset, background: Color::Reset, accent: Color::Cyan,
             selection: Color::DarkGrey, sidebar: true, toolbar: true,
             show_icons: true, file_colors: true, status_details: true,
-            companions: [true; 3], custom: BTreeMap::new(),
+            companions: [true; 3], custom: BTreeMap::new(), autosave: false, terminal_visible: true, terminal_percent: 28,
+            sidebar_width: 19, preview_percent: 33, dual_percent: 50,
+            navigation: [0,1,2,3,4,5,6,7,8],
         }
     }
 }
@@ -101,8 +110,10 @@ impl Preferences {
             "accent":encode_color(self.accent), "selection":encode_color(self.selection),
             "sidebar":self.sidebar, "toolbar":self.toolbar, "show_icons":self.show_icons,
             "file_colors":self.file_colors, "status_details":self.status_details,
-            "companions":self.companions, "custom":self.custom, "icons":icons.name(), "preview":preview,
-            "view":view, "zoom":zoom
+            "companions":self.companions, "custom":self.custom, "autosave":self.autosave, "terminal_visible":self.terminal_visible, "terminal_percent":self.terminal_percent, "icons":icons.name(), "preview":preview,
+            "view":view, "zoom":zoom, "sidebar_width":self.sidebar_width,
+            "preview_percent":self.preview_percent, "dual_percent":self.dual_percent,
+            "navigation":self.navigation
         })
     }
 
@@ -119,19 +130,72 @@ impl Preferences {
         };
         let view = v["view"].as_str().filter(|s| matches!(*s,"Tree"|"Grid"|"List")).ok_or_else(|| io::Error::other("invalid view"))?;
         let zoom = v["zoom"].as_u64().filter(|n| (1..=3).contains(n)).ok_or_else(|| io::Error::other("invalid zoom"))? as usize;
+        let bounded = |key: &str, default: u16, min: u16, max: u16| -> io::Result<u16> {
+            match v.get(key) {
+                None => Ok(default),
+                Some(value) => value.as_u64().filter(|n| (u64::from(min)..=u64::from(max)).contains(n))
+                    .map(|n| n as u16).ok_or_else(||io::Error::other("invalid panel size")),
+            }
+        };
+        let mut navigation=[0,1,2,3,4,5,6,7,8];
+        if let Some(value)=v.get("navigation") {
+            let entries=value.as_array().filter(|a|a.len()==9).ok_or_else(||io::Error::other("invalid navigation map"))?;
+            let mut seen=[false;9];
+            for (i,entry) in entries.iter().enumerate() {
+                let n=entry.as_u64().filter(|n|*n<9).ok_or_else(||io::Error::other("invalid navigation key"))? as usize;
+                if seen[n] { return Err(io::Error::other("duplicate navigation key")); }
+                seen[n]=true;
+                navigation[i]=n;
+            }
+        }
         Ok((Self {
+            sidebar_width:bounded("sidebar_width",19,12,48)?,
+            preview_percent:bounded("preview_percent",33,18,45)?,
+            dual_percent:bounded("dual_percent",50,25,75)?,
+            navigation,
             foreground:color("foreground")?, background:color("background")?,
             accent:color("accent")?, selection:color("selection")?,
             sidebar:boolean("sidebar")?, toolbar:boolean("toolbar")?, show_icons:boolean("show_icons")?,
             file_colors:boolean("file_colors")?, status_details:boolean("status_details")?,
             companions, custom:parse_pack(&v["custom"])?,
+            autosave: if v.get("autosave").is_some() { boolean("autosave")? } else { false },
+            terminal_visible: if v.get("terminal_visible").is_some() { boolean("terminal_visible")? } else { true },
+            terminal_percent: bounded("terminal_percent",28,20,60)?,
         }, icons, boolean("preview")?, view.to_owned(), zoom))
     }
+}
+
+#[cfg(feature = "native-ops")]
+pub fn encode_bookmarks(paths:&[std::path::PathBuf])->io::Result<serde_json::Value> {
+    let mut marks=terminal_tree::bookmarks::Bookmarks::default();
+    for path in paths { marks.add(path.clone()).map_err(|_|io::Error::other("invalid bookmark"))?; }
+    let bytes=terminal_tree::bookmarks::snapshot::encode(&marks);
+    if bytes.len()>28_000 { return Err(io::Error::other("saved bookmark byte budget exceeded")); }
+    Ok(serde_json::json!(bytes.iter().map(|b|format!("{b:02x}")).collect::<String>()))
+}
+
+#[cfg(feature = "native-ops")]
+pub fn decode_bookmarks(value:&serde_json::Value)->io::Result<Vec<std::path::PathBuf>> {
+    let Some(raw)=value.get("bookmarks") else { return Ok(Vec::new()); };
+    let hex=raw.as_str().filter(|s|s.len()<=56_000&&s.len()%2==0&&s.bytes().all(|b|b.is_ascii_hexdigit())).ok_or_else(||io::Error::other("invalid saved bookmarks"))?;
+    let bytes=(0..hex.len()).step_by(2).map(|i|u8::from_str_radix(&hex[i..i+2],16).map_err(io::Error::other)).collect::<io::Result<Vec<_>>>()?;
+    let marks=terminal_tree::bookmarks::snapshot::decode(&bytes)?;
+    if marks.paths().len()>64 { return Err(io::Error::other("too many application bookmarks")); }
+    Ok(marks.paths().to_vec())
 }
 
 #[cfg(all(test,feature = "native-ops"))]
 mod tests {
     use super::*;
+    #[test]
+    fn bookmarks_preserve_native_paths_and_reject_corruption() {
+        use std::os::unix::ffi::OsStringExt;
+        let path=std::path::PathBuf::from(std::ffi::OsString::from_vec(b"/tmp/raw-\xff".to_vec()));
+        let value=serde_json::json!({"bookmarks":encode_bookmarks(&[path.clone()]).unwrap()});
+        assert_eq!(decode_bookmarks(&value).unwrap(),vec![path]);
+        assert!(decode_bookmarks(&serde_json::json!({"bookmarks":"00"})).is_err());
+        assert!(decode_bookmarks(&serde_json::json!({"bookmarks":"\u{e613}"})).is_err());
+    }
     #[test]
     fn preferences_round_trip_and_reject_invalid_pack() {
         let mut p = Preferences::default();
@@ -150,5 +214,11 @@ mod tests {
         assert!(parse_pack(&serde_json::json!({".rs":"R"})).is_err());
         assert!(parse_pack(&serde_json::json!({"rs":"four"})).is_err());
         assert!(parse_color("#12zz34").is_err());
+        let mut broken=value.clone();
+        broken["navigation"]=serde_json::json!([0,0,2,3,4,5,6,7,8]);
+        assert!(Preferences::decode(&broken).is_err());
+        broken=value;
+        broken["preview_percent"]=serde_json::json!(99);
+        assert!(Preferences::decode(&broken).is_err());
     }
 }

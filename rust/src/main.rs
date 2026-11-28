@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use terminal_tree::{display_name, scan, KindFilter, Model, Order};
 use unicode_width::UnicodeWidthChar;
 mod app_settings;
+mod command_palette;
 mod dashboard;
 mod edition;
 mod file_icons;
@@ -31,6 +32,8 @@ mod recovery;
 #[cfg(feature = "native-ops")]
 mod settings;
 mod tree_ui;
+#[cfg(feature = "native-ops")]
+mod terminal_panel;
 #[cfg(feature = "native-ops")]
 mod tools_ui;
 #[cfg(feature = "native-ops")]
@@ -433,11 +436,22 @@ fn browse_with_layout(
     let mut dashboard = application.then(|| dashboard::State::new(trash));
     #[cfg(feature = "native-ops")]
     if let Some(ui) = &mut dashboard {
-        if let Err(error) = ui.load_preferences() {
+        if let Err(error) = ui.load_preferences(&mut model) {
             message = display_name(std::ffi::OsStr::new(&error.to_string()));
         }
     }
+    #[cfg(feature = "native-ops")]
+    if let Some(w)=&mut workspace { w.observe(&model); }
     loop {
+        #[cfg(feature = "native-ops")]
+        if let Some(ui)=&mut dashboard {
+            if ui.tick_terminal()? {
+                match model.reload() {
+                    Ok(())=>{if let Some(w)=&mut workspace {w.observe_pane(&model);}},
+                    Err(error)=>message=display_name(std::ffi::OsStr::new(&error.to_string())),
+                }
+            }
+        }
         if let Some(ui) = &mut dashboard {
             #[cfg(feature = "native-ops")]
             let clipboard = workspace.as_ref().map_or(0, |w| w.clipboard_count());
@@ -459,9 +473,12 @@ fn browse_with_layout(
                 workspace.as_ref(),
             )?;
         }
+        #[cfg(feature = "native-ops")]
+        if dashboard.as_ref().is_some_and(|ui|ui.terminal_running()) && !event::poll(std::time::Duration::from_millis(100))? { continue; }
         let mut event = event::read()?;
         if let Some(ui) = &mut dashboard {
             let previous = model.directory.clone();
+            event = ui.remap_input(event, searching);
             let input = ui.input(event, &mut model, searching, writable);
             let switched = ui.take_pane_switch();
             #[cfg(feature = "native-ops")]
@@ -810,6 +827,8 @@ fn browse_with_layout(
             message = display_name(std::ffi::OsStr::new(&e.to_string()));
         }
     }
+    #[cfg(feature = "native-ops")]
+    if let Some(ui)=&mut dashboard { ui.save_on_exit(&model)?; }
     Ok(None)
 }
 

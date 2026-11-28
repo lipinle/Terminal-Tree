@@ -19,9 +19,12 @@ def session(binary, args, root, marker, steps, width=120):
     try:
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 26, width, 0, 0))
         before = termios.tcgetattr(slave)
+        env = dict(os.environ, TERM="xterm-256color", HOME=str(root),
+                   XDG_CONFIG_HOME=str(root / ".config"),
+                   TT_APP_CONFIG_DIR=str(root / ".config" / "terminal-tree"))
+        env.pop("TT_ICON_STYLE", None)
         process = subprocess.Popen([binary, *args], cwd=root, stdin=slave,
-                                   stdout=slave, stderr=slave,
-                                   env=dict(os.environ, TERM="xterm-256color", HOME=str(root)))
+                                   stdout=slave, stderr=slave, env=env)
         wait_output(master, process, marker)
         for keys, expected in steps:
             os.write(master, keys)
@@ -72,8 +75,38 @@ def main(binary):
             (b"\x1b", b"Clipboard: 0 files"),
             (b"\x1b[21~", b"Menu"),
             (b"\x1b", b"Clipboard: 0 files"),
+            (b"\x0b", b"Command Palette"),
+            (b"grid", b"Search: grid | 1 actions"),
+            (b"\r", b"Grid View"),
+            (b"\x0b", b"Command Palette"),
+            (b"tree view", b"Search: tree view | 1 actions"),
+            (b"\r", b"Tree View"),
+            (b"\x14", b"[2 "),
+            (b"\x17", b"[1 "),
+            (b"\x1bt", b"Terminal / Bash *"),
+            (b"printf panel-smoke\\\\n; pwd\r", b"exit status: 0"),
+            (b"\x1b", b"Terminal / Bash |"),
+            (b"\x1bh", b"Tree View"),
+            (b"\x1bh", b"Terminal / Bash |"),
+            (b"\x1b[<0;64;1M", b"[Terminal +]"),
+            (b"\x1b[<0;64;1M", b"[Terminal -]"),
         ])
         session(binary, ["--app", str(root)], root, b"Files *", [], width=45)
+        config = root / ".config"
+        config.mkdir(mode=0o700)
+        session(binary, ["--app", str(root)], root, b"Tree View", [
+            (b"b", b"BOOKMARKS"),
+            (b"\x1b[<0;45;1M", b"Settings Center"),
+            (b"\x1b[<0;2;6M", b"Save application preferences in this private directory?"),
+            (b"\x1b[<0;2;3M", b"Preferences saved"),
+            (b"\x1b", b"Settings Center"),
+            (b"\x1b", b"Tree View"),
+        ])
+        assert (config / "terminal-tree" / "rust-app-settings.json").is_file()
+        session(binary, ["--app", str(root)], root, b"Tree View", [
+            (b"B", b"Session bookmarks"),
+            (b"\x1b", b"Tree View"),
+        ])
         folder = root / "tree-folder"
         folder.mkdir()
         (folder / "nested.txt").write_text("nested")

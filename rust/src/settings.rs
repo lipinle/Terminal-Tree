@@ -10,10 +10,11 @@ use terminal_tree::{keymap::Keymap, theme::Theme, KindFilter, Model, Order};
 const NAME: &str = "rust-view-settings.json";
 const PANE_NAME: &str = "rust-pane-settings.json";
 const APP_NAME: &str = "rust-app-settings.json";
+const APP_LIMIT: usize = 65_536;
 fn error(s: &str) -> io::Error {
     io::Error::other(s)
 }
-fn open_dir(path: &Path) -> io::Result<File> {
+fn open_chain(path: &Path) -> io::Result<File> {
     if !path.is_absolute() {
         return Err(error("absolute journal required"));
     }
@@ -26,6 +27,10 @@ fn open_dir(path: &Path) -> io::Result<File> {
             _ => return Err(error("non-normal settings directory")),
         }
     }
+    Ok(dir)
+}
+fn open_dir(path: &Path) -> io::Result<File> {
+    let dir = open_chain(path)?;
     let m = dir.metadata()?;
     if m.uid() != rustix::process::getuid().as_raw() || m.mode() & 0o077 != 0 {
         return Err(error("private owned journal required"));
@@ -37,6 +42,19 @@ pub struct Store {
     path: PathBuf,
 }
 impl Store {
+    /// Create one explicitly approved private directory under an existing owned parent.
+    pub fn create_app_directory(path: &Path) -> io::Result<Self> {
+        let parent = path.parent().ok_or_else(|| error("missing configuration parent"))?;
+        let name = path.file_name().ok_or_else(|| error("missing configuration directory name"))?;
+        let dir = open_chain(parent)?;
+        let meta = dir.metadata()?;
+        if meta.uid() != rustix::process::getuid().as_raw() || meta.mode() & 0o022 != 0 {
+            return Err(error("configuration parent must be owned and not group/world writable"));
+        }
+        rx::mkdirat(&dir, name, Mode::from_bits_truncate(0o700))?;
+        dir.sync_all()?;
+        Self::new(path)
+    }
     pub fn new(path: &Path) -> io::Result<Self> {
         let path = if path.is_absolute() {
             path.to_path_buf()
@@ -70,17 +88,18 @@ impl Store {
             Err(e) => return Err(e.into()),
         };
         let m = f.metadata()?;
+        let limit = if name == APP_NAME { APP_LIMIT } else { 4096 };
         if !m.is_file()
             || m.nlink() != 1
             || m.uid() != rustix::process::getuid().as_raw()
             || m.mode() & 0o077 != 0
-            || m.len() > 4096
+            || m.len() > limit as u64
         {
             return Err(error("invalid Rust view settings file"));
         }
         let mut bytes = Vec::new();
-        f.take(4097).read_to_end(&mut bytes)?;
-        if bytes.len() > 4096 {
+        f.take((limit + 1) as u64).read_to_end(&mut bytes)?;
+        if bytes.len() > limit {
             return Err(error("settings too large"));
         }
         Ok(Some(
@@ -154,7 +173,7 @@ impl Store {
         self.read_named(APP_NAME)
     }
     pub fn save_app(&self, value: &serde_json::Value) -> io::Result<()> {
-        if serde_json::to_vec(value).map_err(io::Error::other)?.len() >= 4096 {
+        if serde_json::to_vec(value).map_err(io::Error::other)?.len() >= APP_LIMIT {
             return Err(error("application settings too large"));
         }
         self.save_named(APP_NAME, value)
