@@ -236,6 +236,12 @@ impl Workspace {
     pub fn marked(&self, p: &Path) -> bool {
         self.marks.contains_key(p)
     }
+    pub fn clipboard_count(&self) -> usize {
+        self.clipboard.as_ref().map_or(0, |(items, _)| items.len())
+    }
+    pub fn trash_path(&self) -> PathBuf {
+        self.data.join("Trash/files")
+    }
     pub fn marked_count(&self) -> usize {
         self.marks.len()
     }
