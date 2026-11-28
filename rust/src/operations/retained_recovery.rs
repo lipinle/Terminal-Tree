@@ -350,14 +350,13 @@ mod tests {
         {
             let path = work.join(format!("interrupted-{index}"));
             let destination = engine.destination(&path).unwrap();
-            let result =
-                engine.copy_retained_recovery(&review, &destination, &mut |checkpoint| {
-                    if checkpoint == point {
-                        Err(io::Error::other("injected interruption"))
-                    } else {
-                        Ok(())
-                    }
-                });
+            let result = engine.copy_retained_recovery(&review, &destination, &mut |checkpoint| {
+                if checkpoint == point {
+                    Err(io::Error::other("injected interruption"))
+                } else {
+                    Ok(())
+                }
+            });
             assert!(result.is_err());
             if index == 0 {
                 assert!(!path.exists());
