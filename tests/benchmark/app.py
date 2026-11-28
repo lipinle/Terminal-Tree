@@ -11,7 +11,7 @@ import tempfile
 import termios
 
 from parity import wait_output
-from visual_preview import pdf
+from visual_preview import pdf, png
 
 
 def session(binary, args, root, marker, steps, width=120):
@@ -173,16 +173,22 @@ def main(binary):
             (b"\x1b",b"Git Manager |"),
             (b"\x1b",b"Tree View"),
         ])
+        image_disabled=root/"visual-disabled"
+        image_disabled.mkdir()
+        (image_disabled/"image.png").write_bytes(png)
+        session(binary,["--app",str(image_disabled)],root,b"Visual Preview:",[])
         if os.environ.get("TT_TEST_VISUAL_PREVIEW")=="1":
             image_dir=root/"visual-ui"
             image_dir.mkdir()
             (image_dir/"document.pdf").write_bytes(pdf)
+            (image_dir/"image.png").write_bytes(png)
             session(binary,["--app",str(image_dir)],root,b"Tree View",[
                 (b"\x1b[<0;55;1M",b"Add-ons / Integrations"),
                 (b"\x1b[<0;2;5M",b"Visual Preview | Installed | Enabled"),
                 (b"\x1b",b"Page 1/2"),
                 (b"\x1b[<65;100;8M",b"Page 2/2"),
                 (b"\x1b[<64;100;8M",b"Page 1/2"),
+                (b"\x1b[B",b"Thumbnail"),
             ])
     print("TT_APP dashboard, preview, menus, compact layout and shared clipboard passed")
 

@@ -100,6 +100,10 @@ The bottom command console retains bounded session scrollback across commands (u
 
 Alt+S starts or closes an explicitly approved interactive Bash session inside the terminal panel. The shell preserves working directory, variables and job control; it starts from the active file directory but subsequently navigates independently. Alt+T switches focus without terminating it, and Alt+H hides it. Ctrl+C and Ctrl+D reach the shell when focused. The original command console remains the default. Linux PTY allocation uses rustix and system setsid. The display is a bounded, escaped TERM=dumb transcript, not a VT100 emulator: full-screen editors and curses programs are not supported yet. Use F5 to refresh the file list after interactive shell changes. Shell commands run with ordinary OS permissions, outside the file-operation journal; detached descendants may survive closure.
 
+### Dashboard redraw and visual preview troubleshooting
+
+The dashboard buffers frames and paints complete rows instead of clearing the whole display on Linux. Unchanged idle frames and passive mouse movement do not repaint the screen. Supported terminals also receive synchronized-update boundaries. Image and PDF Auto previews explain whether the optional helper is missing or disabled rather than silently displaying hex. Add-ons includes installation instructions; the helper is not bundled in the UX preview artifact. See [helper setup](visual-preview/README.md).
+
 ## Navigation and search
 
 Use the installed executable (examples below assume it is on your PATH), or substitute its full path.

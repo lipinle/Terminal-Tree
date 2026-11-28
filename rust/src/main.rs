@@ -21,6 +21,7 @@ use unicode_width::UnicodeWidthChar;
 mod app_settings;
 mod command_palette;
 mod dashboard;
+mod dashboard_frame;
 mod edition;
 mod file_icons;
 mod help;
@@ -477,9 +478,16 @@ fn browse_with_layout(
                 workspace.as_ref(),
             )?;
         }
-        #[cfg(feature = "native-ops")]
-        if dashboard.as_ref().is_some_and(|ui|ui.terminal_running()) && !event::poll(std::time::Duration::from_millis(100))? { continue; }
-        let mut event = event::read()?;
+        let next_event=loop {
+            #[cfg(feature = "native-ops")]
+            if dashboard.as_ref().is_some_and(|ui|ui.terminal_running()) && !event::poll(std::time::Duration::from_millis(100))? {break None;}
+            let input=event::read()?;
+            // Mouse motion without a button does not alter the dashboard.
+            // Drag, scroll, resize and all key events are still delivered.
+            if dashboard.is_some()&&matches!(&input,Event::Mouse(m) if m.kind==MouseEventKind::Moved){continue;}
+            break Some(input);
+        };
+        let Some(mut event)=next_event else{continue;};
         if let Some(ui) = &mut dashboard {
             let previous = model.directory.clone();
             event = ui.remap_input(event, searching);

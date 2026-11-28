@@ -249,6 +249,7 @@ pub struct State {
     side_cursor: usize,
     side_top: usize,
     preview_enabled: bool,
+    frame_cache: super::dashboard_frame::FrameCache,
     preview_key: Option<PreviewKey>,
     preview_lines: Vec<String>,
     preview_scroll: usize,
@@ -290,6 +291,7 @@ impl State {
         let mut state = Self {
             places: Vec::new(), bookmarks: Vec::new(), trash,
             side_focus: false, side_cursor: 0, side_top: 0, preview_enabled: true,
+            frame_cache: Default::default(),
             preview_key: None, preview_lines: Vec::new(), preview_scroll: 0, preview_styles: Vec::new(), preview_mode: 0,
             #[cfg(feature = "native-ops")]
             visual_frame: None,
@@ -707,10 +709,19 @@ impl State {
             }).collect();
             labels.push(format!("Visual Preview | {} | {} | On selection",if terminal_tree::visual_preview::installed(){"Installed"}else{"Not installed"},if self.prefs.visual_preview{"Enabled"}else{"Disabled"}));
             labels.push(format!("Last run: {}",self.last_tool.as_deref().unwrap_or("None")));
-            labels.push("All companions run only when requested; no background services.".into());
+            labels.push("Visual Preview installation help".into());
+            labels.push("Tools run on request; Visual Preview runs on selection when enabled.".into());
             match super::choose("Add-ons / Integrations (Enter toggles enabled)",&labels)? {
                 Some(i @ 0..=2)=>self.prefs.companions[i]=!self.prefs.companions[i],
                 Some(3)=>{self.prefs.visual_preview=!self.prefs.visual_preview;self.preview_key=None;self.visual_frame=None;},
+                Some(5)=>super::page("Visual Preview installation", &[
+                    "Build the optional helper from the same source checkout.".into(),
+                    "Requires Rust 1.92 or newer:".into(),
+                    "rustup run stable cargo build --release --manifest-path visual-preview/Cargo.toml".into(),
+                    "sudo install -m 755 visual-preview/target/release/tt-visual-preview /usr/local/bin/tt-visual-preview".into(),
+                    "Return to Add-ons, enable Visual Preview, then select an image or PDF.".into(),
+                    "Helper is not bundled in the preview artifact; license audit pending.".into(),
+                ])?,
                 Some(_)=>(),
                 None=>return Ok(()),
             }
@@ -868,6 +879,10 @@ impl State {
         {
             self.visual_frame=None;
             if let Some(e)=entry.filter(|e|self.preview_mode==0&&!e.directory&&!e.symlink&&terminal_tree::visual_preview::format(&e.path).is_some()) {
+                if !self.prefs.visual_preview || !terminal_tree::visual_preview::installed() {
+                    self.preview_lines=vec![e.name.clone(),if !terminal_tree::visual_preview::installed(){"Visual Preview: not installed".into()}else{"Visual Preview: disabled".into()}, "Open Add-ons (Shift+F11)".into(), "Visual Preview installation help".into(), "Alt+P for Info / Hex".into()];
+                    return;
+                }
                 if self.prefs.visual_preview {
                     let page=if terminal_tree::visual_preview::format(&e.path)==Some("pdf"){self.visual_page}else{1};
                     match terminal_tree::visual_preview::render(&e.path,page,self.visual_size.0,self.visual_size.1) {
@@ -1076,14 +1091,14 @@ impl State {
         let (w, full_h) = terminal::size()?;
         let h=full_h-self.panel_rows(full_h);
         let width = w.saturating_sub(1);
-        let mut out = io::stdout().lock();
+        let mut out = Vec::new();
         queue!(out, MoveTo(0, 0), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background), Clear(ClearType::All),
             SetForegroundColor(self.prefs.accent),
             Print(super::clip("Terminal Tree  File  Edit  View  Go  Tools  Settings  Add-ons", usize::from(width))),
             SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
         #[cfg(feature = "native-ops")]
         self.terminal_button(&mut out,width)?;
-        if h < 8 { queue!(out,ResetColor)?; return out.flush(); }
+        if h < 8 { queue!(out,ResetColor)?; return self.frame_cache.present(out,w,full_h,self.prefs.background); }
         let side = if self.active_right { "Right" } else { "Left" };
         let mode = if personal { "Personal" } else if writable { "Workspace" } else { "Read-only" };
         let header = format!("Dual Pane | Active: {side} | [{} / {mode}]", super::edition::NAME);
@@ -1124,7 +1139,7 @@ impl State {
         #[cfg(feature = "native-ops")]
         self.draw_terminal(&mut out,full_h,w.saturating_sub(1),model)?;
         queue!(out,ResetColor)?;
-        out.flush()
+        self.frame_cache.present(out,w,full_h,self.prefs.background)
     }
 
     pub fn draw(
@@ -1138,12 +1153,12 @@ impl State {
         let h=full_h-self.panel_rows(full_h);
         let l = self.layout(w,h);
         if l.sidebar == 0 { self.side_focus = false; }
-        let mut out = io::stdout().lock();
+        let mut out = Vec::new();
         queue!(out, MoveTo(0,0), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background), Clear(ClearType::All),
             SetForegroundColor(self.prefs.accent), Print(super::clip("Terminal Tree  File  Edit  View  Go  Tools  Settings  Add-ons", usize::from(l.width))), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
         #[cfg(feature = "native-ops")]
         self.terminal_button(&mut out,l.width)?;
-        if h < 8 { queue!(out,ResetColor)?; return out.flush(); }
+        if h < 8 { queue!(out,ResetColor)?; return self.frame_cache.present(out,w,full_h,self.prefs.background); }
         let mode = if personal { "Personal" } else if writable { "Workspace" } else { "Read-only" };
         let path_width = if self.prefs.toolbar { draw_toolbar(&mut out,l.width,self.view,&self.prefs)? } else { l.width };
         let path = if let Some(input) = &self.location {
@@ -1268,7 +1283,7 @@ impl State {
         #[cfg(feature = "native-ops")]
         self.draw_terminal(&mut out,full_h,w.saturating_sub(1),model)?;
         queue!(out,ResetColor)?;
-        out.flush()
+        self.frame_cache.present(out,w,full_h,self.prefs.background)
     }
 
     fn menu(&mut self, category: Option<usize>, writable: bool) -> io::Result<Option<Event>> {
@@ -1365,6 +1380,8 @@ impl State {
     /// Handle shell-only interactions; translate file-list coordinates back to
     /// the existing navigator so the original review and write engine is used.
     pub fn input(&mut self, mut event: Event, model: &mut Model, searching: bool, writable: bool) -> io::Result<Option<Event>> {
+        // Other views and modal dialogs may repaint the physical screen.
+        self.frame_cache.invalidate();
         let (w,full_h) = terminal::size()?;
         let h=full_h-self.panel_rows(full_h);
         let l = self.layout(w,h);
