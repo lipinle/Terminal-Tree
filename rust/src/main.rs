@@ -1065,6 +1065,39 @@ fn run() -> io::Result<()> {
                 ))
             }
         }
+        Some("--archive-member") => {
+            let path = path_arg(Some(
+                args.next()
+                    .ok_or_else(|| io::Error::other("archive path required"))?,
+            ))?;
+            let name = args
+                .next()
+                .and_then(|name| name.into_string().ok())
+                .ok_or_else(|| io::Error::other("UTF-8 archive member name required"))?;
+            if args.next().as_deref() != Some(std::ffi::OsStr::new("--stdout"))
+                || args.next().is_some()
+                || io::stdout().is_terminal()
+            {
+                return Err(io::Error::other(
+                    "archive member requires --stdout and non-terminal output",
+                ));
+            }
+            #[cfg(all(feature = "native-ops", target_os = "linux"))]
+            {
+                let data = terminal_tree::archive::native::read_member(&path, &name)?;
+                let mut out = io::stdout().lock();
+                out.write_all(&data)?;
+                out.flush()
+            }
+            #[cfg(not(all(feature = "native-ops", target_os = "linux")))]
+            {
+                let _ = (path, name);
+                Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "archive member access requires the native Linux build",
+                ))
+            }
+        }
         Some("--archive-layout") => {
             let path = path_arg(Some(
                 args.next()
@@ -1298,7 +1331,7 @@ fn run() -> io::Result<()> {
             Ok(())
         }
         _ => {
-            eprintln!("Experimental read-only Rust port\nUsage: terminal-tree --list [-a] [PATH] | --browse [PATH] | --tree [PATH] | --panes [LEFT] [RIGHT] [--keys SPEC] [--bookmarks-in PATH] [--bookmarks-out PATH] | --find PATH QUERY [--content] [--hidden] [--depth N] | --archive-list PATH | --archive-layout PATH [--portable] | --archive-build --stdout NAME PATH ... | --suggest-name DIRECTORY NAME | --image-preview PATH | --rename-plan DIRECTORY NEEDLE REPLACEMENT NAME... | --scan-count PATH [REPEATS] | --version | --edition");
+            eprintln!("Experimental read-only Rust port\nUsage: terminal-tree --list [-a] [PATH] | --browse [PATH] | --tree [PATH] | --panes [LEFT] [RIGHT] [--keys SPEC] [--bookmarks-in PATH] [--bookmarks-out PATH] | --find PATH QUERY [--content] [--hidden] [--depth N] | --archive-list PATH | --archive-layout PATH [--portable] | --archive-member PATH NAME --stdout | --archive-build --stdout NAME PATH ... | --suggest-name DIRECTORY NAME | --image-preview PATH | --rename-plan DIRECTORY NEEDLE REPLACEMENT NAME... | --scan-count PATH [REPEATS] | --version | --edition");
             Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "unsupported or missing command",

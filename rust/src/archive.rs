@@ -382,10 +382,7 @@ mod layout_tests {
         append(&mut bytes, "empty", b"");
         bytes.resize(bytes.len() + 2 * BLOCK, 0);
         assert_eq!(member_payload(&bytes, "first").unwrap(), b"hello");
-        assert_eq!(
-            member_payload(&bytes, "folder/second").unwrap(),
-            &[7; 513]
-        );
+        assert_eq!(member_payload(&bytes, "folder/second").unwrap(), &[7; 513]);
         assert!(member_payload(&bytes, "empty").unwrap().is_empty());
         assert!(member_payload(&bytes, "folder").is_err());
         assert!(member_payload(&bytes, "missing").is_err());
