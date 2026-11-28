@@ -863,3 +863,23 @@ fn invalid_operation_paths_leave_source_and_journal_unchanged() {
     assert_eq!(fs::read_dir(&info).unwrap().count(), 0);
     assert_eq!(fs::read_dir(&f.journal).unwrap().count(), 0);
 }
+
+#[test]
+fn deep_tree_review_refuses_before_any_mutation() {
+    let f = Fixture::new();
+    let e = f.engine();
+    let source = f.root.join("deep");
+    fs::create_dir(&source).unwrap();
+    let mut leaf = source.clone();
+    for _ in 0..129 {
+        leaf.push("d");
+        fs::create_dir(&leaf).unwrap();
+    }
+    let marker = leaf.join("marker");
+    fs::write(&marker, b"unchanged").unwrap();
+    let error = e.review(&source).unwrap_err();
+    assert!(error.to_string().contains("directory depth exceeds"));
+    assert_eq!(fs::read(&marker).unwrap(), b"unchanged");
+    assert!(!f.root.join("destination").exists());
+    assert_eq!(fs::read_dir(&f.journal).unwrap().count(), 0);
+}

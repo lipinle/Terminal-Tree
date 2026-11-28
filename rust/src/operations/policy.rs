@@ -73,7 +73,7 @@ fn staged(p: &Path) -> bool {
     })
 }
 
-fn unescape(raw: &[u8]) -> io::Result<PathBuf> {
+pub(super) fn unescape(raw: &[u8]) -> io::Result<PathBuf> {
     let mut result = Vec::new();
     let mut i = 0;
     while i < raw.len() {
@@ -304,7 +304,7 @@ impl PersonalPolicy {
     // Only the Trash adapter can use this narrow bypass. Ordinary review,
     // destination, move, copy and create continue to reject the entire Trash.
     pub(super) fn trash_dir(&self, dir: &Path) -> io::Result<File> {
-        let root = &self.roots[0];
+        let root = self.roots.first().ok_or_else(|| fail("approved home root missing"))?;
         root.check()?;
         let trash = self.data_home.join("Trash");
         require(

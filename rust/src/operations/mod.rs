@@ -149,35 +149,29 @@ fn same_parent(path: &Path, f: &File) -> io::Result<()> {
         "parent directory changed",
     )
 }
-// Decode Linux mountinfo octal escapes, including non-UTF-8 paths.
+// Reject malformed mount tables rather than trusting a partial decode.
 fn reject_mounts(path: &Path) -> io::Result<()> {
-    use std::os::unix::ffi::OsStringExt;
-    for line in fs::read("/proc/self/mountinfo")?.split(|b| *b == b'\n') {
-        let Some(raw) = line.split(|b| *b == b' ').nth(4) else {
-            continue;
-        };
-        let mut decoded = Vec::new();
-        let mut i = 0;
-        while i < raw.len() {
-            if raw[i] == b'\\'
-                && i + 3 < raw.len()
-                && raw[i + 1..i + 4].iter().all(|b| (b'0'..=b'7').contains(b))
-            {
-                decoded
-                    .push((raw[i + 1] - b'0') * 64 + (raw[i + 2] - b'0') * 8 + (raw[i + 3] - b'0'));
-                i += 4;
-            } else {
-                decoded.push(raw[i]);
-                i += 1;
-            }
-        }
-        let mount = PathBuf::from(OsString::from_vec(decoded));
-        require(
-            !mount.starts_with(path),
-            "mount point or nested mount refused",
-        )?;
+    reject_mounts_in(path, &fs::read("/proc/self/mountinfo")?)
+}
+fn reject_mounts_in(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut seen = false;
+    for line in bytes.split(|b| *b == b'\n').filter(|line| !line.is_empty()) {
+        let raw = line.split(|b| *b == b' ').nth(4)
+            .ok_or_else(|| fail("invalid mountinfo"))?;
+        let mount = policy::normal_absolute(&policy::unescape(raw)?)?;
+        seen = true;
+        require(!mount.starts_with(path), "mount point or nested mount refused")?;
     }
-    Ok(())
+    require(seen, "mount table unavailable")
+}
+
+// Bound recursive descriptor walks independently of the caller's stack size.
+const MAX_OPERATION_DEPTH: usize = 128;
+fn check_operation_depth(depth: usize) -> io::Result<()> {
+    require(depth <= MAX_OPERATION_DEPTH, "operation directory depth exceeds 128")
+}
+fn check_relative_depth(path: &Path) -> io::Result<()> {
+    check_operation_depth(path.components().filter(|c| matches!(c, Component::Normal(_))).count())
 }
 
 #[derive(Debug, Clone)]
@@ -856,5 +850,32 @@ impl Engine {
             out.push(value);
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod panic_regression_tests {
+    use super::*;
+
+    #[test]
+    fn mount_table_refuses_invalid_escapes_and_missing_fields() {
+        let path = Path::new("/workspace");
+        for raw in [
+            b"1 0 0:1 / /bad\\777 rw - ext4 /dev/test rw\n".as_slice(),
+            b"1 0 0:1 / /bad\\000 rw - ext4 /dev/test rw\n",
+            b"1 0 0:1 / /bad\\12 rw - ext4 /dev/test rw\n",
+            b"1 0 0:1 /\n",
+            b"",
+        ] {
+            assert!(reject_mounts_in(path, raw).is_err());
+        }
+        assert!(reject_mounts_in(path, b"1 0 0:1 / /other\\040dir rw - ext4 /dev/test rw\n").is_ok());
+        assert!(reject_mounts_in(path, b"1 0 0:1 / /workspace/nested rw - ext4 /dev/test rw\n").is_err());
+    }
+
+    #[test]
+    fn operation_depth_boundary_is_explicit() {
+        assert!(check_operation_depth(MAX_OPERATION_DEPTH).is_ok());
+        assert!(check_operation_depth(MAX_OPERATION_DEPTH + 1).is_err());
     }
 }

@@ -114,7 +114,7 @@ fn parse_info(bytes: &[u8]) -> io::Result<PathBuf> {
     )?;
     let paths: Vec<_> = lines.filter_map(|s| s.strip_prefix(b"Path=")).collect();
     require(paths.len() == 1, "missing or ambiguous Trash path")?;
-    percent_decode(paths[0])
+    percent_decode(paths.first().ok_or_else(|| fail("missing Trash path"))?)
 }
 fn info_file(parent: &File, name: &std::ffi::OsStr) -> io::Result<(Identity, Vec<u8>)> {
     let file: File = rx::openat(
@@ -180,6 +180,7 @@ fn preflight_purge(
     snapshot: &Snapshot,
     rel: &Path,
 ) -> io::Result<()> {
+    super::check_relative_depth(rel)?;
     let expected = snapshot
         .get(rel)
         .ok_or_else(|| fail("entry not reviewed"))?;
@@ -213,6 +214,7 @@ fn erase(
     checkpoint: &mut dyn FnMut(&str) -> io::Result<()>,
 ) -> io::Result<()> {
     reject_mounts(physical)?;
+    super::check_relative_depth(rel)?;
     let expected = snapshot
         .get(rel)
         .ok_or_else(|| fail("entry not reviewed"))?;

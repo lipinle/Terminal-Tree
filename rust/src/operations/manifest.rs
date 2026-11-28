@@ -126,6 +126,7 @@ struct ManifestCollector<'a> {
 
 impl ManifestCollector<'_> {
     fn collect(&mut self, path: &Path, relative: &Path) -> io::Result<()> {
+        super::check_relative_depth(relative)?;
         (self.checkpoint)("manifest-entry")?;
         let m = fs::symlink_metadata(path)?;
         require(m.dev() == self.device, "cross-device entry refused")?;
@@ -329,7 +330,9 @@ fn copy_entry(
     checkpoint: &mut dyn FnMut(&str) -> io::Result<()>,
     hardlinks: &mut BTreeMap<(u64, u64), PathBuf>,
     buffer: &mut [u8],
+    depth: usize,
 ) -> io::Result<()> {
+    super::check_operation_depth(depth)?;
     checkpoint("copy-entry")?;
     let m = fs::symlink_metadata(src)?;
     require(m.dev() == device, "cross-device source refused")?;
@@ -346,6 +349,7 @@ fn copy_entry(
                 checkpoint,
                 hardlinks,
                 buffer,
+                depth + 1,
             )?;
         }
         metadata(&output, &m, &attrs)?;
@@ -392,6 +396,7 @@ fn copy_entry(
 }
 // Metadata-only rechecks supplement, rather than replace, content manifests.
 fn collect_snapshot(path: &Path, rel: &Path, device: u64, out: &mut Snapshot) -> io::Result<()> {
+    super::check_relative_depth(rel)?;
     let m = fs::symlink_metadata(path)?;
     require(m.dev() == device, "cross-device entry refused")?;
     if m.is_dir() {
@@ -438,6 +443,7 @@ pub(crate) fn copy_tree(
         checkpoint,
         &mut BTreeMap::new(),
         &mut buffer,
+        0,
     )?;
     // Independently read and sync every staged file and directory before publish.
     checkpoint("copy-verify-stage")?;

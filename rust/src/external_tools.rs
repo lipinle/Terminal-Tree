@@ -104,10 +104,12 @@ pub(crate) fn run_bytes(program: &Path, arguments: &[OsString], directory: &Path
         .stderr(Stdio::null())
         .spawn()?;
     let mut output = Vec::new();
-    let result = child
-        .stdout
-        .take()
-        .expect("piped stdout")
+    let Some(stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        child.wait()?;
+        return Err(io::Error::other("companion output pipe unavailable"));
+    };
+    let result = stdout
         .take((MAX_OUTPUT + 1) as u64)
         .read_to_end(&mut output);
     // Dropping the pipe stops consuming excess output; timeout bounds the
