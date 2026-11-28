@@ -21,11 +21,11 @@ mod edition;
 mod help;
 mod places;
 mod platform;
-mod tree_ui;
 #[cfg(feature = "native-ops")]
 mod recovery;
 #[cfg(feature = "native-ops")]
 mod settings;
+mod tree_ui;
 #[cfg(feature = "native-ops")]
 mod worker;
 #[cfg(feature = "native-ops")]

@@ -30,7 +30,9 @@ pub struct TreeModel {
 fn plain_directory(path: &Path) -> io::Result<fs::Metadata> {
     let metadata = fs::symlink_metadata(path)?;
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
-        return Err(io::Error::other("tree expansion requires a plain directory"));
+        return Err(io::Error::other(
+            "tree expansion requires a plain directory",
+        ));
     }
     #[cfg(windows)]
     {
@@ -98,7 +100,10 @@ impl TreeModel {
         } else if self.selected.saturating_sub(self.top) >= height {
             self.top = self.selected + 1 - height;
         }
-        (self.top, self.top.saturating_add(height).min(self.rows.len()))
+        (
+            self.top,
+            self.top.saturating_add(height).min(self.rows.len()),
+        )
     }
 
     // Recheck each observed descendant component, not only the final component.
@@ -159,7 +164,10 @@ impl TreeModel {
             depth,
             expanded: false,
         });
-        drop(self.rows.splice(self.selected + 1..self.selected + 1, children));
+        drop(
+            self.rows
+                .splice(self.selected + 1..self.selected + 1, children),
+        );
         self.rows[self.selected].expanded = true;
         Ok(())
     }
@@ -206,7 +214,10 @@ impl TreeModel {
                 .ok_or_else(|| io::Error::other("invalid tree structure"))?;
             self.selected = parent;
         }
-        let selected_path = self.rows.get(self.selected).map(|row| row.entry.path.clone());
+        let selected_path = self
+            .rows
+            .get(self.selected)
+            .map(|row| row.entry.path.clone());
         self.rows.retain(|row| row.depth <= limit);
         for row in &mut self.rows {
             if row.depth == limit {
