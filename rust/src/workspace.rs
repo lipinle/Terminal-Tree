@@ -612,7 +612,11 @@ impl Workspace {
                 let path = model.directory.join(name);
                 self.ordinary(&path)?;
                 let destination = self.engine.destination(&path)?;
-                if !confirm("Extract to new directory", &[&source, destination.path()], "yes")? {
+                if !confirm(
+                    "Extract to new directory",
+                    &[&source, destination.path()],
+                    "yes",
+                )? {
                     return Ok("Cancelled".into());
                 }
                 self.selected(model)?;

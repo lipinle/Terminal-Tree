@@ -46,18 +46,27 @@ fn staged_extraction_never_merges_or_overwrites_existing_trees() {
     .unwrap();
     let source = workspace.join("archive.tar");
     fs::write(&source, &archive).unwrap();
-    assert_eq!(engine.read_archive_for_extraction(&source).unwrap(), archive);
+    assert_eq!(
+        engine.read_archive_for_extraction(&source).unwrap(),
+        archive
+    );
     let path = workspace.join("result");
     let destination = engine.destination(&path).unwrap();
     let mut damaged = archive.clone();
     *damaged.last_mut().unwrap() = 1;
-    assert!(engine.extract_archive_reviewed(&destination, &damaged).is_err());
+    assert!(engine
+        .extract_archive_reviewed(&destination, &damaged)
+        .is_err());
     assert!(!path.exists());
     assert_eq!(fs::read_dir(&journal).unwrap().count(), 0);
-    engine.extract_archive_reviewed(&destination, &archive).unwrap();
+    engine
+        .extract_archive_reviewed(&destination, &archive)
+        .unwrap();
     assert_eq!(fs::read(path.join("folder/file")).unwrap(), b"hello\0");
     assert!(path.join("empty").is_dir());
-    assert!(engine.extract_archive_reviewed(&destination, &archive).is_err());
+    assert!(engine
+        .extract_archive_reviewed(&destination, &archive)
+        .is_err());
     assert_eq!(fs::read(path.join("folder/file")).unwrap(), b"hello\0");
     assert_eq!(fs::read_dir(&workspace).unwrap().count(), 2);
     assert_eq!(fs::read(&source).unwrap(), archive);

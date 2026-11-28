@@ -155,8 +155,10 @@ impl Engine {
                 && layout
                     .directories
                     .iter()
-                    .all(|d| before.contains_key(Path::new(d)))
-                && files.keys().all(|p| before.contains_key(*p)),
+                    .all(|d| before.contains_key(&Path::new(".").join(d)))
+                && files
+                    .keys()
+                    .all(|p| before.contains_key(&Path::new(".").join(p))),
             "extraction layout differs",
         )?;
         for directory in &layout.directories {
