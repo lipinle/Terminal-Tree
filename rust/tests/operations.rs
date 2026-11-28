@@ -770,3 +770,42 @@ fn recovery_report_preserves_bad_records_and_shows_valid_ones() {
         .is_symlink());
     assert_eq!(fs::read_dir(&f.journal).unwrap().count(), 3);
 }
+
+#[test]
+fn recovery_report_bounds_all_directory_entries_not_just_pending_records() {
+    let f = Fixture::new();
+    let e = f.engine();
+    for index in 0..4097 {
+        fs::write(f.journal.join(format!("unrelated-{index}")), b"keep").unwrap();
+    }
+    let (rows, truncated) = e.recovery_report().unwrap();
+    assert!(rows.is_empty());
+    assert!(truncated);
+    assert_eq!(fs::read_dir(&f.journal).unwrap().count(), 4097);
+    assert_eq!(fs::read(f.journal.join("unrelated-4096")).unwrap(), b"keep");
+}
+
+#[test]
+fn recovery_report_refuses_unsafe_records_without_mutation() {
+    let f = Fixture::new();
+    let e = f.engine();
+    let public = f.journal.join("public.pending.json");
+    let linked = f.journal.join("linked.pending.json");
+    let alias = f.journal.join("alias");
+    let directory = f.journal.join("directory.pending.json");
+    for path in [&public, &linked] {
+        fs::write(path, b"{}").unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    fs::set_permissions(&public, fs::Permissions::from_mode(0o644)).unwrap();
+    fs::hard_link(&linked, &alias).unwrap();
+    fs::create_dir(&directory).unwrap();
+    let (rows, truncated) = e.recovery_report().unwrap();
+    assert!(!truncated);
+    assert_eq!(rows.len(), 3);
+    assert!(rows.iter().all(|(_, result)| result.is_err()));
+    assert_eq!(fs::read(&public).unwrap(), b"{}");
+    assert_eq!(fs::read(&linked).unwrap(), b"{}");
+    assert_eq!(fs::read(&alias).unwrap(), b"{}");
+    assert!(directory.is_dir());
+}
