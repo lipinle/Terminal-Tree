@@ -89,10 +89,15 @@ fn draw(
         out,
         Print(clip(
             &format!(
-                "Terminal Tree [panes / read-only] | Tab {}/{} | Focus: {:?}",
+                "Terminal Tree [panes / read-only] | Tab {}/{} | Focus: {:?} | Row: {}",
                 layout.active() + 1,
                 layout.tab_count(),
-                focus
+                focus,
+                if layout.focused().rows().is_empty() {
+                    0
+                } else {
+                    layout.focused().selected() + 1
+                }
             ),
             limit
         ))
