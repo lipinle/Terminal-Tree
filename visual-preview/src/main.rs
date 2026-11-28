@@ -28,7 +28,7 @@ fn pdf(data:Vec<u8>,page:usize,width:u32,height:u32)->Result<(DynamicImage,u32),
     Ok((decode_image(&png)?,pages.len() as u32))
 }
 fn run()->Result<(),Box<dyn std::error::Error>> {
-    let args:Vec<_>=std::env::args().skip(1).collect();
+    let args:Vec<_>=std::env::args_os().skip(1).map(|arg|arg.into_string().map_err(|_|"invalid UTF-8 argument")).collect::<std::result::Result<Vec<_>,_>>()?;
     if args.len()!=5||!matches!(args[0].as_str(),"rgb-v1"|"rgb-v2") {return Err("usage: tt-visual-preview rgb-v1|rgb-v2 image|pdf PAGE WIDTH HEIGHT < file".into());}
     let max=if args[0]=="rgb-v2"{1024}else{160};
     let page:usize=args[2].parse()?;

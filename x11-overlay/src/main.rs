@@ -35,7 +35,7 @@ fn grid(w:u16,h:u16,cols:u16,rows:u16,hints:&[u32])->Result<(u16,u16,u16,u16)>{
 }
 fn probe(cols:u16,rows:u16,pinned:Option<Window>)->Result<()>{
     let (c,s)=x11rb::connect(None)?;
-    let root=c.setup().roots[s].root;
+    let root=c.setup().roots.get(s).ok_or("X11 screen not found")?.root;
     let parent=active(&c,root,atom(&c,b"_NET_ACTIVE_WINDOW")?)?.ok_or("no active window")?;
     if pinned.is_some_and(|id|id!=parent)||parent==root||!is_terminal(&c,parent)?{return Err("active window is not the selected GNOME Terminal client".into());}
     let g=c.get_geometry(parent)?.reply()?;
@@ -57,7 +57,7 @@ fn make(c:&RustConnection,root:Window,parent:Window,rect:Rect,w:u16,h:u16,rgb:&[
     let visual=screen.allowed_depths.iter().flat_map(|d|&d.visuals).find(|v|v.visual_id==a.visual).ok_or("visual not found")?;
     if visual.class!=VisualClass::TRUE_COLOR||visual.red_mask!=0xff0000||visual.green_mask!=0x00ff00||visual.blue_mask!=0x0000ff{return Err("unsupported X11 visual".into());}
     if !c.setup().pixmap_formats.iter().any(|f|f.depth==g.depth&&f.bits_per_pixel==32&&f.scanline_pad==32){return Err("unsupported X11 pixel format".into());}
-    if rgb.len()!=usize::from(w)*usize::from(h)*3||w==0||h==0||w>1024||h>1024||rect.w!=w||rect.h!=h{return Err("invalid pixel frame".into());}
+    if w==0||h==0||w>1024||h>1024||rect.w!=w||rect.h!=h||rgb.len()!=usize::from(w)*usize::from(h)*3{return Err("invalid pixel frame".into());}
     let version=c.shape_query_version()?.reply()?;
     if (version.major_version,version.minor_version)<(1,1){return Err("X Shape input transparency unavailable".into());}
     let win=c.generate_id()?;
@@ -87,7 +87,7 @@ fn make(c:&RustConnection,root:Window,parent:Window,rect:Rect,w:u16,h:u16,rgb:&[
     Ok(win)
 }
 fn run()->Result<()>{
-    let a:Vec<_>=std::env::args().skip(1).collect();
+    let a:Vec<_>=std::env::args_os().skip(1).map(|arg|arg.into_string().map_err(|_|"invalid UTF-8 argument")).collect::<std::result::Result<Vec<_>,_>>()?;
     if a.first().map(String::as_str)==Some("--probe"){
         if !matches!(a.len(),3|4){return Err("usage: tt-x11-overlay --probe COLS ROWS [WINDOW_ID]".into());}
         return probe(a[1].parse()?,a[2].parse()?,a.get(3).map(|s|parse_window(s)).transpose()?);
@@ -99,7 +99,7 @@ fn run()->Result<()>{
     let mut rgb=vec![0;usize::from(rect.w)*usize::from(rect.h)*3];
     io::stdin().read_exact(&mut rgb)?;
     let (c,s)=x11rb::connect(None)?;
-    let root=c.setup().roots[s].root;
+    let root=c.setup().roots.get(s).ok_or("X11 screen not found")?.root;
     let active_atom=atom(&c,b"_NET_ACTIVE_WINDOW")?;
     if parent==root||!is_terminal(&c,parent)?||active(&c,root,active_atom)?!=Some(parent){return Err("target must be the active GNOME Terminal client".into());}
     let g=c.get_geometry(parent)?.reply()?;

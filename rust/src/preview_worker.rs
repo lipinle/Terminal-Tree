@@ -40,14 +40,14 @@ impl Queue{
     }
     pub fn poll(&mut self)->Option<Completed>{
         if self.active.as_ref().is_some_and(|(_,h)|h.is_finished()){
-            let (id,handle)=self.active.take().expect("finished worker");
+            let (id,handle)=self.active.take()?;
             let result=handle.join();
             if id==self.generation {
                 return Some(result.unwrap_or_else(|_|Completed{name:"Visual Preview".into(),page:1,pdf:false,bitmap:false,result:Err(io::Error::other("preview worker stopped unexpectedly"))}));
             }
         }
         if self.active.is_none()&&self.pending.as_ref().is_some_and(|(_,at,_)|Instant::now()>=*at){
-            let (id,_,req)=self.pending.take().expect("pending request");
+            let (id,_,req)=self.pending.take()?;
             let (name,page,pdf)=(req.name.clone(),req.page,req.pdf);
             match thread::Builder::new().name("tt-visual-preview".into()).spawn(move||decode(req)){
                 Ok(handle)=>self.active=Some((id,handle)),

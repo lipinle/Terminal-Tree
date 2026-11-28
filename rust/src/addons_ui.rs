@@ -43,7 +43,10 @@ pub fn show(prefs:&mut super::app_settings::Preferences,last:Option<&str>)->io::
         }
         if h>1{queue!(out,MoveTo(0,h-1),Print(super::clip("Up/Down select | Enter toggle | H help | Esc back",width)))?;}
         let mut stdout=io::stdout().lock();stdout.write_all(&out)?;stdout.flush()?;drop(stdout);
-        let action=match event::read()?{
+        let event=event::read()?;
+        // Ignore clicks on rows that disappeared during a terminal resize.
+        if matches!(&event,Event::Mouse(_)) && terminal::size()? != (w,h) {continue;}
+        let action=match event{
             Event::Key(k) if matches!(k.kind,KeyEventKind::Press|KeyEventKind::Repeat)=>match k.code{
                 KeyCode::Esc|KeyCode::Char('q')=>return Ok(()),
                 KeyCode::Up=>{selected=selected.saturating_sub(1);None},
@@ -52,8 +55,8 @@ pub fn show(prefs:&mut super::app_settings::Preferences,last:Option<&str>)->io::
                 KeyCode::Char('h'|'H')=>Some(4),
                 _=>None,
             },
-            Event::Mouse(m) if m.kind==MouseEventKind::Down(MouseButton::Left)&&m.row>=1&&m.row<=4=>{selected=usize::from(m.row-1);Some(selected)},
-            Event::Mouse(m) if m.kind==MouseEventKind::Down(MouseButton::Left)&&m.row==10=>Some(4),
+            Event::Mouse(m) if m.kind==MouseEventKind::Down(MouseButton::Left)&&m.row>=1&&m.row<=4&&m.row<h.saturating_sub(1)&&m.column<w.saturating_sub(1)=>{selected=usize::from(m.row-1);Some(selected)},
+            Event::Mouse(m) if m.kind==MouseEventKind::Down(MouseButton::Left)&&m.row==10&&h>11&&m.column<w.saturating_sub(1)=>Some(4),
             _=>None,
         };
         match action{

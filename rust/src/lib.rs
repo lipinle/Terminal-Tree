@@ -377,11 +377,13 @@ impl Model {
 
     pub fn viewport(&mut self, height: usize) -> (usize, usize) {
         let height = height.max(1);
+        // Selection and top are public: normalize before doing viewport math.
+        self.selected = self.selected.min(self.entries.len().saturating_sub(1));
         self.top = self.top.min(self.entries.len().saturating_sub(height));
         if self.selected < self.top {
             self.top = self.selected;
         } else if self.selected.saturating_sub(self.top) >= height {
-            self.top = self.selected + 1 - height;
+            self.top = self.selected.saturating_sub(height - 1);
         }
         (
             self.top,
@@ -416,6 +418,26 @@ mod tests {
     impl Drop for Fixture {
         fn drop(&mut self) {
             fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+
+    #[test]
+    fn viewport_normalizes_out_of_range_public_indices() {
+        let f = Fixture::new();
+        let mut model = Model::new(f.0.clone()).unwrap();
+        for height in [0, 1, usize::MAX] {
+            model.selected = usize::MAX;
+            model.top = usize::MAX;
+            assert_eq!(model.viewport(height), (0, 0));
+            assert_eq!(model.selected, 0);
+        }
+        fs::write(f.0.join("entry"), b"x").unwrap();
+        model.reload().unwrap();
+        for height in [0, 1, usize::MAX] {
+            model.selected = usize::MAX;
+            model.top = usize::MAX;
+            assert_eq!(model.viewport(height), (0, 1));
+            assert_eq!(model.selected, 0);
         }
     }
 
