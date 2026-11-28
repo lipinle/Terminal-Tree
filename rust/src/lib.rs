@@ -6,6 +6,8 @@ pub mod archive;
 pub mod archive_build;
 pub mod bookmarks;
 pub mod image_preview;
+#[cfg(all(feature = "native-ops", target_os = "linux"))]
+pub mod external_tools;
 pub mod keymap;
 pub mod layout;
 #[cfg(all(feature = "native-ops", target_os = "linux"))]

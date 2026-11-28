@@ -77,6 +77,19 @@ Personal mode requires a real account home, an existing private journal and expl
 
 For a cross-device move, cut one regular file and choose the retained move from F6. Strict metadata is the default. The optional time-rounding policy permits at most two seconds of modification-time rounding, not changes to ownership, permissions, attributes or content. The verified destination is published before the source is renamed into private retention. The retained original is not automatically deleted. Record its path.
 
+## Companion tools
+
+On native Linux, Ctrl+P opens the same Tools menu in browse, workspace and dual-pane modes. Install the distribution packages for eza, 7-Zip (7zz or 7z) and Git; the program checks fixed /usr/bin locations. This integration does not bundle the binaries yet.
+
+```sh
+terminal-tree --tools
+terminal-tree --eza .
+terminal-tree --7zip-list example.7z
+terminal-tree --git-status .
+```
+
+eza is a display-only detailed listing. 7-Zip lists selected regular archives, never extracts or changes them. Git status is explicit and intended only for trusted repositories: local configuration and attributes may execute helpers. No automatic Git commands, staging, commit, pull or push. Companion output is bounded, escaped display text, never a file-operation plan. The existing native engine remains responsible for filesystem mutations. These companions are separate programs, not sandboxed code; GNU timeout limits foreground execution. eza is EUPL-1.2 (https://eza.rocks/), 7-Zip is mostly LGPL with unRAR restrictions (https://www.7-zip.org/), and Git is GPL-2.0 (https://git-scm.com/).
+
 ## Preview and archives
 
 Use p/F3 for text or automatic hex, F8 for hex, I for PPM images and A for USTAR archive listing in dual panes. Native Linux archive commands support bounded regular-file USTAR and tar.gz data:

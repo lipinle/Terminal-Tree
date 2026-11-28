@@ -29,6 +29,12 @@ jobs:
           key: cargo-registry-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust/Cargo.lock') }}
       - name: Compile and test native Rust
         run: cargo test --locked --manifest-path rust/Cargo.toml --features native-ops
+      - name: Install companion tools for integration tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends eza 7zip git
+      - name: Verify companion tools on disposable fixtures
+        run: cargo test --locked --manifest-path rust/Cargo.toml --features native-ops --test external_tools -- --ignored
       - name: Validate shell script syntax
         run: |
           for script in rust/*.sh; do bash -n "$script"; done
