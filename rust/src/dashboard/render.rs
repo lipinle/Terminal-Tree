@@ -1,7 +1,7 @@
 //! Dashboard rendering and terminal status presentation.
 use super::file_rows::{
-    breadcrumb, entry_type, human_size, list_heading, modified_utc, pad_cell, row_metadata, row_text,
-    table_columns, RowPresentation,
+    breadcrumb, entry_type, human_size, list_heading, modified_utc, pad_cell, row_metadata,
+    row_text, table_columns, RowPresentation,
 };
 use super::geometry::dual_split;
 #[cfg(feature = "native-ops")]
