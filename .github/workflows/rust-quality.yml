@@ -1,14 +1,7 @@
 name: Rust code quality
 on:
   push:
-    branches: [main]
-    paths:
-      - 'rust/**'
-      - '.github/workflows/rust-quality.yml'
-  pull_request:
-    paths:
-      - 'rust/**'
-      - '.github/workflows/rust-quality.yml'
+    branches: ['release-candidate/**']
   workflow_dispatch:
 
 concurrency:

@@ -1,8 +1,12 @@
-//! Narrow read-only preflight for a future retained-source transfer protocol.
-//! It does not enable cross-device move, create a journal, or reserve names.
-use super::{attributes, dir_id, fd_path, identity, no_conflict, require, Destination, Engine, Review};
+//! Reviewed regular-file transfer across approved devices, retaining the original.
+use super::{
+    attributes, dir_id, fd_path, identity, no_conflict, require, Destination, Engine, Review,
+};
 use std::fs;
 use std::io;
+use std::ffi::OsStr;
+use std::path::PathBuf;
+use super::{create_dir_at, manifest, manifest_with, reject_mounts, unique, Transfer};
 use std::os::unix::fs::MetadataExt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,7 +23,10 @@ impl FileTransferObservation {
 }
 
 fn eligible(m: &fs::Metadata) -> io::Result<()> {
-    require(m.is_file(), "retained-source preview requires a regular file")?;
+    require(
+        m.is_file(),
+        "retained-source preview requires a regular file",
+    )?;
     require(m.nlink() == 1, "multiply linked source refused")?;
     require(m.mode() & 0o7000 == 0, "special permission bits refused")
 }
@@ -61,12 +68,18 @@ impl Engine {
         .into();
         let opened = file.metadata()?;
         eligible(&opened)?;
-        require(identity(&opened) == review.identity, "reviewed source changed")?;
+        require(
+            identity(&opened) == review.identity,
+            "reviewed source changed",
+        )?;
         require(attributes(&file)?.is_empty(), "extended attributes refused")?;
         self.check(review)?;
         let after = file.metadata()?;
         eligible(&after)?;
-        require(identity(&after) == identity(&opened), "source changed during inspection")?;
+        require(
+            identity(&after) == identity(&opened),
+            "source changed during inspection",
+        )?;
         require(attributes(&file)?.is_empty(), "extended attributes changed")?;
         self.check_parent(&review.path, &src_parent)?;
         self.check_parent(&dst, &dst_parent)?;
@@ -77,6 +90,116 @@ impl Engine {
             destination_device: dst_parent.metadata()?.dev(),
             bytes: opened.len(),
         })
+    }
+}
+
+impl Engine {
+    /// Copy and verify on the target filesystem before moving the original
+    /// into a private sibling retention directory on its own filesystem.
+    /// The original is never unlinked. A pending record on failure is evidence
+    /// only: do not blindly retry. This is not an atomic cross-device move.
+    pub fn move_retaining_source(
+        &self,
+        review: &Review,
+        destination: &Destination,
+        checkpoint: &mut dyn FnMut(&str) -> io::Result<()>,
+    ) -> io::Result<PathBuf> {
+        let observed = self.inspect_file_transfer(review, destination)?;
+        require(observed.crosses_devices(), "different devices required")?;
+        let source_parent = self.check(review)?;
+        let target_parent = self.parent_for(destination.path())?;
+        let source_name = review.path.file_name().unwrap();
+        let target_name = destination.path.file_name().unwrap();
+        let src = fd_path(&source_parent).join(source_name);
+        let dst = fd_path(&target_parent).join(target_name);
+        let id = unique()?;
+        let retention_name = format!(".terminal-tree-copy-{id}");
+        let retention = review.path.parent().unwrap().join(&retention_name);
+        let retained = retention.join("original");
+        no_conflict(&fd_path(&source_parent).join(&retention_name))?;
+        checkpoint("retained-prepare")?;
+        self.log(
+            &id,
+            "retained-move",
+            Some(&review.path),
+            Some(&destination.path),
+            Some(&retained),
+        )?;
+        // Reuse the independently journalled, verified, synced no-replace copy.
+        // Any error up to this point leaves the original at its initial name.
+        self.transfer_reviewed_with(review, destination, Transfer::Copy, checkpoint)?;
+        checkpoint("retained-verify")?;
+        let target = self.review(destination.path())?;
+        require(target.manifest == review.manifest, "published copy differs")?;
+        require(
+            target.parent == destination.parent,
+            "published destination parent changed",
+        )?;
+        let (content, ids) = manifest_with(&src, true, checkpoint)?;
+        require(
+            content == review.manifest && ids == review.snapshot,
+            "original changed after copy",
+        )?;
+        self.check_identity(review)?;
+        self.check(&target)?;
+        self.check_parent(&review.path, &source_parent)?;
+        self.check_parent(destination.path(), &target_parent)?;
+        self.check_journal()?;
+        let stage = create_dir_at(&source_parent, OsStr::new(&retention_name))?;
+        reject_mounts(&retention)?;
+        require(
+            dir_id(&super::open_dir(&fd_path(&source_parent).join(&retention_name))?)?
+                == dir_id(&stage)?,
+            "retention directory replaced",
+        )?;
+        checkpoint("retained-before-publish")?;
+        self.check_identity(review)?;
+        self.check_identity(&target)?;
+        self.check_parent(&review.path, &source_parent)?;
+        self.check_parent(destination.path(), &target_parent)?;
+        require(
+            identity(&fs::symlink_metadata(&dst)?) == target.identity,
+            "published target replaced",
+        )?;
+        reject_mounts(&retention)?;
+        require(
+            dir_id(&super::open_dir(&fd_path(&source_parent).join(&retention_name))?)?
+                == dir_id(&stage)?,
+            "retention directory replaced",
+        )?;
+        self.check_journal()?;
+        source_parent.sync_all()?;
+        stage.sync_all()?;
+        checkpoint("retained-commit")?;
+        super::rx::renameat_with(
+            &source_parent,
+            source_name,
+            &stage,
+            "original",
+            super::RenameFlags::NOREPLACE,
+        )?;
+        checkpoint("retained-before-sync")?;
+        stage.sync_all()?;
+        source_parent.sync_all()?;
+        checkpoint("retained-after-sync")?;
+        let retained_fd_path = fd_path(&stage).join("original");
+        let (retained_content, _) = manifest(&retained_fd_path, false)?;
+        let actual = fs::symlink_metadata(&retained_fd_path)?;
+        eligible(&actual)?;
+        require(
+            retained_content == review.manifest
+                && (actual.dev(), actual.ino()) == (review.identity.0, review.identity.1),
+            "retained original differs",
+        )?;
+        self.check(&target)?;
+        self.check_parent(&review.path, &source_parent)?;
+        require(
+            dir_id(&super::open_dir(&fd_path(&source_parent).join(&retention_name))?)?
+                == dir_id(&stage)?,
+            "retention directory replaced",
+        )?;
+        self.complete(&id)?;
+        Ok(retained)
     }
 }
 
@@ -119,7 +242,9 @@ mod tests {
         fs::remove_file(&target).unwrap();
         fs::hard_link(&source, workspace.join("hard")).unwrap();
         let reviewed = engine.review(&source).unwrap();
-        assert!(engine.inspect_file_transfer(&reviewed, &destination).is_err());
+        assert!(engine
+            .inspect_file_transfer(&reviewed, &destination)
+            .is_err());
         symlink(&source, workspace.join("link")).unwrap();
         let link = engine.review(&workspace.join("link")).unwrap();
         assert!(engine.inspect_file_transfer(&link, &destination).is_err());

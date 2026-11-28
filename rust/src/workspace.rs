@@ -402,7 +402,7 @@ impl Workspace {
                 self.clear_marks();
                 return Ok("Clipboard ready; v to review and paste".into());
             }
-            'v' => {
+            'v' | 'V' => {
                 let (reviews, kind) = self
                     .clipboard
                     .as_ref()
@@ -410,7 +410,17 @@ impl Workspace {
                 let kind = *kind;
                 let mut items = Vec::with_capacity(reviews.len());
                 for review in reviews {
-                    let dst = model.directory.join(review.path().file_name().unwrap());
+                    let name = review.path().file_name().unwrap();
+                    let dst = if key == 'V' {
+                        if reviews.len() != 1 {
+                            return Err(error("keep both requires one clipboard item"));
+                        }
+                        let candidate =
+                            terminal_tree::rename_plan::native::suggest(&model.directory, name)?;
+                        model.directory.join(candidate)
+                    } else {
+                        model.directory.join(name)
+                    };
                     self.ordinary(review.path())?;
                     self.ordinary(&dst)?;
                     items.push((review.clone(), self.engine.destination(&dst)?));
@@ -481,6 +491,103 @@ impl Workspace {
                 } else {
                     return self.finish_batch(model, done, total, "Transfer", failure);
                 }
+            }
+            'M' => {
+                let (reviews, kind) = self
+                    .clipboard
+                    .as_ref()
+                    .ok_or_else(|| error("cut one regular file first"))?;
+                if reviews.len() != 1 || !matches!(kind, Transfer::Move) {
+                    return Err(error("cut one regular file first"));
+                }
+                let review = &reviews[0];
+                let path = model.directory.join(review.path().file_name().unwrap());
+                self.ordinary(review.path())?;
+                self.ordinary(&path)?;
+                let target = self.engine.destination(&path)?;
+                let observed = self.engine.inspect_file_transfer(review, &target)?;
+                if !observed.crosses_devices() {
+                    return Err(error("use normal paste for same-device moves"));
+                }
+                if !confirm(
+                    "Cross-device move: keep original in private retention",
+                    &[review.path(), target.path()],
+                    "yes",
+                )? {
+                    return Ok("Cancelled".into());
+                }
+                let retained = worker::run(1, |progress| {
+                    progress.item(path_text(review.path()), 0)?;
+                    let retained = self.engine.move_retaining_source(
+                        review,
+                        &target,
+                        &mut |point| progress.checkpoint(point),
+                    )?;
+                    progress.finished(1);
+                    Ok(retained)
+                });
+                self.clipboard = None;
+                let retained = retained?;
+                let (width, _) = terminal::size()?;
+                super::page(
+                    "Cross-device move: original retained",
+                    &wrap(
+                        &format!("Original preserved at {}. Do not delete until independently verified.", path_text(&retained)),
+                        usize::from(width).saturating_sub(1).max(1),
+                    ),
+                )?;
+                "Moved; original retained"
+            }
+            'N' => {
+                use terminal_tree::rename_plan::native::reviewed::Batch;
+
+                if self.marks.is_empty() {
+                    return Err(error("mark files before bulk rename"));
+                }
+                let sources = self.reviews(model)?;
+                let Some(needle) = prompt("Replace text:")? else {
+                    return Ok("Cancelled".into());
+                };
+                let Some(replacement) = prompt("With text (empty removes):")? else {
+                    return Ok("Cancelled".into());
+                };
+                let batch = Batch::prepare(
+                    &self.engine,
+                    &model.directory,
+                    &sources,
+                    OsStr::new(&needle),
+                    OsStr::new(&replacement),
+                )?;
+                let paths: Vec<_> = batch.paths().flat_map(|(a, b)| [a, b]).collect();
+                for path in &paths {
+                    self.ordinary(path)?;
+                }
+                let total = sources.len();
+                if !confirm(
+                    &format!("Rename {total} items - each committed separately"),
+                    &paths,
+                    "yes",
+                )? {
+                    return Ok("Cancelled".into());
+                }
+                let outcome = worker::run(total, |progress| {
+                    let outcome = batch.execute(&self.engine, &mut |index, path, point| {
+                        if point == "rename-item" {
+                            progress.item(path_text(path), index)?;
+                        }
+                        progress.checkpoint(point)
+                    })?;
+                    progress.finished(outcome.completed);
+                    Ok(outcome)
+                })?;
+                self.undo.extend(outcome.undos);
+                return self.finish_batch(
+                    model,
+                    outcome.completed,
+                    total,
+                    "Rename",
+                    outcome.failure,
+                );
             }
             'r' => {
                 let review = self.review(model)?;
@@ -577,6 +684,62 @@ impl Workspace {
                     trash.purge_with(&review, "DELETE", &mut |s| p.checkpoint(s))
                 })?;
                 return self.refresh(model, format!("{outcome:?}"));
+            }
+            'E' => {
+                if !self.marks.is_empty() {
+                    return Err(error("clear marks before extracting one archive"));
+                }
+                let source = self.selected(model)?;
+                self.ordinary(&source)?;
+                let bytes = worker::run(1, |progress| {
+                    progress.item(path_text(&source), 0)?;
+                    let bytes = self.engine.read_archive_for_extraction(&source)?;
+                    progress.cancelled()?;
+                    Ok(bytes)
+                })?;
+                self.selected(model)?;
+                let layout = terminal_tree::archive::portable_layout_preview(bytes.as_slice())?;
+                let mut rows = vec![format!(
+                    "{} directories, {} files, {} bytes; new directory only",
+                    layout.directories.len(),
+                    layout.files.len(),
+                    layout.payload_bytes
+                )];
+                rows.extend(layout.directories.iter().map(|d| format!("directory {d}")));
+                rows.extend(
+                    layout
+                        .files
+                        .iter()
+                        .map(|f| format!("file {} bytes {}", f.size, f.name)),
+                );
+                super::page("Archive layout (review)", &rows)?;
+                let Some(name) = filename()? else {
+                    return Ok("Cancelled".into());
+                };
+                let path = model.directory.join(name);
+                self.ordinary(&path)?;
+                let destination = self.engine.destination(&path)?;
+                if !confirm(
+                    "Extract to new directory",
+                    &[&source, destination.path()],
+                    "yes",
+                )? {
+                    return Ok("Cancelled".into());
+                }
+                self.selected(model)?;
+                self.ordinary(&source)?;
+                self.ordinary(&path)?;
+                worker::run(1, |progress| {
+                    progress.item(path_text(&path), 0)?;
+                    self.engine.extract_archive_reviewed_with(
+                        &destination,
+                        &bytes,
+                        &mut |point| progress.checkpoint(point),
+                    )?;
+                    progress.finished(1);
+                    Ok(())
+                })?;
+                "Archive extracted"
             }
             'S' => {
                 self.settings.save(model)?;
