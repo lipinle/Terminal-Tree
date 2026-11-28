@@ -86,16 +86,39 @@ fn breadcrumb(path: &std::path::Path) -> String {
     path.components().map(|p| display_name(p.as_os_str())).collect::<Vec<_>>().join(" > ")
 }
 
-fn row_text(entry: &Entry, index: usize, count: usize, view: View, glyph: &str, marked: bool, width: u16) -> String {
+fn human_size(size:u64)->String {
+    if size<1024 {return format!("{size} B");}
+    let mut n=size as f64;
+    for unit in ["KiB","MiB","GiB","TiB","PiB","EiB"] {
+        n/=1024.0;
+        if n<1024.0 || unit=="EiB" {return format!("{n:.1} {unit}");}
+    }
+    unreachable!()
+}
+fn entry_type(entry:&Entry)->String {
+    if entry.symlink {"Link".into()} else if entry.directory {"Folder".into()} else {
+        entry.path.extension().map(display_name).filter(|s|!s.is_empty()).unwrap_or_else(||"File".into())
+    }
+}
+fn pad_cell(text:&str,width:usize)->String {
+    use unicode_width::UnicodeWidthStr;
+    let value=super::clip(text,width);
+    let pad=width.saturating_sub(value.width());
+    format!("{value}{}"," ".repeat(pad))
+}
+fn list_columns(name:&str, size:&str, kind:&str,width:u16,details:bool)->String {
+    let w=usize::from(width);
+    if details&&w>=48 {
+        format!("{} {:>10} {}",pad_cell(name,w-23),size,pad_cell(kind,11))
+    } else if w>=30 {
+        format!("{} {:>12}",pad_cell(name,w-13),size)
+    } else {super::clip(name,w)}
+}
+fn row_text(entry: &Entry, index: usize, count: usize, view: View, glyph: &str, marked: bool, width: u16,details:bool) -> String {
     let mark = if marked { "[x]" } else { "   " };
     match view {
         View::Tree => format!("{} {mark} {glyph} {}", if index + 1 == count { "└──" } else { "├──" }, entry.name),
-        View::List if width >= 30 => {
-            let name = super::clip(&format!("{mark} {glyph} {}", entry.name), usize::from(width) - 13);
-            use unicode_width::UnicodeWidthStr;
-            let pad = (usize::from(width) - 13).saturating_sub(name.width());
-            format!("{name}{} {:>12}", " ".repeat(pad), if entry.directory { "<DIR>".to_owned() } else { entry.size.to_string() })
-        }
+        View::List => list_columns(&format!("{mark} {glyph} {}",entry.name),&if entry.directory{"<DIR>".into()}else{human_size(entry.size)},&entry_type(entry),width,details),
         _ => format!("{mark} {glyph} {}", entry.name),
     }
 }
@@ -162,6 +185,8 @@ pub struct State {
     preview_enabled: bool,
     preview_key: Option<PreviewKey>,
     preview_lines: Vec<String>,
+    preview_scroll: usize,
+    preview_mode: u8,
     #[cfg(feature = "native-ops")]
     visual_frame: Option<terminal_tree::visual_preview::Frame>,
     #[cfg(feature = "native-ops")]
@@ -196,7 +221,7 @@ impl State {
         let mut state = Self {
             places: Vec::new(), bookmarks: Vec::new(), trash,
             side_focus: false, side_cursor: 0, side_top: 0, preview_enabled: true,
-            preview_key: None, preview_lines: Vec::new(),
+            preview_key: None, preview_lines: Vec::new(), preview_scroll: 0, preview_mode: 0,
             #[cfg(feature = "native-ops")]
             visual_frame: None,
             #[cfg(feature = "native-ops")]
@@ -525,6 +550,7 @@ impl State {
                 format!("File view: {}",self.view.name()),
                 "Reset panel sizes".into(),
                 format!("Terminal panel: {}",self.prefs.terminal_visible),
+                format!("List type column: {}",self.prefs.list_details),
             ];
             match super::choose("Settings / Display (Enter toggles)",&labels)? {
                 None=>return Ok(()),
@@ -538,7 +564,8 @@ impl State {
                 Some(7)=>self.zoom=self.zoom%3+1,
                 Some(8)=>self.choose_view(match self.view {View::Tree=>View::Grid,View::Grid=>View::List,View::List=>View::Tree}),
                 Some(9)=>{self.prefs.sidebar_width=19;self.prefs.preview_percent=33;self.prefs.dual_percent=50;self.prefs.terminal_percent=28;},
-                _=>{self.prefs.terminal_visible=!self.prefs.terminal_visible; #[cfg(feature = "native-ops")] {self.terminal_panel.focused=false;}},
+                Some(10)=>{self.prefs.terminal_visible=!self.prefs.terminal_visible; #[cfg(feature = "native-ops")] {self.terminal_panel.focused=false;}},
+                _=>self.prefs.list_details=!self.prefs.list_details,
             }
         }
     }
@@ -730,11 +757,12 @@ impl State {
 
     fn preview(&mut self, entry: Option<&Entry>, width:u16, rows:usize) {
         let key = entry.map(|e| (e.path.clone(), e.size, e.modified));
+        if key!=self.preview_key {self.preview_scroll=0;}
         #[cfg(feature = "native-ops")]
         {
             let size=(u32::from(width).clamp(1,160),(rows.saturating_sub(2)*2).clamp(1,160) as u32);
-            if key != self.preview_key && self.preview_key.is_some() {self.visual_page=1;}
-            if size!=self.visual_size {self.visual_size=size;self.preview_lines.clear();}
+            if key != self.preview_key {self.visual_page=1;}
+            if size!=self.visual_size {self.visual_size=size;self.preview_lines.clear();self.preview_scroll=0;}
         }
         #[cfg(not(feature = "native-ops"))]
         let _=(width,rows);
@@ -743,12 +771,13 @@ impl State {
         #[cfg(feature = "native-ops")]
         {
             self.visual_frame=None;
-            if let Some(e)=entry.filter(|e|!e.directory&&!e.symlink&&terminal_tree::visual_preview::format(&e.path).is_some()) {
+            if let Some(e)=entry.filter(|e|self.preview_mode==0&&!e.directory&&!e.symlink&&terminal_tree::visual_preview::format(&e.path).is_some()) {
                 if self.prefs.visual_preview {
                     let page=if terminal_tree::visual_preview::format(&e.path)==Some("pdf"){self.visual_page}else{1};
                     match terminal_tree::visual_preview::render(&e.path,page,self.visual_size.0,self.visual_size.1) {
                         Ok(frame)=>{
-                            self.preview_lines=vec![e.name.clone(),format!("Page {page}/{} | {}x{}",frame.pages,frame.width,frame.height)];
+                            let label=if terminal_tree::visual_preview::format(&e.path)==Some("pdf"){format!("Page {page}/{} | Scroll",frame.pages)}else{format!("Thumbnail {}x{}",frame.width,frame.height)};
+                            self.preview_lines=vec![e.name.clone(),label];
                             self.visual_frame=Some(frame);
                         }
                         Err(error)=>self.preview_lines=vec![e.name.clone(),display_name(std::ffi::OsStr::new(&error.to_string()))],
@@ -757,6 +786,13 @@ impl State {
                 }
             }
         }
+        if self.preview_mode==1 {
+            self.preview_lines=match entry {
+                None=>vec!["No selection".into()],
+                Some(e)=>vec![e.name.clone(),format!("Type: {}",entry_type(e)),format!("Size: {}",human_size(e.size)),format!("Bytes: {}",e.size),format!("Path: {}",display_name(e.path.as_os_str())),if e.symlink{"Symbolic link; not followed".into()}else{"Observed file metadata".into()}],
+            };
+            return;
+        }
         self.preview_lines = match entry {
             None => vec!["No selection".into()],
             Some(e) if e.directory => vec![e.name.clone(), "Folder".into(), "Enter to open".into()],
@@ -764,7 +800,7 @@ impl State {
             Some(e) => {
                 #[cfg(feature = "native-ops")]
                 {
-                    match terminal_tree::preview::read_lines(&e.path, terminal_tree::preview::Mode::Auto) {
+                    match terminal_tree::preview::read_lines(&e.path, if self.preview_mode==2 {terminal_tree::preview::Mode::Hex}else{terminal_tree::preview::Mode::Auto}) {
                         Ok(mut lines) => {
                             if !lines.is_empty() { lines[0] = e.name.clone(); }
                             lines
@@ -1022,9 +1058,9 @@ impl State {
                 Print(if self.side_focus { "Places *" } else { "Places" }), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
         }
         queue!(out, MoveTo(l.first(),3), SetForegroundColor(self.prefs.accent),
-            Print(if self.side_focus { "Files" } else { "Files *" }), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
+            Print(if self.view==View::List {list_columns(if self.side_focus{"Files / Name"}else{"Files * / Name"},"Size","Type",l.end()-l.first(),self.prefs.list_details)}else if self.side_focus {"Files".into()}else{"Files *".into()}), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
         if l.preview > 0 {
-            queue!(out, MoveTo(l.end()+1,3), SetForegroundColor(self.prefs.accent), Print("Preview"), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
+            queue!(out, MoveTo(l.end()+1,3), SetForegroundColor(self.prefs.accent), Print(super::clip(match self.preview_mode {1=>"Preview [Info]",2=>"Preview [Hex]",_=>"Preview [Auto]"},usize::from(l.preview))), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
             let entry = if let Some(tree) = &self.expanded_tree {
                 tree.rows().get(tree.selected()).map(|r| r.entry.clone())
             } else { model.entries.get(model.selected).cloned() };
@@ -1057,7 +1093,7 @@ impl State {
             }
             if l.preview > 0 {
                 queue!(out, MoveTo(l.end(),y), Print("│"))?;
-                if let Some(line) = self.preview_lines.get(row) {
+                if let Some(line) = self.preview_lines.get(row+self.preview_scroll) {
                     queue!(out, MoveTo(l.end()+1,y), Print(super::clip(line,usize::from(l.preview))))?;
                 } else {
                     #[cfg(feature = "native-ops")]
@@ -1099,7 +1135,7 @@ impl State {
                 let text = if let Some(depth) = tree_depth {
                     format!("{}{} {glyph} {}", "  ".repeat(depth-1),
                         if expanded { "−" } else if e.directory && !e.symlink { "+" } else { "·" }, e.name)
-                } else { row_text(e,index,model.entries.len(),self.view,glyph,marked(&e.path),cells.width) };
+                } else { row_text(e,index,model.entries.len(),self.view,glyph,marked(&e.path),cells.width,self.prefs.list_details) };
                 queue!(out, Print(super::clip(&text,usize::from(cells.width))))?;
             }
             queue!(out, SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
@@ -1153,7 +1189,7 @@ impl State {
             0 => vec![("New tab (Ctrl+T)",KeyCode::Char('t'),KeyModifiers::CONTROL),("Close tab (Ctrl+W)",KeyCode::Char('w'),KeyModifiers::CONTROL),("Next tab (Ctrl+Tab)",KeyCode::Tab,KeyModifiers::CONTROL),("Open",KeyCode::Enter,plain),("Properties",KeyCode::Char('i'),plain),("Exit",KeyCode::Char('q'),plain)],
             1 if writable => vec![("Copy (Ctrl+C)",KeyCode::Char('c'),plain),("Cut (Ctrl+X)",KeyCode::Char('x'),plain),("Paste (Ctrl+V)",KeyCode::Char('v'),plain),("View clipboard",KeyCode::F(12),plain),("Rename",KeyCode::F(2),plain),("New folder",KeyCode::Char('n'),plain),("New file",KeyCode::Char('t'),plain),("Trash",KeyCode::Delete,plain),("Undo",KeyCode::Char('u'),plain)],
             1 => vec![("Select a scoped workspace to enable file operations",KeyCode::Null,plain)],
-            2 => vec![("Tree view (Ctrl+3)",KeyCode::Char('3'),KeyModifiers::CONTROL),("Grid view (Ctrl+1)",KeyCode::Char('1'),KeyModifiers::CONTROL),("List view (Ctrl+2)",KeyCode::Char('2'),KeyModifiers::CONTROL),("Toggle dual pane (F8)",KeyCode::F(8),plain),("Toggle live preview",KeyCode::F(9),plain),("Open preview",KeyCode::F(3),plain),("Hidden files",KeyCode::Char('h'),plain),("Sort",KeyCode::Char('s'),plain),("Refresh",KeyCode::F(5),plain),("Filter",KeyCode::Char('/'),plain)],
+            2 => vec![("Cycle preview mode (Alt+P)",KeyCode::Char('p'),KeyModifiers::ALT),("Tree view (Ctrl+3)",KeyCode::Char('3'),KeyModifiers::CONTROL),("Grid view (Ctrl+1)",KeyCode::Char('1'),KeyModifiers::CONTROL),("List view (Ctrl+2)",KeyCode::Char('2'),KeyModifiers::CONTROL),("Toggle dual pane (F8)",KeyCode::F(8),plain),("Toggle live preview",KeyCode::F(9),plain),("Open preview",KeyCode::F(3),plain),("Hidden files",KeyCode::Char('h'),plain),("Sort",KeyCode::Char('s'),plain),("Refresh",KeyCode::F(5),plain),("Filter",KeyCode::Char('/'),plain)],
             3 => vec![("Parent",KeyCode::Left,plain),("Back",KeyCode::Char('['),plain),("Forward",KeyCode::Char(']'),plain),("Locations",KeyCode::Char('m'),plain),("Bookmark current directory",KeyCode::Char('b'),plain),("Bookmarks",KeyCode::Char('B'),plain)],
             4 => vec![("Companion tools",KeyCode::Char('p'),KeyModifiers::CONTROL),("Help",KeyCode::F(1),plain)],
             5 => vec![("Settings Center",KeyCode::Char(','),KeyModifiers::CONTROL)],
@@ -1409,14 +1445,34 @@ impl State {
                 }
             }
         }
-        #[cfg(feature = "native-ops")]
-        if let Event::Mouse(mouse)=&event {
-            if !self.dual && l.preview>0 && mouse.column>l.end() && mouse.row>=4 && mouse.row<h-3 {
-                if let Some(frame)=&self.visual_frame {
-                    let page=match mouse.kind {MouseEventKind::ScrollDown=>self.visual_page.saturating_add(1).min(frame.pages),MouseEventKind::ScrollUp=>self.visual_page.saturating_sub(1).max(1),_=>self.visual_page};
-                    if page!=self.visual_page {self.visual_page=page;self.preview_lines.clear();}
+        if !self.dual && l.preview>0 {
+            if let Event::Key(k)=&event {
+                if k.kind==KeyEventKind::Press&&k.modifiers==KeyModifiers::ALT&&k.code==KeyCode::Char('p') {
+                    self.preview_mode=(self.preview_mode+1)%3;
+                    self.preview_key=None;self.preview_scroll=0;
+                    return Ok(None);
                 }
-                return Ok(None);
+            }
+            if let Event::Mouse(mouse)=&event {
+                if mouse.column>l.end() && mouse.column<l.width && mouse.row>=3 && mouse.row<h-3 {
+                    if mouse.row==3 && mouse.kind==MouseEventKind::Down(MouseButton::Left) && mouse.modifiers==KeyModifiers::NONE {
+                        self.preview_mode=(self.preview_mode+1)%3;
+                        self.preview_key=None;self.preview_scroll=0;
+                        return Ok(None);
+                    }
+                    #[cfg(feature = "native-ops")]
+                    if let Some(frame)=&self.visual_frame {
+                        let page=match mouse.kind {MouseEventKind::ScrollDown=>self.visual_page.saturating_add(1).min(frame.pages),MouseEventKind::ScrollUp=>self.visual_page.saturating_sub(1).max(1),_=>self.visual_page};
+                        if page!=self.visual_page {self.visual_page=page;self.preview_lines.clear();}
+                        return Ok(None);
+                    }
+                    match mouse.kind {
+                        MouseEventKind::ScrollDown=>self.preview_scroll=(self.preview_scroll+3).min(self.preview_lines.len().saturating_sub(l.capacity())),
+                        MouseEventKind::ScrollUp=>self.preview_scroll=self.preview_scroll.saturating_sub(3),
+                        _=>(),
+                    }
+                    return Ok(None);
+                }
             }
         }
         if self.expanded_input(&event, model, l)? { return Ok(None); }
@@ -1662,6 +1718,16 @@ fn draw_column(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn list_cells_fit_and_sizes_are_readable() {
+        use unicode_width::UnicodeWidthStr;
+        assert_eq!(human_size(1024),"1.0 KiB");
+        assert_eq!(human_size(1048576),"1.0 MiB");
+        for width in 0..150 {
+            let text=list_columns("ภาษาไทย long name.txt","1.0 MiB","txt",width,true);
+            assert!(text.width()<=usize::from(width));
+        }
+    }
     #[test]
     fn view_cells_and_toolbar_hit_testing() {
         assert_eq!(View::default(), View::Tree);

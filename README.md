@@ -80,6 +80,10 @@ Commands run explicitly in the active file pane's current directory, with your o
 
 The independent MIT-licensed helper in [visual-preview](visual-preview/README.md) decodes images and renders PDF pages using Rust libraries. Enable it explicitly in Add-ons after installing the helper. Truecolor half-blocks display RGB pixels in the preview panel; scroll over the panel to turn PDF pages. When disabled, existing text/hex preview remains unchanged. No changes to the core dependency lock or minimum Rust version. Development-only until the helper build and dependency license audit are complete.
 
+### Preview controls and detailed list
+
+Click the Preview heading or press Alt+P to cycle Auto (text or optional visual), Info (observed file metadata), and Hex. Scroll over text preview to inspect more lines, or over a visual PDF preview to change pages. List view uses readable binary size units and a Type column when space permits; Settings > Display can hide the Type column. Visual rendering remains opt-in.
+
 ## Navigation and search
 
 Use the installed executable (examples below assume it is on your PATH), or substitute its full path.
