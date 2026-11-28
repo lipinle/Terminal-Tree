@@ -92,7 +92,10 @@ pub fn replace_literal(
     if needle.is_empty()
         || needle.len() > MAX_NAME_BYTES
         || replacement.len() > MAX_NAME_BYTES
-        || needle.iter().chain(replacement).any(|&b| b == 0 || b == b'/')
+        || needle
+            .iter()
+            .chain(replacement)
+            .any(|&b| b == 0 || b == b'/')
     {
         return Err(PlanError::InvalidPattern);
     }
@@ -211,13 +214,8 @@ mod tests {
             OsString::from_vec(b"old-\xff-old".to_vec()),
             OsString::from("old-file"),
         ];
-        let result = replace_literal(
-            &existing,
-            &existing,
-            OsStr::new("old"),
-            OsStr::new("new"),
-        )
-        .unwrap();
+        let result =
+            replace_literal(&existing, &existing, OsStr::new("old"), OsStr::new("new")).unwrap();
         assert_eq!(result[0].source, existing[0]);
         assert_eq!(result[0].destination.as_bytes(), b"new-\xff-new");
         assert_eq!(result[1], item("old-file", "new-file"));
@@ -228,7 +226,12 @@ mod tests {
     fn literal_replacement_rejects_entire_conflicting_plan() {
         let existing = ["old-a".into(), "old-b".into(), "new-b".into()];
         assert_eq!(
-            replace_literal(&existing, &existing[..2], OsStr::new("old"), OsStr::new("new")),
+            replace_literal(
+                &existing,
+                &existing[..2],
+                OsStr::new("old"),
+                OsStr::new("new")
+            ),
             Err(PlanError::DestinationOccupied)
         );
         assert_eq!(
@@ -267,7 +270,12 @@ mod tests {
         );
         let long = OsString::from("a".repeat(MAX_NAME_BYTES));
         assert_eq!(
-            replace_literal(&[long.clone()], &[long], OsStr::new("a"), OsStr::new("bb")),
+            replace_literal(
+                std::slice::from_ref(&long),
+                std::slice::from_ref(&long),
+                OsStr::new("a"),
+                OsStr::new("bb")
+            ),
             Err(PlanError::InvalidName)
         );
     }

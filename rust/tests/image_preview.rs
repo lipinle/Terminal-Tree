@@ -86,7 +86,11 @@ fn native_image_cli_is_read_only_and_refuses_aliases() {
     assert_eq!(output.stdout, b"PPM 2x1\n @\n");
     symlink(&path, root.join("alias")).unwrap();
     symlink(&root, root.join("parent-alias")).unwrap();
-    for bad in [root.join("alias"), root.join("parent-alias/image.ppm"), root.clone()] {
+    for bad in [
+        root.join("alias"),
+        root.join("parent-alias/image.ppm"),
+        root.clone(),
+    ] {
         let output = run(&bad);
         assert!(!output.status.success());
         assert!(output.stdout.is_empty());
