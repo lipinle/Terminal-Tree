@@ -74,13 +74,13 @@ pub fn display_name(name: &OsStr) -> String {
 }
 
 #[cfg(windows)]
-pub fn display_name(name:&OsStr)->String{
+pub fn display_name(name: &OsStr) -> String {
     use std::os::windows::ffi::OsStrExt;
-    let mut result=String::new();
-    for unit in char::decode_utf16(name.encode_wide()){
-        match unit{
-            Ok(c)=>append_safe(&mut result,c.encode_utf8(&mut [0;4])),
-            Err(e)=>result.push_str(&format!("\\u{{{:04x}}}",e.unpaired_surrogate())),
+    let mut result = String::new();
+    for unit in char::decode_utf16(name.encode_wide()) {
+        match unit {
+            Ok(c) => append_safe(&mut result, c.encode_utf8(&mut [0; 4])),
+            Err(e) => result.push_str(&format!("\\u{{{:04x}}}", e.unpaired_surrogate())),
         }
     }
     result
@@ -89,13 +89,15 @@ fn append_safe(out: &mut String, s: &str) {
     for c in s.chars() {
         if c == '\\' {
             out.push_str("\\\\");
-        } else if c.is_control() || matches!(c,
+        } else if c.is_control()
+            || matches!(c,
             '\u{00ad}' | '\u{061c}' | '\u{180e}' |
             '\u{200b}'..='\u{200f}' | '\u{2028}'..='\u{202e}' |
             '\u{2060}'..='\u{206f}' | '\u{feff}' | '\u{fff9}'..='\u{fffb}' |
             '\u{110bd}' | '\u{110cd}' | '\u{13430}'..='\u{13455}' |
             '\u{1bca0}'..='\u{1bca3}' | '\u{1d173}'..='\u{1d17a}' |
-            '\u{e0001}' | '\u{e0020}'..='\u{e007f}') {
+            '\u{e0001}' | '\u{e0020}'..='\u{e007f}')
+        {
             out.push_str(&format!("\\u{{{:x}}}", c as u32));
         } else {
             out.push(c);
@@ -129,11 +131,23 @@ pub fn scan(path: &Path, hidden: bool, order: Order, query: &str) -> io::Result<
         };
         let size = metadata.as_ref().map_or(0, fs::Metadata::len);
         let modified = metadata.as_ref().and_then(|m| m.modified().ok());
-        let extension = p.extension().map_or_else(String::new, |s| s.to_string_lossy().to_lowercase());
-        entries.push(Entry { path: p, name, directory, symlink, size, modified, sort_name, extension });
+        let extension = p
+            .extension()
+            .map_or_else(String::new, |s| s.to_string_lossy().to_lowercase());
+        entries.push(Entry {
+            path: p,
+            name,
+            directory,
+            symlink,
+            size,
+            modified,
+            sort_name,
+            extension,
+        });
     }
     entries.sort_unstable_by(|a, b| {
-        b.directory.cmp(&a.directory)
+        b.directory
+            .cmp(&a.directory)
             .then_with(|| match order {
                 Order::Name => a.sort_name.cmp(&b.sort_name),
                 Order::Size => b.size.cmp(&a.size),
@@ -141,17 +155,31 @@ pub fn scan(path: &Path, hidden: bool, order: Order, query: &str) -> io::Result<
                 Order::Type => a.extension.cmp(&b.extension),
             })
             .then_with(|| a.sort_name.cmp(&b.sort_name))
-            .then_with(|| a.path.as_os_str().as_encoded_bytes().cmp(b.path.as_os_str().as_encoded_bytes()))
+            .then_with(|| {
+                a.path
+                    .as_os_str()
+                    .as_encoded_bytes()
+                    .cmp(b.path.as_os_str().as_encoded_bytes())
+            })
     });
     Ok(entries)
 }
 
-#[derive(Debug,Clone,Copy,PartialEq,Eq)]
-pub enum KindFilter { All, Directories, Files, Links }
-impl KindFilter{
-    fn accepts(self,e:&Entry)->bool{
-        match self{Self::All=>true,Self::Directories=>e.directory&&!e.symlink,
-            Self::Files=>!e.directory&&!e.symlink,Self::Links=>e.symlink}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KindFilter {
+    All,
+    Directories,
+    Files,
+    Links,
+}
+impl KindFilter {
+    fn accepts(self, e: &Entry) -> bool {
+        match self {
+            Self::All => true,
+            Self::Directories => e.directory && !e.symlink,
+            Self::Files => !e.directory && !e.symlink,
+            Self::Links => e.symlink,
+        }
     }
 }
 #[derive(Debug)]
@@ -171,17 +199,27 @@ pub struct Model {
 impl Model {
     pub fn new(directory: PathBuf) -> io::Result<Self> {
         let entries = scan(&directory, false, Order::Name, "")?;
-        Ok(Self { directory: directory.clone(), entries, selected: 0, top: 0,
-            hidden: false, order: Order::Name, query: String::new(), kind_filter:KindFilter::All,
-            history: vec![directory], history_index: 0 })
+        Ok(Self {
+            directory: directory.clone(),
+            entries,
+            selected: 0,
+            top: 0,
+            hidden: false,
+            order: Order::Name,
+            query: String::new(),
+            kind_filter: KindFilter::All,
+            history: vec![directory],
+            history_index: 0,
+        })
     }
 
     pub fn reload(&mut self) -> io::Result<()> {
         let selected_path = self.entries.get(self.selected).map(|e| e.path.clone());
         let mut entries = scan(&self.directory, self.hidden, self.order, &self.query)?;
-        entries.retain(|e|self.kind_filter.accepts(e));
+        entries.retain(|e| self.kind_filter.accepts(e));
         self.entries = entries;
-        self.selected = selected_path.and_then(|p| self.entries.iter().position(|e| e.path == p))
+        self.selected = selected_path
+            .and_then(|p| self.entries.iter().position(|e| e.path == p))
             .unwrap_or_else(|| self.selected.min(self.entries.len().saturating_sub(1)));
         self.top = self.top.min(self.selected);
         Ok(())
@@ -189,7 +227,7 @@ impl Model {
 
     fn load_directory(&mut self, directory: PathBuf) -> io::Result<()> {
         let mut entries = scan(&directory, self.hidden, self.order, "")?;
-        entries.retain(|e|self.kind_filter.accepts(e));
+        entries.retain(|e| self.kind_filter.accepts(e));
         self.directory = directory;
         self.entries = entries;
         self.query.clear();
@@ -210,7 +248,9 @@ impl Model {
 
     pub fn history(&mut self, forward: bool) -> io::Result<()> {
         let next = if forward {
-            self.history_index.checked_add(1).filter(|i| *i < self.history.len())
+            self.history_index
+                .checked_add(1)
+                .filter(|i| *i < self.history.len())
         } else {
             self.history_index.checked_sub(1)
         };
@@ -234,14 +274,20 @@ impl Model {
         if let Some(path) = self.directory.parent() {
             let previous = self.directory.clone();
             self.go(path.to_path_buf())?;
-            self.selected = self.entries.iter().position(|e| e.path == previous).unwrap_or(0);
+            self.selected = self
+                .entries
+                .iter()
+                .position(|e| e.path == previous)
+                .unwrap_or(0);
         }
         Ok(())
     }
 
     // No rescanning, rebuilding, cloning or sorting on cursor movement.
     pub fn shift(&mut self, delta: isize) {
-        self.selected = self.selected.saturating_add_signed(delta)
+        self.selected = self
+            .selected
+            .saturating_add_signed(delta)
             .min(self.entries.len().saturating_sub(1));
     }
 
@@ -253,7 +299,10 @@ impl Model {
         } else if self.selected.saturating_sub(self.top) >= height {
             self.top = self.selected + 1 - height;
         }
-        (self.top, self.top.saturating_add(height).min(self.entries.len()))
+        (
+            self.top,
+            self.top.saturating_add(height).min(self.entries.len()),
+        )
     }
 }
 
@@ -271,14 +320,19 @@ mod tests {
     struct Fixture(PathBuf);
     impl Fixture {
         fn new() -> Self {
-            let p = std::env::temp_dir().join(format!("tt-rust-test-{}-{}",
-                std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+            let p = std::env::temp_dir().join(format!(
+                "tt-rust-test-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
             fs::create_dir(&p).unwrap();
             Self(p)
         }
     }
     impl Drop for Fixture {
-        fn drop(&mut self) { fs::remove_dir_all(&self.0).unwrap(); }
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.0).unwrap();
+        }
     }
 
     #[test]
@@ -288,7 +342,10 @@ mod tests {
         fs::write(f.0.join("Apple"), b"a").unwrap();
         fs::write(f.0.join(".hidden"), b"h").unwrap();
         let e = scan(&f.0, false, Order::Name, "").unwrap();
-        assert_eq!(e.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["Z-folder", "Apple"]);
+        assert_eq!(
+            e.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
+            ["Z-folder", "Apple"]
+        );
         assert_eq!(scan(&f.0, true, Order::Name, "").unwrap().len(), 3);
         assert_eq!(scan(&f.0, false, Order::Name, "APPLE").unwrap().len(), 1);
     }
@@ -305,7 +362,10 @@ mod tests {
         assert!(e[0].name.contains("\\xff"));
         assert!(!e[0].name.contains('\x1b'));
         assert!(!e[0].name.contains('\n'));
-        assert_ne!(display_name(OsStr::new("\\xFF")), display_name(OsStr::new("\u{00ff}")));
+        assert_ne!(
+            display_name(OsStr::new("\\xFF")),
+            display_name(OsStr::new("\u{00ff}"))
+        );
     }
 
     #[cfg(unix)]
@@ -316,17 +376,21 @@ mod tests {
         symlink("target", f.0.join("link")).unwrap();
         symlink("missing", f.0.join("dangling")).unwrap();
         let e = scan(&f.0, false, Order::Name, "").unwrap();
-        assert!(e.iter().any(|e| e.name == "link" && e.directory && e.symlink));
-        assert!(e.iter().any(|e| e.name == "dangling" && !e.directory && e.symlink));
+        assert!(e
+            .iter()
+            .any(|e| e.name == "link" && e.directory && e.symlink));
+        assert!(e
+            .iter()
+            .any(|e| e.name == "dangling" && !e.directory && e.symlink));
     }
 
     #[cfg(windows)]
     #[test]
-    fn windows_display_escapes_unpaired_surrogates(){
+    fn windows_display_escapes_unpaired_surrogates() {
         use std::os::windows::ffi::OsStringExt;
-        let name=OsString::from_wide(&[b'a' as u16,0xd800,0x1b]);
-        let text=display_name(&name);
-        assert_eq!(text,"a\\u{d800}\\u{1b}");
+        let name = OsString::from_wide(&[b'a' as u16, 0xd800, 0x1b]);
+        let text = display_name(&name);
+        assert_eq!(text, "a\\u{d800}\\u{1b}");
     }
     #[test]
     fn sort_size_descending_and_type() {
@@ -340,10 +404,14 @@ mod tests {
     #[test]
     fn cursor_movement_never_rescans_and_viewport_is_bounded() {
         let f = Fixture::new();
-        for i in 0..100 { fs::write(f.0.join(format!("{i:03}")), b"x").unwrap(); }
+        for i in 0..100 {
+            fs::write(f.0.join(format!("{i:03}")), b"x").unwrap();
+        }
         let mut m = Model::new(f.0.clone()).unwrap();
         fs::write(f.0.join("new"), b"x").unwrap();
-        for _ in 0..50 { m.shift(1); }
+        for _ in 0..50 {
+            m.shift(1);
+        }
         assert_eq!(m.entries.len(), 100);
         assert_eq!(m.selected, 50);
         assert_eq!(m.viewport(10), (41, 51));

@@ -1,10 +1,19 @@
 //! In-app command reference. Keep this in sync with the actual event handlers.
-use crossterm::{cursor::MoveTo,event::{self,Event,KeyCode,KeyEventKind,KeyModifiers,MouseEventKind},queue,style::{Print,ResetColor,SetForegroundColor,Color},terminal::{self,Clear,ClearType}};
-use std::io::{self,Write};
-use unicode_width::{UnicodeWidthChar,UnicodeWidthStr};
+use crossterm::{
+    cursor::MoveTo,
+    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind},
+    queue,
+    style::{Color, Print, ResetColor, SetForegroundColor},
+    terminal::{self, Clear, ClearType},
+};
+use std::io::{self, Write};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-type Row=(&'static str,&'static str);
-struct Topic{title:&'static str,rows:&'static [Row]}
+type Row = (&'static str, &'static str);
+struct Topic {
+    title: &'static str,
+    rows: &'static [Row],
+}
 const TOPICS:&[Topic]=&[
     Topic{title:"Navigation",rows:&[
         ("Up / Down","Select the previous / next entry."),
@@ -88,108 +97,213 @@ const TOPICS:&[Topic]=&[
 ];
 
 // Unicode-width wrapping with hard breaks for long words; never drop characters.
-fn wrap(text:&str,width:usize)->Vec<String>{
-    let width=width.max(1);
-    let mut out=Vec::new();let mut line=String::new();let mut used=0;
-    for word in text.split_whitespace(){
-        let n=word.width();
-        if !line.is_empty()&&used+1+n>width{out.push(std::mem::take(&mut line));used=0;}
-        if !line.is_empty(){line.push(' ');used+=1;}
-        for c in word.chars(){
-            let n=c.width().unwrap_or(0);
-            if used+n>width&&!line.is_empty(){out.push(std::mem::take(&mut line));used=0;}
-            line.push(c);used+=n;
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut out = Vec::new();
+    let mut line = String::new();
+    let mut used = 0;
+    for word in text.split_whitespace() {
+        let n = word.width();
+        if !line.is_empty() && used + 1 + n > width {
+            out.push(std::mem::take(&mut line));
+            used = 0;
+        }
+        if !line.is_empty() {
+            line.push(' ');
+            used += 1;
+        }
+        for c in word.chars() {
+            let n = c.width().unwrap_or(0);
+            if used + n > width && !line.is_empty() {
+                out.push(std::mem::take(&mut line));
+                used = 0;
+            }
+            line.push(c);
+            used += n;
         }
     }
-    if !line.is_empty(){out.push(line);}
+    if !line.is_empty() {
+        out.push(line);
+    }
     out
 }
-fn layout(rows:&[Row],width:usize)->Vec<String>{
-    let mut lines=Vec::new();
-    for &(key,description) in rows{
-        if width>=56 && key.width()<=23{
-            let indent=25;
-            for (i,line) in wrap(description,width-indent).into_iter().enumerate(){
-                if i==0{lines.push(format!("{key:<23}  {line}"));}
-                else{lines.push(format!("{:indent$}{line}",""));}
+fn layout(rows: &[Row], width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    for &(key, description) in rows {
+        if width >= 56 && key.width() <= 23 {
+            let indent = 25;
+            for (i, line) in wrap(description, width - indent).into_iter().enumerate() {
+                if i == 0 {
+                    lines.push(format!("{key:<23}  {line}"));
+                } else {
+                    lines.push(format!("{:indent$}{line}", ""));
+                }
             }
-        }else{
-            lines.extend(wrap(key,width));
-            let indent=if width>=12{2}else{0};
-            lines.extend(wrap(description,width.saturating_sub(indent)).into_iter().map(|s|format!("{:indent$}{s}","")));
+        } else {
+            lines.extend(wrap(key, width));
+            let indent = if width >= 12 { 2 } else { 0 };
+            lines.extend(
+                wrap(description, width.saturating_sub(indent))
+                    .into_iter()
+                    .map(|s| format!("{:indent$}{s}", "")),
+            );
             lines.push(String::new());
         }
     }
     lines
 }
-fn topic(t:&Topic)->io::Result<()>{
-    let mut top=0usize;
-    loop{
-        let(w,h)=terminal::size()?;
-        let width=usize::from(w).saturating_sub(1).max(1);
-        let lines=layout(t.rows,width);
-        let cap=usize::from(h).saturating_sub(3).max(1);
-        top=top.min(lines.len().saturating_sub(cap));
-        let mut out=io::stdout().lock();
-        queue!(out,MoveTo(0,0),Clear(ClearType::All),SetForegroundColor(Color::Cyan),Print(super::clip(t.title,width)),ResetColor)?;
-        if h>=4{
-            for(i,line)in lines.iter().skip(top).take(cap).enumerate(){
-                queue!(out,MoveTo(0,(i+1) as u16),Print(super::clip(line,width)))?;
+fn topic(t: &Topic) -> io::Result<()> {
+    let mut top = 0usize;
+    loop {
+        let (w, h) = terminal::size()?;
+        let width = usize::from(w).saturating_sub(1).max(1);
+        let lines = layout(t.rows, width);
+        let cap = usize::from(h).saturating_sub(3).max(1);
+        top = top.min(lines.len().saturating_sub(cap));
+        let mut out = io::stdout().lock();
+        queue!(
+            out,
+            MoveTo(0, 0),
+            Clear(ClearType::All),
+            SetForegroundColor(Color::Cyan),
+            Print(super::clip(t.title, width)),
+            ResetColor
+        )?;
+        if h >= 4 {
+            for (i, line) in lines.iter().skip(top).take(cap).enumerate() {
+                queue!(
+                    out,
+                    MoveTo(0, (i + 1) as u16),
+                    Print(super::clip(line, width))
+                )?;
             }
-            queue!(out,MoveTo(0,h-2),Print(super::clip(&format!("Lines {}-{}/{}",top+1,(top+cap).min(lines.len()),lines.len()),width)),
-                MoveTo(0,h-1),Print(super::clip("Scroll / PgUp PgDn | Esc back",width)))?;
-        }else if h>=2{
-            queue!(out,MoveTo(0,h-1),Print(super::clip("Esc back",width)))?;
+            queue!(
+                out,
+                MoveTo(0, h - 2),
+                Print(super::clip(
+                    &format!(
+                        "Lines {}-{}/{}",
+                        top + 1,
+                        (top + cap).min(lines.len()),
+                        lines.len()
+                    ),
+                    width
+                )),
+                MoveTo(0, h - 1),
+                Print(super::clip("Scroll / PgUp PgDn | Esc back", width))
+            )?;
+        } else if h >= 2 {
+            queue!(out, MoveTo(0, h - 1), Print(super::clip("Esc back", width)))?;
         }
-        out.flush()?;drop(out);
-        match event::read()?{
-            Event::Key(k) if matches!(k.kind,KeyEventKind::Press|KeyEventKind::Repeat)=>{
-                if k.modifiers.contains(KeyModifiers::CONTROL)&&k.code==KeyCode::Char('c'){return Ok(());}
-                match k.code{
-                    KeyCode::Esc|KeyCode::Char('q')|KeyCode::Enter|KeyCode::Left|KeyCode::F(1)=>return Ok(()),
-                    KeyCode::Up=>top=top.saturating_sub(1),KeyCode::Down=>top=top.saturating_add(1),
-                    KeyCode::PageUp=>top=top.saturating_sub(cap),KeyCode::PageDown=>top=top.saturating_add(cap),
-                    KeyCode::Home=>top=0,KeyCode::End=>top=lines.len(),_=>()
+        out.flush()?;
+        drop(out);
+        match event::read()? {
+            Event::Key(k) if matches!(k.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
+                if k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('c') {
+                    return Ok(());
+                }
+                match k.code {
+                    KeyCode::Esc
+                    | KeyCode::Char('q')
+                    | KeyCode::Enter
+                    | KeyCode::Left
+                    | KeyCode::F(1) => return Ok(()),
+                    KeyCode::Up => top = top.saturating_sub(1),
+                    KeyCode::Down => top = top.saturating_add(1),
+                    KeyCode::PageUp => top = top.saturating_sub(cap),
+                    KeyCode::PageDown => top = top.saturating_add(cap),
+                    KeyCode::Home => top = 0,
+                    KeyCode::End => top = lines.len(),
+                    _ => (),
                 }
             }
-            Event::Mouse(m)=>match m.kind{
-                MouseEventKind::ScrollUp=>top=top.saturating_sub(1),
-                MouseEventKind::ScrollDown=>top=top.saturating_add(1),_=>()
+            Event::Mouse(m) => match m.kind {
+                MouseEventKind::ScrollUp => top = top.saturating_sub(1),
+                MouseEventKind::ScrollDown => top = top.saturating_add(1),
+                _ => (),
             },
-            _=>()
+            _ => (),
         }
     }
 }
-pub fn show(writable:bool,personal:bool,return_on_enter:bool)->io::Result<()>{
-    let mode=if personal{"personal"}else if writable{"workspace"}else if return_on_enter{"shell navigation"}else{"read-only"};
-    let title=format!("Terminal Tree help | {mode}");
-    let labels:Vec<_>=TOPICS.iter().enumerate().map(|(i,t)|format!("{}. {}",i+1,t.title)).collect();
-    loop{
-        let Some(i)=super::choose(&title,&labels)? else{return Ok(())};
+pub fn show(writable: bool, personal: bool, return_on_enter: bool) -> io::Result<()> {
+    let mode = if personal {
+        "personal"
+    } else if writable {
+        "workspace"
+    } else if return_on_enter {
+        "shell navigation"
+    } else {
+        "read-only"
+    };
+    let title = format!("Terminal Tree help | {mode}");
+    let labels: Vec<_> = TOPICS
+        .iter()
+        .enumerate()
+        .map(|(i, t)| format!("{}. {}", i + 1, t.title))
+        .collect();
+    loop {
+        let Some(i) = super::choose(&title, &labels)? else {
+            return Ok(());
+        };
         topic(&TOPICS[i])?;
     }
 }
 #[cfg(test)]
-mod tests{
+mod tests {
     use super::*;
     #[test]
-    fn layouts_keep_text_visible_at_small_and_large_widths(){
-        for width in [16,24,40,56,80,120]{
-            for t in TOPICS{
-                let lines=layout(t.rows,width);
-                assert!(lines.iter().all(|l|l.width()<=width));
+    fn layouts_keep_text_visible_at_small_and_large_widths() {
+        for width in [16, 24, 40, 56, 80, 120] {
+            for t in TOPICS {
+                let lines = layout(t.rows, width);
+                assert!(lines.iter().all(|l| l.width() <= width));
                 assert!(!lines.is_empty());
-                let actual=lines.join(" ").split_whitespace().collect::<Vec<_>>().join("");
-                let expected=t.rows.iter().flat_map(|(k,d)|[k,d]).flat_map(|s|s.split_whitespace()).collect::<Vec<_>>().join("");
-                assert_eq!(actual,expected);
+                let actual = lines
+                    .join(" ")
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join("");
+                let expected = t
+                    .rows
+                    .iter()
+                    .flat_map(|(k, d)| [k, d])
+                    .flat_map(|s| s.split_whitespace())
+                    .collect::<Vec<_>>()
+                    .join("");
+                assert_eq!(actual, expected);
             }
         }
     }
     #[test]
-    fn every_command_group_exists(){
-        let keys:Vec<_>=TOPICS.iter().flat_map(|t|t.rows.iter().map(|r|r.0)).collect();
-        for key in ["F1 / ?","m / F4","F6","F7","Space","a / A","c","x","v","r / F2","n","t","u","d / Delete","R","D","j","S","Ctrl + left click","Shift + right click"]{
-            assert!(keys.contains(&key),"missing {key}");
+    fn every_command_group_exists() {
+        let keys: Vec<_> = TOPICS
+            .iter()
+            .flat_map(|t| t.rows.iter().map(|r| r.0))
+            .collect();
+        for key in [
+            "F1 / ?",
+            "m / F4",
+            "F6",
+            "F7",
+            "Space",
+            "a / A",
+            "c",
+            "x",
+            "v",
+            "r / F2",
+            "n",
+            "t",
+            "u",
+            "d / Delete",
+            "R",
+            "D",
+            "j",
+            "S",
+            "Ctrl + left click",
+            "Shift + right click",
+        ] {
+            assert!(keys.contains(&key), "missing {key}");
         }
     }
 }

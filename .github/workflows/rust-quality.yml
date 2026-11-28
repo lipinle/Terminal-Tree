@@ -1,0 +1,42 @@
+name: Rust code quality
+on:
+  push:
+    paths:
+      - 'rust/**'
+      - '.github/workflows/rust-quality.yml'
+  pull_request:
+    paths:
+      - 'rust/**'
+      - '.github/workflows/rust-quality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  format:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Select reproducible lint toolchain
+        run: rustup toolchain install 1.100.0 --profile minimal --component rustfmt
+      - name: Check rustfmt
+        run: cargo +1.100.0 fmt --manifest-path rust/Cargo.toml --all -- --check
+  clippy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        features: [all-features, no-default-features]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Select reproducible lint toolchain
+        run: rustup toolchain install 1.100.0 --profile minimal --component clippy
+      - name: Check all targets
+        run: cargo +1.100.0 clippy --locked --manifest-path rust/Cargo.toml --all-targets --${{ matrix.features }} -- -D warnings
