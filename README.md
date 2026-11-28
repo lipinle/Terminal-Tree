@@ -80,6 +80,8 @@ Commands run explicitly in the active file pane's current directory, with your o
 
 Tree and List show responsive Size (IEC units), Type and Modified (UTC date) columns where space permits. Click column headings to sort through the existing model. Marks clear when reordering; the selected native path is retained where possible. Settings > Display > File detail columns toggles them. Directory sizes are not recursively calculated.
 
+Click the Preview header or press Alt+P to cycle Content, Properties and Hex; scroll over the preview to read additional lines. Properties shows observed entry metadata, not recursive directory size. Native Linux is required for content/hex reads. The status line reports marked items in the visible directory and whether Bash is running.
+
 ## Navigation and search
 
 Use the installed executable (examples below assume it is on your PATH), or substitute its full path.

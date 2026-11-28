@@ -160,6 +160,12 @@ fn row_text(entry: &Entry, index: usize, count: usize, view: View, glyph: &str, 
     Columns::new(width,details).row(&name,entry)
 }
 
+#[derive(Clone,Copy,Debug,Default,PartialEq,Eq)]
+enum PreviewMode {#[default] Content,Properties,Hex}
+impl PreviewMode {
+    fn next(self)->Self {match self{Self::Content=>Self::Properties,Self::Properties=>Self::Hex,Self::Hex=>Self::Content}}
+    fn name(self)->&'static str{match self{Self::Content=>"Content",Self::Properties=>"Properties",Self::Hex=>"Hex"}}
+}
 const MENUS: [(&str, u16); 7] = [
     ("File", 15), ("Edit", 21), ("View", 27), ("Go", 33), ("Tools", 37), ("Settings", 44), ("Add-ons", 54),
 ];
@@ -222,6 +228,8 @@ pub struct State {
     preview_enabled: bool,
     preview_key: Option<PreviewKey>,
     preview_lines: Vec<String>,
+    preview_mode: PreviewMode,
+    preview_offset: usize,
     dual: bool,
     active_right: bool,
     other: Option<Model>,
@@ -251,6 +259,7 @@ impl State {
             places: Vec::new(), bookmarks: Vec::new(), trash,
             side_focus: false, side_cursor: 0, side_top: 0, preview_enabled: true,
             preview_key: None, preview_lines: Vec::new(),
+            preview_mode: Default::default(), preview_offset:0,
             dual: false, active_right: false, other: None, pane_switched: false,
             view: View::Tree, zoom: 1, location: None, expanded_tree: None,
             tabs: vec![None], active_tab: 0, dragging: None,
@@ -386,6 +395,11 @@ impl State {
             queue!(out,MoveTo(X,0),SetForegroundColor(self.prefs.accent),Print(label),SetForegroundColor(self.prefs.foreground))?;
         }
         Ok(())
+    }
+    fn task_label(&self)->&'static str {
+        #[cfg(feature = "native-ops")]
+        if self.terminal_panel.running(){return "Bash running";}
+        "idle"
     }
     fn layout(&self, w: u16, h: u16) -> Layout {
         let mut layout = Layout::new(w,h,self.preview_enabled);
@@ -780,14 +794,22 @@ impl State {
         let key = entry.map(|e| (e.path.clone(), e.size, e.modified));
         if key == self.preview_key && !self.preview_lines.is_empty() { return; }
         self.preview_key = key;
+        self.preview_offset=0;
         self.preview_lines = match entry {
             None => vec!["No selection".into()],
+            Some(e) if self.preview_mode==PreviewMode::Properties=>vec![
+                e.name.clone(),format!("Type: {}",file_type(e)),
+                format!("Size: {}",if e.directory&&!e.symlink {"Not calculated".into()}else{human_size(e.size)}),
+                format!("Modified (UTC): {}",modified_date(e.modified)),
+                display_name(e.path.as_os_str()),
+            ],
             Some(e) if e.directory => vec![e.name.clone(), "Folder".into(), "Enter to open".into()],
             Some(e) if e.symlink => vec![e.name.clone(), "Symbolic link".into(), "Preview not followed".into()],
             Some(e) => {
                 #[cfg(feature = "native-ops")]
                 {
-                    match terminal_tree::preview::read_lines(&e.path, terminal_tree::preview::Mode::Auto) {
+                    let mode=if self.preview_mode==PreviewMode::Hex {terminal_tree::preview::Mode::Hex}else{terminal_tree::preview::Mode::Auto};
+                    match terminal_tree::preview::read_lines(&e.path, mode) {
                         Ok(mut lines) => {
                             if !lines.is_empty() { lines[0] = e.name.clone(); }
                             lines
@@ -995,7 +1017,9 @@ impl State {
             draw_column(&mut out, model, side, true, 0, width, cap, marked, self.icons, &self.prefs)?;
         }
         let safety = if writable { "Scoped" } else { "Read-only" };
-        let status = if self.prefs.status_details { format!("Clipboard: {clipboard} files | Tasks: idle | Safety: {safety} | {} entries", model.entries.len()) } else { format!("Safety: {safety}") };
+        let tasks=self.task_label();
+        let marks=model.entries.iter().filter(|entry|marked(&entry.path)).count();
+        let status = if self.prefs.status_details { format!("Clipboard: {clipboard} files | Tasks: {tasks} | Safety: {safety} | {} entries | Marked {marks}", model.entries.len()) } else { format!("Safety: {safety}") };
         let detail = if searching || !model.query.is_empty() {
             format!("Filter: {} | {message}", display_name(std::ffi::OsStr::new(&model.query)))
         } else { message.to_owned() };
@@ -1049,7 +1073,7 @@ impl State {
         queue!(out, MoveTo(l.first(),3), SetForegroundColor(self.prefs.accent),
             Print(super::clip(&heading,usize::from(l.end()-l.first()))), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
         if l.preview > 0 {
-            queue!(out, MoveTo(l.end()+1,3), SetForegroundColor(self.prefs.accent), Print("Preview"), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
+            queue!(out, MoveTo(l.end()+1,3), SetForegroundColor(self.prefs.accent), Print(super::clip(&format!("Preview [{}]",self.preview_mode.name()),usize::from(l.preview))), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
             let entry = if let Some(tree) = &self.expanded_tree {
                 tree.rows().get(tree.selected()).map(|r| r.entry.clone())
             } else { model.entries.get(model.selected).cloned() };
@@ -1082,7 +1106,7 @@ impl State {
             }
             if l.preview > 0 {
                 queue!(out, MoveTo(l.end(),y), Print("│"))?;
-                if let Some(line) = self.preview_lines.get(row) {
+                if let Some(line) = self.preview_lines.get(self.preview_offset.saturating_add(row)) {
                     queue!(out, MoveTo(l.end()+1,y), Print(super::clip(line,usize::from(l.preview))))?;
                 }
             }
@@ -1117,7 +1141,9 @@ impl State {
             queue!(out, SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
         }
         let safety = if self.expanded_tree.is_some() { "Tree inspection" } else if writable { "Scoped" } else { "Read-only" };
-        let status = if self.prefs.status_details { format!("Clipboard: {clipboard} files | Tasks: idle | Safety: {safety} | {} | {} View | Zoom {}",model.entries.len(),self.view.name(),self.zoom) } else { format!("Safety: {safety} | {} View | Zoom {}",self.view.name(),self.zoom) };
+        let marks=model.entries.iter().filter(|entry|marked(&entry.path)).count();
+        let tasks=self.task_label();
+        let status = if self.prefs.status_details { format!("Clipboard: {clipboard} files | Tasks: {tasks} | Safety: {safety} | {} | {} View | Zoom {} | Marked {marks}",model.entries.len(),self.view.name(),self.zoom) } else { format!("Safety: {safety} | {} View | Zoom {}",self.view.name(),self.zoom) };
         let detail = if self.expanded_tree.is_some() {
             "Expanded tree: Right expand / Left collapse / Enter open / Esc back".to_owned()
         } else if searching || !model.query.is_empty() {
@@ -1171,6 +1197,7 @@ impl State {
             5 => vec![("Settings Center",KeyCode::Char(','),KeyModifiers::CONTROL)],
             _ => vec![("Manage integrations",KeyCode::F(11),KeyModifiers::SHIFT)],
         };
+        if category == 2 {commands.push(("Cycle preview mode (Alt+P)",KeyCode::Char('p'),KeyModifiers::ALT));}
         if category == 2 && cfg!(feature = "native-ops") {
             commands.push(("Toggle terminal panel (Alt+H)",KeyCode::Char('h'),KeyModifiers::ALT));
             commands.push(("Focus terminal (Alt+T)",KeyCode::Char('t'),KeyModifiers::ALT));
@@ -1428,6 +1455,25 @@ impl State {
                 model.set_view(model.hidden,order,model.kind_filter,model.query.clone())?;
                 self.expanded_tree=None;self.preview_key=None;self.side_focus=false;self.pane_switched=true;
                 return Ok(None);
+            }
+        }
+        if let Event::Mouse(mouse)=&event {
+            if !self.dual && h>=8 && l.preview>0 && mouse.column>l.end() && mouse.column<l.width && mouse.row>=3 && mouse.row<h-3 {
+                match mouse.kind {
+                    MouseEventKind::Down(MouseButton::Left) if mouse.row==3&&mouse.modifiers==KeyModifiers::NONE=>{
+                        self.preview_mode=self.preview_mode.next();self.preview_key=None;self.preview_offset=0;
+                    }
+                    MouseEventKind::ScrollDown=>self.preview_offset=(self.preview_offset+3).min(self.preview_lines.len().saturating_sub(l.capacity())),
+                    MouseEventKind::ScrollUp=>self.preview_offset=self.preview_offset.saturating_sub(3),
+                    _=>(),
+                }
+                return Ok(None);
+            }
+        }
+        if let Event::Key(k)=&event {
+            if k.kind==KeyEventKind::Press&&k.modifiers==KeyModifiers::ALT&&k.code==KeyCode::Char('p') {
+                self.preview_mode=self.preview_mode.next();self.preview_key=None;self.preview_offset=0;
+                self.dual=false;self.preview_enabled=true;return Ok(None);
             }
         }
         if self.expanded_input(&event, model, l)? { return Ok(None); }
