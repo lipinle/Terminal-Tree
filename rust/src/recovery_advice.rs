@@ -81,6 +81,7 @@ pub fn classify(filename: &OsStr, record: &Value) -> Advice {
     match record.get("operation").and_then(Value::as_str) {
         Some("copy") if source && destination && stage => Advice::InspectTransfer,
         Some("move") if source && destination && !stage => Advice::InspectTransfer,
+        Some("archive-extract") if !source && destination && stage => Advice::InspectCreation,
         Some("mkdir" | "create-file") if !source && destination && !stage => {
             Advice::InspectCreation
         }
@@ -90,7 +91,7 @@ pub fn classify(filename: &OsStr, record: &Value) -> Advice {
         Some("permanent-delete") if source && !destination => Advice::InspectPurge,
         Some(
             "copy" | "move" | "mkdir" | "create-file" | "native-trash" | "restore"
-            | "permanent-delete",
+            | "permanent-delete" | "archive-extract",
         )
         | None => Advice::MalformedRecord,
         Some(_) => Advice::UnrecognizedOperation,
@@ -104,7 +105,7 @@ impl Advice {
                 "Inspect source, destination and any staging data; do not retry blindly."
             }
             Self::InspectCreation => {
-                "Inspect the destination and verify its identity before any retry."
+                "Inspect the destination and any staging data; verify identity before any retry."
             }
             Self::InspectTrashOrRestore => {
                 "Inspect source, destination and Trash metadata together."
@@ -187,6 +188,19 @@ mod tests {
         record["started"] = json!("wrong");
         assert_eq!(inspect(&record), Advice::MalformedRecord);
         let mut record = copy_record();
+        record["stage"] = Value::Null;
+        record["stage_bytes_hex"] = Value::Null;
+        assert_eq!(inspect(&record), Advice::MalformedRecord);
+    }
+
+    #[test]
+    fn archive_extraction_evidence_requires_destination_and_stage() {
+        let mut record = copy_record();
+        record["operation"] = json!("archive-extract");
+        assert_eq!(inspect(&record), Advice::MalformedRecord);
+        record["source"] = Value::Null;
+        record["source_bytes_hex"] = Value::Null;
+        assert_eq!(inspect(&record), Advice::InspectCreation);
         record["stage"] = Value::Null;
         record["stage_bytes_hex"] = Value::Null;
         assert_eq!(inspect(&record), Advice::MalformedRecord);
