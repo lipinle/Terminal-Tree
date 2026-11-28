@@ -211,8 +211,8 @@ pub fn show(prefs: &mut super::app_settings::Preferences, last: Option<&str>) ->
             _ => None,
         };
         match action{
-            Some(i @ 0..=2)=>prefs.companions[i]=!prefs.companions[i],
-            Some(3)=>prefs.visual_preview=!prefs.visual_preview,
+            Some(i @ 0..=2) => prefs.companions[i] = !prefs.companions[i],
+            Some(3) => prefs.visual_preview = !prefs.visual_preview,
             Some(4)=>super::page("Add-on installation help",&[
                 "eza / 7-Zip / Git: distribution packages.".into(),
                 "sudo apt install eza 7zip git".into(),

@@ -15,6 +15,14 @@ use std::{
 };
 use terminal_tree::{display_name, tree::TreeModel, Entry, KindFilter, Model};
 
+pub struct DrawStatus<'a> {
+    pub message: &'a str,
+    pub searching: bool,
+    pub writable: bool,
+    pub personal: bool,
+    pub clipboard: usize,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum View {
     #[default]
@@ -388,16 +396,25 @@ fn row_metadata(entry: &Entry) -> (Option<u64>, Option<std::time::SystemTime>) {
         Err(_) => (None, None),
     }
 }
+struct RowPresentation {
+    view: View,
+    width: u16,
+    details: bool,
+}
+
 fn row_text(
     entry: &Entry,
     index: usize,
     count: usize,
-    view: View,
     glyph: &str,
     marked: bool,
-    width: u16,
-    details: bool,
+    presentation: RowPresentation,
 ) -> String {
+    let RowPresentation {
+        view,
+        width,
+        details,
+    } = presentation;
     let mark = if marked { "[x]" } else { "   " };
     let name = match view {
         View::Tree => format!(
@@ -840,8 +857,17 @@ impl State {
         if rows > 0 && width > 0 {
             self.terminal_panel
                 .resize_shell(width, rows.saturating_sub(3))?;
-            self.terminal_panel
-                .draw(out, left, top, rows, width, &model.directory, &self.prefs)?;
+            self.terminal_panel.draw(
+                out,
+                super::terminal_panel::PanelRect {
+                    left,
+                    top,
+                    rows,
+                    width,
+                },
+                &model.directory,
+                &self.prefs,
+            )?;
         }
         Ok(())
     }
@@ -1864,13 +1890,16 @@ impl State {
     fn draw_dual(
         &mut self,
         model: &mut Model,
-        message: &str,
-        searching: bool,
-        writable: bool,
-        personal: bool,
-        clipboard: usize,
+        status: DrawStatus<'_>,
         marked: &impl Fn(&std::path::Path) -> bool,
     ) -> io::Result<()> {
+        let DrawStatus {
+            message,
+            searching,
+            writable,
+            personal,
+            clipboard,
+        } = status;
         let (w, full_h) = terminal::size()?;
         let h = full_h - self.panel_rows(full_h);
         let width = w.saturating_sub(1);
@@ -1926,11 +1955,13 @@ impl State {
                 draw_column(
                     &mut out,
                     other,
-                    "Left",
-                    false,
-                    0,
-                    split,
-                    cap,
+                    Column {
+                        label: "Left",
+                        active: false,
+                        x: 0,
+                        width: split,
+                        cap,
+                    },
                     marked,
                     self.icons,
                     &self.prefs,
@@ -1938,11 +1969,13 @@ impl State {
                 draw_column(
                     &mut out,
                     model,
-                    "Right",
-                    true,
-                    split + 1,
-                    width - split - 1,
-                    cap,
+                    Column {
+                        label: "Right",
+                        active: true,
+                        x: split + 1,
+                        width: width - split - 1,
+                        cap,
+                    },
                     marked,
                     self.icons,
                     &self.prefs,
@@ -1951,11 +1984,13 @@ impl State {
                 draw_column(
                     &mut out,
                     model,
-                    "Left",
-                    true,
-                    0,
-                    split,
-                    cap,
+                    Column {
+                        label: "Left",
+                        active: true,
+                        x: 0,
+                        width: split,
+                        cap,
+                    },
                     marked,
                     self.icons,
                     &self.prefs,
@@ -1963,11 +1998,13 @@ impl State {
                 draw_column(
                     &mut out,
                     other,
-                    "Right",
-                    false,
-                    split + 1,
-                    width - split - 1,
-                    cap,
+                    Column {
+                        label: "Right",
+                        active: false,
+                        x: split + 1,
+                        width: width - split - 1,
+                        cap,
+                    },
                     marked,
                     self.icons,
                     &self.prefs,
@@ -1980,11 +2017,13 @@ impl State {
             draw_column(
                 &mut out,
                 model,
-                side,
-                true,
-                0,
-                width,
-                cap,
+                Column {
+                    label: side,
+                    active: true,
+                    x: 0,
+                    width,
+                    cap,
+                },
                 marked,
                 self.icons,
                 &self.prefs,
@@ -2041,11 +2080,7 @@ impl State {
     pub fn draw(
         &mut self,
         model: &mut Model,
-        message: &str,
-        searching: bool,
-        writable: bool,
-        personal: bool,
-        clipboard: usize,
+        status: DrawStatus<'_>,
         marked: impl Fn(&std::path::Path) -> bool,
     ) -> io::Result<()> {
         if self.dual {
@@ -2055,10 +2090,15 @@ impl State {
                 self.graphics_slot.clear()?;
                 self.graphics_placed = false;
             }
-            return self.draw_dual(
-                model, message, searching, writable, personal, clipboard, &marked,
-            );
+            return self.draw_dual(model, status, &marked);
         }
+        let DrawStatus {
+            message,
+            searching,
+            writable,
+            personal,
+            clipboard,
+        } = status;
         let (w, full_h) = terminal::size()?;
         let h = full_h - self.panel_rows(full_h);
         let l = self.layout(w, h);
@@ -2416,11 +2456,13 @@ impl State {
                         e,
                         index,
                         model.entries.len(),
-                        self.view,
                         glyph,
                         marked(&e.path),
-                        cells.width,
-                        self.prefs.list_details,
+                        RowPresentation {
+                            view: self.view,
+                            width: cells.width,
+                            details: self.prefs.list_details,
+                        },
                     )
                 };
                 let label = if selected {
@@ -3694,18 +3736,29 @@ impl State {
     }
 }
 
-fn draw_column(
-    out: &mut impl Write,
-    model: &mut Model,
-    label: &str,
+struct Column<'a> {
+    label: &'a str,
     active: bool,
     x: u16,
     width: u16,
     cap: usize,
+}
+
+fn draw_column(
+    out: &mut impl Write,
+    model: &mut Model,
+    column: Column<'_>,
     marked: &impl Fn(&std::path::Path) -> bool,
     icons: super::file_icons::Style,
     prefs: &super::app_settings::Preferences,
 ) -> io::Result<()> {
+    let Column {
+        label,
+        active,
+        x,
+        width,
+        cap,
+    } = column;
     let path = display_name(model.directory.as_os_str());
     let header = format!("{label}{} | {path}", if active { " *" } else { "" });
     queue!(

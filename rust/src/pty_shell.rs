@@ -127,9 +127,7 @@ impl Shell {
                         if e.kind() == io::ErrorKind::WouldBlock
                             || e.kind() == io::ErrorKind::Interrupted
                             || e.raw_os_error() == Some(5) =>
-                    {
-                        ()
-                    }
+                    {}
                     Err(e) => return Err(e),
                 }
             }

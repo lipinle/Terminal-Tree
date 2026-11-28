@@ -495,11 +495,13 @@ fn browse_with_layout(
             let clipboard = 0;
             ui.draw(
                 &mut model,
-                &message,
-                searching,
-                writable,
-                personal,
-                clipboard,
+                dashboard::DrawStatus {
+                    message: &message,
+                    searching,
+                    writable,
+                    personal,
+                    clipboard,
+                },
                 |path| {
                     #[cfg(feature = "native-ops")]
                     {

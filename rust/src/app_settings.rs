@@ -353,7 +353,8 @@ mod tests {
         use std::os::unix::ffi::OsStringExt;
         let path =
             std::path::PathBuf::from(std::ffi::OsString::from_vec(b"/tmp/raw-\xff".to_vec()));
-        let value = serde_json::json!({"bookmarks":encode_bookmarks(std::slice::from_ref(&path)).unwrap()});
+        let value =
+            serde_json::json!({"bookmarks":encode_bookmarks(std::slice::from_ref(&path)).unwrap()});
         assert_eq!(decode_bookmarks(&value).unwrap(), vec![path]);
         assert!(decode_bookmarks(&serde_json::json!({"bookmarks":"00"})).is_err());
         assert!(decode_bookmarks(&serde_json::json!({"bookmarks":"\u{e613}"})).is_err());

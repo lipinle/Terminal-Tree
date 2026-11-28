@@ -123,6 +123,13 @@ impl Drop for Job {
     }
 }
 
+pub struct PanelRect {
+    pub left: u16,
+    pub top: u16,
+    pub rows: u16,
+    pub width: u16,
+}
+
 #[derive(Default)]
 pub struct Panel {
     pub focused: bool,
@@ -375,13 +382,16 @@ impl Panel {
     pub fn draw(
         &self,
         out: &mut impl Write,
-        left: u16,
-        top: u16,
-        rows: u16,
-        width: u16,
+        rect: PanelRect,
         directory: &Path,
         prefs: &super::app_settings::Preferences,
     ) -> io::Result<()> {
+        let PanelRect {
+            left,
+            top,
+            rows,
+            width,
+        } = rect;
         if rows < 3 || width == 0 {
             return Ok(());
         }
