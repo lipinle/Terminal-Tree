@@ -9,7 +9,15 @@ with tempfile.TemporaryDirectory(prefix="tt-preview-install-") as tmp:
     rc=base/".bashrc"; rc.write_bytes(b"# untouched\n")
     # Installer is passed an explicit target and must not read/write HOME's shell config.
     env=dict(os.environ,HOME=str(base),CARGO_HOME=os.environ.get("CARGO_HOME",str(Path.home()/".cargo")),RUSTUP_HOME=os.environ.get("RUSTUP_HOME",str(Path.home()/".rustup")))
-    subprocess.run(["bash",str(ROOT/"rust/install-preview.sh"),str(target)],check=True,env=env)
+    # The installer deliberately selects its own build directory.
+    env["CARGO_TARGET_DIR"] = str(base / "unexpected-build")
+    subprocess.run(["bash",str(ROOT/"rust/install-preview.sh"),str(target)],check=True,env=env,timeout=300)
+    assert not (base / "unexpected-build").exists()
+    empty = subprocess.run(
+        ["bash",str(ROOT/"rust/install-preview.sh"),""],
+        env=env,capture_output=True,timeout=15,
+    )
+    assert empty.returncode == 2
     assert rc.read_bytes()==b"# untouched\n"
     binary=target/"terminal-tree"; before=binary.read_bytes()
     integration=target/"integration.sh"

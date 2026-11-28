@@ -76,6 +76,25 @@ fn named_key(name: &str) -> Option<KeyCode> {
     })
 }
 
+fn key_name(code: KeyCode) -> Option<&'static str> {
+    Some(match code {
+        KeyCode::Up => "up",
+        KeyCode::Down => "down",
+        KeyCode::Left => "left",
+        KeyCode::Right => "right",
+        KeyCode::PageUp => "pageup",
+        KeyCode::PageDown => "pagedown",
+        KeyCode::Home => "home",
+        KeyCode::End => "end",
+        KeyCode::F(5) => "f5",
+        KeyCode::F(9) => "f9",
+        KeyCode::F(10) => "f10",
+        KeyCode::F(11) => "f11",
+        KeyCode::F(12) => "f12",
+        _ => return None,
+    })
+}
+
 fn default_binding(action: Action) -> Binding {
     let code = match action {
         Action::Up => KeyCode::Up,
@@ -159,6 +178,23 @@ impl Keymap {
         Ok(map)
     }
 
+    /// Export the complete map in a deterministic form accepted by from_spec.
+    /// This is a string only; no configuration file is created or changed.
+    pub fn to_spec(&self) -> Result<String, BindingError> {
+        ACTIONS
+            .iter()
+            .map(|&action| {
+                let binding = self.binding(action);
+                if !permitted(binding) {
+                    return Err(BindingError::ReservedOrUnsupported);
+                }
+                let key = key_name(binding.code).ok_or(BindingError::ReservedOrUnsupported)?;
+                Ok(format!("{}={key}", action.name()))
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(|parts| parts.join(","))
+    }
+
     pub fn summary(&self) -> String {
         ACTIONS
             .iter()
@@ -222,6 +258,20 @@ mod tests {
         Binding {
             code,
             modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn exported_spec_round_trips_complete_mapping() {
+        for map in [
+            Keymap::default(),
+            Keymap::from_spec("up=down,down=up,refresh=f12").unwrap(),
+        ] {
+            let spec = map.to_spec().unwrap();
+            assert!(spec.len() <= 256);
+            let decoded = Keymap::from_spec(&spec).unwrap();
+            assert_eq!(map.bindings, decoded.bindings);
+            assert_eq!(decoded.to_spec().unwrap(), spec);
         }
     }
 

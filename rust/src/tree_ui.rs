@@ -113,7 +113,7 @@ fn draw(model: &mut TreeModel, message: &str) -> io::Result<Frame> {
             Print(clip(message, limit)),
             MoveTo(0, height - 1),
             Print(clip(
-                "Arrows select/expand/collapse | +/- depth | F5 refresh | q exit",
+                "Arrows navigate | +/- depth | F5 refresh | i details | F1 help | q exit",
                 limit
             ))
         )?;
@@ -133,6 +133,31 @@ fn toggle(model: &mut TreeModel) -> io::Result<()> {
     } else {
         model.expand()
     }
+}
+
+fn selected_details(model: &TreeModel) -> io::Result<Vec<String>> {
+    let row = model
+        .rows()
+        .get(model.selected())
+        .ok_or_else(|| io::Error::other("no selected tree row"))?;
+    let entry = &row.entry;
+    let kind = if entry.symlink {
+        "Symbolic link"
+    } else if entry.directory {
+        "Directory"
+    } else {
+        "Non-directory"
+    };
+    Ok(vec![
+        "Cached scan information; press F5 in the tree to refresh.".into(),
+        format!("Name: {}", entry.name),
+        format!("Path: {}", display_name(entry.path.as_os_str())),
+        format!("Kind: {kind}"),
+        format!("Observed size: {} bytes", entry.size),
+        format!("Depth: {}", row.depth),
+        format!("Expanded: {}", row.expanded),
+        "Read-only; this page does not reopen the selected path.".into(),
+    ])
 }
 
 pub(crate) fn browse(path: &Path) -> io::Result<()> {
@@ -188,6 +213,31 @@ pub(crate) fn browse(path: &Path) -> io::Result<()> {
                         model.set_depth_limit(model.depth_limit().saturating_sub(1).max(1))
                     }
                     KeyCode::F(5) => model.refresh(),
+                    KeyCode::Char('i') if key.modifiers == KeyModifiers::NONE => {
+                        match selected_details(&model).and_then(|lines| {
+                            crate::page_with_interrupt("Tree details", &lines, true)
+                        }) {
+                            Ok(true) => break,
+                            Ok(false) => Ok(()),
+                            Err(error) => Err(error),
+                        }
+                    }
+                    KeyCode::F(1) if key.modifiers == KeyModifiers::NONE => {
+                        let lines = [
+                            "Up/Down, PgUp/PgDn, Home/End: select a row",
+                            "Right: expand | Left: collapse or select parent",
+                            "Enter or left click: toggle | Right click: select",
+                            "+/-: depth limit | F5: refresh",
+                            "i: cached details | q/Esc: exit | Ctrl+C: interrupt",
+                            "Read-only tree; no mutation shortcuts.",
+                        ]
+                        .map(String::from);
+                        match crate::page_with_interrupt("Tree help", &lines, true) {
+                            Ok(true) => break,
+                            Ok(false) => Ok(()),
+                            Err(error) => Err(error),
+                        }
+                    }
                     _ => Ok(()),
                 }
             }
