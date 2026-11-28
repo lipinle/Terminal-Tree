@@ -835,3 +835,56 @@ fn recovery_report_distinguishes_exact_record_limit_from_truncation() {
     assert_eq!(fs::read_dir(&f.journal).unwrap().count(), 129);
     assert_eq!(fs::read(extra).unwrap(), b"{}");
 }
+
+#[test]
+fn invalid_operation_paths_leave_source_and_journal_unchanged() {
+    use std::path::Path;
+    use terminal_tree::operations::Trash;
+
+    let f = Fixture::new();
+    let e = f.engine();
+    let (data, files, info) = trash_fixture(&f);
+    let trash = Trash::new(&e, &data).unwrap();
+    let source = f.root.join("source");
+    fs::write(&source, b"unchanged").unwrap();
+    let review = e.review(&source).unwrap();
+
+    for invalid in [
+        Path::new(""),
+        Path::new("/"),
+        Path::new("."),
+        f.root.as_path(),
+    ] {
+        assert!(e.review(invalid).is_err());
+        assert!(e.destination(invalid).is_err());
+        assert!(e.transfer(&review, invalid, Transfer::Move).is_err());
+        assert!(e.transfer(&review, invalid, Transfer::Copy).is_err());
+        assert!(e.create(invalid, false).is_err());
+        assert!(trash.review_restore(invalid).is_err());
+        assert!(trash.review_purge(invalid).is_err());
+    }
+    assert_eq!(fs::read(&source).unwrap(), b"unchanged");
+    assert_eq!(fs::read_dir(&files).unwrap().count(), 0);
+    assert_eq!(fs::read_dir(&info).unwrap().count(), 0);
+    assert_eq!(fs::read_dir(&f.journal).unwrap().count(), 0);
+}
+
+#[test]
+fn deep_tree_review_refuses_before_any_mutation() {
+    let f = Fixture::new();
+    let e = f.engine();
+    let source = f.root.join("deep");
+    fs::create_dir(&source).unwrap();
+    let mut leaf = source.clone();
+    for _ in 0..129 {
+        leaf.push("d");
+        fs::create_dir(&leaf).unwrap();
+    }
+    let marker = leaf.join("marker");
+    fs::write(&marker, b"unchanged").unwrap();
+    let error = e.review(&source).unwrap_err();
+    assert!(error.to_string().contains("directory depth exceeds"));
+    assert_eq!(fs::read(&marker).unwrap(), b"unchanged");
+    assert!(!f.root.join("destination").exists());
+    assert_eq!(fs::read_dir(&f.journal).unwrap().count(), 0);
+}

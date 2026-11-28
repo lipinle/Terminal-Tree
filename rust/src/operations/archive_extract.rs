@@ -100,11 +100,16 @@ impl Engine {
             dir_id(&parent)? == destination.parent,
             "reviewed destination replaced",
         )?;
-        let name = dst.file_name().unwrap();
+        let name = dst
+            .file_name()
+            .ok_or_else(|| super::fail("missing filename"))?;
         no_conflict(&fd_path(&parent).join(name))?;
         let id = unique()?;
         let stage_name = format!(".terminal-tree-copy-{id}");
-        let stage_path = dst.parent().unwrap().join(&stage_name);
+        let stage_path = dst
+            .parent()
+            .ok_or_else(|| super::fail("missing parent"))?
+            .join(&stage_name);
         self.log(&id, "archive-extract", None, Some(&dst), Some(&stage_path))?;
         checkpoint("extract-journal")?;
         self.check_parent(&dst, &parent)?;
@@ -114,14 +119,19 @@ impl Engine {
         for directory in &layout.directories {
             let path = Path::new(directory);
             let p = file_parent(&payload, path)?;
-            create_dir_at(&p, path.file_name().unwrap())?;
+            create_dir_at(
+                &p,
+                path.file_name()
+                    .ok_or_else(|| super::fail("missing filename"))?,
+            )?;
             checkpoint("extract-directory")?;
         }
         for (path, data) in &files {
             let p = file_parent(&payload, path)?;
             let mut f: File = rx::openat(
                 &p,
-                path.file_name().unwrap(),
+                path.file_name()
+                    .ok_or_else(|| super::fail("missing filename"))?,
                 OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
                 Mode::from_bits_truncate(0o600),
             )?
@@ -161,7 +171,9 @@ impl Engine {
         let mut buffer = vec![0; 64 * 1024];
         for (path, expected) in &files {
             let p = file_parent(&payload, path)?;
-            let name = path.file_name().unwrap();
+            let name = path
+                .file_name()
+                .ok_or_else(|| super::fail("missing filename"))?;
             let stat = rx::statat(&p, name, AtFlags::SYMLINK_NOFOLLOW)?;
             require(
                 rx::FileType::from_raw_mode(stat.st_mode) == rx::FileType::RegularFile,

@@ -118,7 +118,10 @@ pub fn text(
             report.skipped_large += 1;
             continue;
         }
-        let remaining = limits.total_bytes - report.bytes_read;
+        let remaining = limits
+            .total_bytes
+            .checked_sub(report.bytes_read)
+            .ok_or_else(|| io::Error::other("content search byte budget exhausted"))?;
         // Reserve a sentinel for growth/EOF detection. Fail closed if the
         // remaining aggregate budget cannot accommodate the observed file.
         if before.len() >= remaining as u64 {
@@ -135,7 +138,11 @@ pub fn text(
             .file()
             .take(read_cap as u64)
             .read_to_end(&mut bytes)?;
-        report.bytes_read += bytes.len();
+        report.bytes_read = report
+            .bytes_read
+            .checked_add(bytes.len())
+            .filter(|&n| n <= limits.total_bytes)
+            .ok_or_else(|| io::Error::other("content search byte budget exhausted"))?;
         check_cancel(cancel)?;
         check_directory(&root, parent)?;
         session.verify()?;

@@ -206,6 +206,7 @@ checksum = "fdb5bc1ae2baa591800df16c9ca78619bf65c0488b41b96ccec5d11220d8c154"
 dependencies = [
  "bitflags",
  "errno",
+ "itoa",
  "libc",
  "linux-raw-sys",
  "windows-sys 0.59.0",
@@ -325,7 +326,7 @@ dependencies = [
 
 [[package]]
 name = "terminal-tree"
-version = "3.0.0"
+version = "3.1.0-alpha.1"
 dependencies = [
  "crossterm",
  "rustix",

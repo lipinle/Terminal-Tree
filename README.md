@@ -1,156 +1,267 @@
-# Terminal Tree — Standard 3.0.0
+<div align="center">
 
-Terminal Tree is a terminal file navigator with explicitly scoped native Linux file operations. Standard 3.0.0 is the first stable Rust release for the documented supported scope. It is not a replacement for independent backups. Paranoid remains a separate preview build.
+# Terminal Tree
 
-To start browsing after building or installing, run `terminal-tree --browse .`. Use the arrow keys to navigate, F1 for help and q to exit. Run `terminal-tree --help` for the commands available in your build.
+**A desktop-inspired file manager, right inside your terminal.**
 
-## Installation and updates
+Browse files, organize folders, inspect documents and work with Git — without leaving your shell.
 
-The Linux x86-64 release archive contains a native Standard executable, Bash integration, this guide and the license. Download it and SHA256SUMS from the matching GitHub release, verify with `sha256sum -c SHA256SUMS`, and extract into a fresh owned directory. Run `./terminal-tree --edition` and `./terminal-tree --version` from the extracted directory before use. Ubuntu 22.04 and 24.04 source builds are tested; the hosted prebuilt binary targets the Ubuntu 24.04 runner and may require a compatible glibc. The extracted archive is not a manifest-managed source installation.
+[![Stable](https://img.shields.io/badge/Stable-3.0.0-238636?style=flat-square)](https://github.com/lipinle/Terminal-Tree/releases/tag/v3.0.0)
+[![Rust](https://img.shields.io/badge/Rust-000000?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org/)
+[![Linux](https://img.shields.io/badge/Linux-native-FCC624?style=flat-square&logo=linux&logoColor=black)](#system-requirements)
+[![License](https://img.shields.io/badge/License-MIT-2563eb?style=flat-square)](LICENSE)
 
-To build from source on Linux, install the Rust toolchain, a C toolchain, Bash, GNU coreutils and gzip. Build as a normal user, never with sudo:
+[Download](#install) · [Features](#features) · [Compatibility](#terminal-compatibility) · [Update & Uninstall](#update-and-uninstall) · [Add-ons](#add-ons) · [Troubleshooting](#help-and-troubleshooting)
 
-```sh
-cargo build --locked --release --manifest-path rust/Cargo.toml --features native-ops --bin terminal-tree
-rust/target/release/terminal-tree --version
-rust/target/release/terminal-tree --edition
-```
+</div>
 
-For a side-by-side installation, choose a new, nonexistent directory under an existing owned directory:
+> **Choose your version:** [Standard 3.0.0](https://github.com/lipinle/Terminal-Tree/releases/tag/v3.0.0) is the stable Rust release. This development branch contains the experimental 3.1.0-alpha.1 UX preview described below. New UI features and graphics add-ons are not part of the stable release archive.
 
-```sh
+The Rust edition is the actively developed product; legacy Python editions are historical and no longer maintained as the active edition. Existing Python installations are not modified by the Rust installer.
+
+[UX preview builds and application screenshot artifacts](https://github.com/lipinle/Terminal-Tree/actions/workflows/rust-development.yml?query=branch%3Aux-companion-tools) (sign in to GitHub to download available artifacts).
+
+<a id="features"></a>
+
+## ✨ Features
+
+| Explore | Work | Personalize |
+| :--- | :--- | :--- |
+| Tree, List and Grid views | Dual-pane file management | Dark and light themes |
+| Clickable sidebar and bookmarks | Scoped copy, move and rename | File-type icons and colors |
+| Tabs and clickable breadcrumbs | File and folder creation | Resizable panels and layout zoom |
+| Text, Markdown, image and PDF preview | Git manager and archive inspection | Custom navigation shortcuts |
+| Search and command palette | Built-in Bash panel | Custom icon mappings |
+
+Session and application preferences can be saved through Settings.
+
+Image/PDF previews require optional helpers. The embedded Bash panel supports ANSI colors, bold text, progress-line updates and basic cursor movement/erasing. It is experimental; alternate-screen rendering, scroll regions and basic editing controls are available in the PTY. Full-screen terminal programs are not yet certified; the shell still defaults to TERM=dumb.
+
+<a id="system-requirements"></a>
+
+## 💻 System requirements
+
+| Operating system | Availability |
+| :--- | :--- |
+| Linux (Ubuntu 22.04 / 24.04) | Native file operations; stable source builds tested |
+| Linux Mint / Debian-based distributions | Build from source; compatibility depends on system libraries |
+| Other Linux distributions | Source build; not individually certified |
+| Windows | Reduced read-only source build; stable Windows CI tested; no downloadable executable |
+| macOS | Not runtime-validated; no supported release package yet |
+
+The stable prebuilt archive is Linux x86-64 and targets Ubuntu 24.04-compatible system libraries. The source build requires Rust, a C toolchain and GNU/Linux utilities. The optional visual helper requires Rust 1.92 or newer. The latest UX preview has development CI coverage, not a full release compatibility certification.
+
+<a id="terminal-compatibility"></a>
+
+## 🖥️ Terminal compatibility
+
+Terminal Tree shares the same file manager UI across terminals. Graphics quality depends on the terminal's capabilities.
+
+| Terminal | Live image/PDF | Expanded image/PDF |
+| :--- | :--- | :--- |
+| GNOME Terminal (X11) | X11 RGB¹ | X11 RGB¹ |
+| Kitty / Ghostty | Native RGB² | Native RGB² |
+| WezTerm / Konsole | Unicode or Kitty RGB² | Kitty RGB or Sixel² |
+| foot / mlterm | Unicode | Sixel² |
+| xterm | Unicode | Sixel² |
+| Alacritty / XFCE Terminal | Unicode | Unicode |
+| tmux / screen / other terminals | Unicode | Unicode |
+
+¹ Experimental X11 helper; use a dedicated single-tab GNOME Terminal on X11. If placement fails, the program uses Unicode.
+
+² Requires a compatible terminal version and protocol. Kitty and Ghostty are automatically recognized; foot and mlterm use Sixel in expanded previews. Other terminals may require manual selection. Individual terminal integrations still need real-world validation.
+
+If graphics do not work, start with `TT_GRAPHICS=unicode`. For compatible terminals, `TT_GRAPHICS=kitty` or `TT_GRAPHICS=sixel` selects the protocol explicitly. Native graphics are optional; browsing does not depend on them.
+
+<a id="install"></a>
+
+## 📦 Install
+
+### Stable release (Linux x86-64)
+
+1. Download `terminal-tree-3.0.0-linux-x86_64.tar.gz` and `SHA256SUMS` from [Standard 3.0.0](https://github.com/lipinle/Terminal-Tree/releases/tag/v3.0.0).
+2. In the download directory, verify and extract:
+
+~~~bash
+sha256sum -c SHA256SUMS
+mkdir "$HOME/terminal-tree-3.0.0"
+tar -xzf terminal-tree-3.0.0-linux-x86_64.tar.gz \
+  -C "$HOME/terminal-tree-3.0.0"
+~~~
+
+3. Open the extracted directory and run the included executable:
+
+~~~bash
+./terminal-tree --version
+./terminal-tree --browse "$HOME"
+~~~
+
+If the binary cannot run on your distribution, build from source instead. The downloaded archive is not a package-manager installation.
+
+### UX preview (Linux, build from source)
+
+Install [Rust](https://www.rust-lang.org/tools/install) first. On Ubuntu or Linux Mint:
+
+~~~bash
+sudo apt install git build-essential coreutils gzip
+git clone --branch ux-companion-tools \
+  https://github.com/lipinle/Terminal-Tree.git terminal-tree-source
+cd terminal-tree-source
 bash rust/install-preview.sh "$HOME/terminal-tree-preview"
-bash rust/verify-preview-install.sh "$HOME/terminal-tree-preview"
+~~~
+
+Open the application:
+
+~~~bash
+"$HOME/terminal-tree-preview/terminal-tree" --app "$HOME"
+~~~
+
+The installer uses a new directory and does not replace existing Terminal Tree installations or change your shell configuration. Run the installer as your normal user.
+
+For optional Bash navigation commands, run:
+
+~~~bash
 source "$HOME/terminal-tree-preview/integration.sh"
-```
+tt_rust_nav
+~~~
 
-The integration is optional and does not change .bashrc, cd, or the previous Python installation. Use tt_rust_nav, tt_rust_list, tt_rust_tree, tt_rust_panes and tt_rust_find in that interactive Bash session. In tt_rust_nav, Right enters a folder while browsing, Enter selects a folder for Bash, and q, Esc or Ctrl+C exits without selecting. Update by installing alongside the verified old version:
+### Windows (read-only source build)
 
-```sh
-bash rust/install-preview.sh --update "$HOME/terminal-tree-preview" "$HOME/terminal-tree-preview-new"
-```
+No Windows binary or installer is published. With Rust and its Windows MSVC C++ build tools installed, you can build the portable edition from the checkout in PowerShell:
 
-Close the old preview before uninstalling it. Verification rejects unexpected files, links or modified manifests. Uninstallation removes only the three known installation files and leaves the empty directory; it does not remove user files or shell configuration.
+~~~powershell
+cargo build --locked --release --manifest-path rust/Cargo.toml --no-default-features --bin terminal-tree
+.\rust\target\release\terminal-tree.exe --app $HOME
+~~~
 
-```sh
+Native file writes, the Bash panel and Linux-only add-ons are unavailable. The current UX preview has not completed Windows release testing.
+
+<a id="update-and-uninstall"></a>
+
+## 🔄 Update and uninstall
+
+### Update the UX preview
+
+From your source checkout:
+
+~~~bash
+git pull --ff-only
+bash rust/install-preview.sh --update \
+  "$HOME/terminal-tree-preview" \
+  "$HOME/terminal-tree-preview-new"
+~~~
+
+The update installs alongside the old version. Try the new executable before removing the previous installation. Use a fresh destination name each time. Rebuild any optional helpers from the same checkout if you use them.
+
+For stable archives, download and verify the next release and extract into a new directory rather than overwriting the old version.
+
+### Uninstall
+
+Close Terminal Tree first. From the source checkout:
+
+~~~bash
 bash rust/uninstall-preview.sh "$HOME/terminal-tree-preview" --yes
-```
+~~~
 
-The local manifest detects changes; it is not a signature or proof of origin. If an old preview has no manifest, install a new directory rather than attempting to update or uninstall it using these scripts. Keep legacy Python installations and their settings intact until you have independently verified the new workflow.
+The script removes only the verified, managed installation files. It leaves the empty directory, your files and preferences untouched. Substitute the exact installation directory you want to remove. For a downloaded archive, remove only the dedicated extracted application directory using your file manager; do not use the source-install uninstaller for it.
 
-## Application view
+<a id="getting-started"></a>
 
-Run `terminal-tree` or `terminal-tree --app PATH` to open the responsive application. Wide terminals display Places, Files and a bounded live preview; smaller terminals hide the preview or sidebar. Click a menu title or press F10, Tab switches Places/Files focus, Enter opens a selected item, and F9 toggles live preview. Press b to bookmark the current directory for this session, B to select a bookmark, Ctrl+L to go to a path (native Linux), Ctrl+F to filter and Ctrl+P for optional tools. Mouse clicks select file rows without opening files. F5 refreshes; preview does not follow links. The existing --browse, --tree and --panes views remain available.
+## 🚀 Getting started
 
-For writes, explicitly start `terminal-tree --app-workspace ROOT JOURNAL DATA` or `terminal-tree --app-personal JOURNAL [MOUNT ...]`. File and Edit menus use the existing reviewed operations and clipboard; F4 opens the existing action menu. The sidebar does not grant write authorization. Task status is idle while browsing; operations still show their existing progress dialog. Bookmarks are session-local until application preferences are saved.
+The UX preview opens in Tree view. Use the toolbar to switch views, click folders in Places, and select a file to preview it. Drag panel dividers to resize them. The sidebar extends alongside the bottom Bash panel; the global status bar stays at the bottom. Open **Settings** to customize the layout and save preferences.
 
-The application supports Ctrl+C/X/V (copy/cut/paste), Ctrl+A (mark all), Ctrl+Z (eligible undo), Ctrl+Q (exit), Alt+Left/Right (history), Backspace (parent), F12 (clipboard details) and a right-click context menu. Ctrl+C still cancels prompts and workers and exits the read-only view. In scoped application mode only, creating a new item, renaming one item and copying one item use a complete path review followed by Enter instead of typing yes. Move, Trash, batch and recovery confirmations remain unchanged, as do the underlying identity and no-overwrite checks. Legacy CLI views retain their previous behavior.
+### File operations
 
-Press F8 in the application to switch between the three-column view and two independent file panes. Each pane retains its directory, selection, filter and navigation history. Tab changes the active pane (which is refreshed before use); a click on the inactive pane focuses it first. Copy or cut in one pane, switch to the destination, then paste with the shared clipboard. Scoped writes use the same existing review and operation engine. Marks are cleared when changing panes; the clipboard survives. Narrow terminals show the active pane only. F9 returns to the preview layout; Shift+F8 opens the existing hex preview. Read-only mode never grants write authorization.
+The default application is read-only. To try copy, move, rename and other scoped file actions in an empty test workspace:
 
-The application starts in Tree view. Use the clickable Path, Search, Grid, List and Tree buttons in the upper-right toolbar (Ctrl+1/2/3 also switch views). Path toggles an editable location field; Ctrl+A clears it and Enter navigates. Search filters the current directory. Grid shows built-in colored file-type icons in cells; List shows names and sizes; Tree shows branches, and Right or a click on the branch expands the existing bounded read-only tree. Enter on an expanded row opens its directory or selects a file in its freshly loaded containing directory, before any operation can run. Esc closes expanded inspection. Ctrl+mouse wheel adjusts the application's row spacing/grid cell size from 1 to 3; Ctrl+0 resets. This is layout zoom, not terminal font resizing. The toolbar and these view modes apply to the single application pane; F8 retains the separate dual-pane workflow.
-
-### File icons
-
-Icons and colors are built into the application (Grid, List, Tree, Sidebar and Dual Pane). The program classifies native paths by filename and extension, never by running eza or reading file content. F11 or Settings > Icon style switches between Unicode (default), Seti and ASCII. For a preferred startup style, use `TT_ICON_STYLE=seti terminal-tree` or `TT_ICON_STYLE=ascii terminal-tree`. Seti mode expects a compatible Nerd Font Mono selected in the terminal; the application cannot detect the active font reliably. Switch to Unicode or ASCII if glyphs are missing or misaligned. No font or third-party artwork is distributed. See [icon attribution and compatibility](ICON-NOTICES.md).
-
-### Settings Center and Add-ons
-
-Click Settings or press Ctrl+, to open grouped Appearance, Icons, Display, Add-ons, Save and Reset options. Appearance controls text/background/accent/selection colors, dark/light presets and custom RGB; actual terminal font family and point size are managed by the terminal emulator. Display toggles sidebar, preview, toolbar, icons, type colors, hidden files, extra status details, view and layout zoom. Safety status is always shown.
-
-Import a local, regular, non-link JSON icon mapping in Icons (native Linux), e.g. `{"rs":"R","zip":"Z"}`. Maximum 4 KiB, 48 lowercase extension keys, visible one- or two-cell glyphs only. No code, fonts or SVGs are installed; use only icons you have permission to use. ASCII mode ignores custom glyphs. Remove mappings to restore built-in icons.
-
-Add-ons lists installed/enabled/idle status for eza, 7-Zip and Git. Toggle each integration with Enter. The application Tools menu refuses disabled integrations; explicitly invoked CLI and legacy views are independent. Foreground execution displays the tool name and records the last result. There are no background companion jobs or services to terminate.
-
-For persistence on native Linux, create a private directory with `mkdir -m 700 ~/.config/terminal-tree` (if its parent already exists), or provide an existing owned mode-0700 directory through `TT_APP_CONFIG_DIR`. Settings > Save application preferences writes a separate bounded settings file atomically; it does not change shell settings or safety policy. Without an approved directory, preferences are session-only. Save can explicitly create the final private configuration directory under an existing owned, non-group/world-writable parent; it does not create missing ancestors or change existing permissions. Application preferences now include hidden-file visibility, sort order and lossless native bookmark paths. Settings > Manage bookmarks supports reordering and removal. Once saved, enable Autosave on normal exit to persist subsequent changes; no background writes or automatic recovery after a crash. Ctrl+K opens a searchable Command Palette using the same menu actions; write actions are excluded in read-only mode. Existing Ctrl+P remains the companion tools menu.
-
-### Tabs, panel sizing and shortcuts
-
-Ctrl+T opens a tab at the current location, Ctrl+W closes the active tab (the last tab stays open), and Ctrl+Tab / Ctrl+Shift+Tab switch tabs where the terminal forwards these keys. Click a tab or [+] on the tab strip. Up to eight tabs preserve independent locations, filters, history and dual-pane models in the session; inactive tabs refresh before selection. Clipboard remains shared, and marks clear on tab changes. Tabs are not restored after exiting.
-
-Drag the vertical dividers to resize Sidebar, Preview or Dual Pane. Sizes are bounded and saved with application preferences. Settings > Display resets panel sizes. Settings > Navigation shortcuts lets you swap nine navigation bindings, without remapping file mutations, confirmation keys or cancellation. Menu actions use canonical shortcuts independently of these physical navigation bindings.
-
-### Bottom terminal panel (native Linux)
-
-The application displays a Bash command panel at the bottom by default when the terminal has at least 16 rows. Click the prompt or press Alt+T to focus it, type a command and press Enter. Esc returns focus to the file manager. Alt+H or the [Hide] button toggles visibility; View and Settings > Display also expose this option. The setting is saved with application preferences. A Terminal button in the top bar also toggles it when the window is wide enough; a drag handle [Resize] on the right of the panel heading adjusts its height from 20% to 60%, subject to minimum browser space. The configured height persists with preferences.
-
-Commands run explicitly in the active file pane's current directory, with your ordinary OS permissions; the file manager's read-only/scoped label does **not** restrict shell commands. No command runs just by browsing. Output is escaped, bounded to 32 KiB, and displayed with exit status; Up/Down recall session-only command history, PageUp/PageDown or wheel scroll output, Ctrl+C stops the current process group, Ctrl+L clears output. A command is limited to 60 seconds. This is a noninteractive Bash command console, not a full PTY emulator: stdin is closed, commands such as vim, top, password prompts and interactive shells require a normal terminal; each command starts a new Bash process, so cd/export do not persist between commands. Commands that intentionally detach from the process group may outlive the console. File rows refresh after completion. Legacy CLI views remain unchanged.
-
-## Navigation and search
-
-Use the installed executable (examples below assume it is on your PATH), or substitute its full path.
-
-```sh
-terminal-tree --browse "$HOME"
-terminal-tree --tree "$HOME"
-terminal-tree --panes "$HOME" /tmp
-terminal-tree --find "$HOME" report --depth 4
-terminal-tree --find "$HOME" invoice --content --depth 4
-```
-
-In browse mode, arrow keys navigate, h toggles hidden entries, s cycles sorting, / filters the current directory, F7 filters entry type, F5 refreshes and F1 opens help. Enter may open an external application, which can change files. In dual panes, Tab changes focus, n opens a tab, [ and ] switch tabs, w closes a tab, f/F search recursively by filename/content, b saves a location, B opens bookmarks, J/K reorder within the bookmark menu. Esc or Ctrl+C cancels an active search. Filename search is case-insensitive; content search matches exact case-sensitive UTF-8 text. Search has explicit traversal and byte limits and can reject excessive work; it is not a complete filesystem index.
-
-For persistent pane preferences, create a private directory and explicitly opt in:
-
-```sh
-mkdir -m 700 "$HOME/tt-pane-preferences"
-terminal-tree --panes "$HOME" /tmp --preferences "$HOME/tt-pane-preferences" --theme dark
-```
-
-Press t to cycle the theme and T to save theme and navigation keys. CLI overrides saved values; use --keys 'up=down,down=up' for a simultaneous navigation-key swap. Mutation and confirmation keys cannot be remapped. Bookmark snapshots require explicit --bookmarks-out PATH and S; existing snapshot files are never overwritten. Use --bookmarks-in PATH to reload.
-
-## Scoped file operations
-
-Start with a disposable private workspace, not irreplaceable personal data:
-
-```sh
+~~~bash
 demo=$(mktemp -d)
 mkdir -m 700 "$demo/work" "$demo/journal" "$demo/work/data"
-terminal-tree --workspace "$demo/work" "$demo/journal" "$demo/work/data"
-```
+"$HOME/terminal-tree-preview/terminal-tree" \
+  --app-workspace "$demo/work" "$demo/journal" "$demo/work/data"
+~~~
 
-Use Space to mark, c to copy, x to cut, v to review paste, r to rename, n to create a directory, t to create a file, d for Trash, R to restore and u for eligible session-local move undo. F6 opens further actions, including literal bulk rename, keep-both paste, archive extraction and retained cross-device move. Review every path and enter the exact requested confirmation. Existing destinations are refused. Batches commit individually and stop on failure; there is no automatic rollback.
+Review the displayed paths before confirming an operation. The journal is not a backup. Bash and Git commands use ordinary OS permissions outside the file-operation journal. Start with disposable files and keep independent backups.
 
-Personal mode requires a real account home, an existing private journal and explicitly approved additional mount roots. It refuses protected paths and unapproved mounts. Personal Trash is limited to the existing private same-filesystem home Trash. Permanent deletion applies only to eligible Trash items and is irreversible. Do not use it as a fallback for failed Trash operations.
+<a id="shortcuts"></a>
 
-For a cross-device move, cut one regular file and choose the retained move from F6. Strict metadata is the default. The optional time-rounding policy permits at most two seconds of modification-time rounding, not changes to ownership, permissions, attributes or content. The verified destination is published before the source is renamed into private retention. The retained original is not automatically deleted. Record its path.
+### ⌨️ Shortcuts
 
-## Companion tools
+| Shortcut | Action |
+| :--- | :--- |
+| Arrow keys / Enter | Navigate / open |
+| Ctrl+1 / 2 / 3 | Grid / List / Tree |
+| Ctrl+L / Ctrl+F | Location / filter |
+| Ctrl+T / Ctrl+W | New / close tab |
+| F8 / Tab | Dual panes / switch focus |
+| Ctrl+C / X / V | Copy / cut / paste in writable mode |
+| F9 | Toggle preview panel |
+| Alt+P | Switch Auto / Info / Hex preview |
+| Alt+V | Open expanded visual preview |
+| Alt+T / Alt+H | Focus / show or hide terminal panel |
+| Alt+S | Start or close persistent Bash session |
+| Alt+G / Ctrl+P | Git manager / companion tools |
+| Ctrl+K / Ctrl+, | Command palette / settings |
+| F1 / q | Help / exit |
 
-On native Linux, Ctrl+P opens the same Tools menu in browse, workspace and dual-pane modes. Install the distribution packages for eza, 7-Zip (7zz or 7z) and Git; the program checks fixed /usr/bin locations. The companions are optional, independently installed programs. Terminal Tree neither bundles nor downloads their code or executables. See [optional tools and licenses](OPTIONAL-TOOLS.md). Missing tools do not prevent native browsing or file operations.
+Terminal shortcuts may take priority over application shortcuts. Use the on-screen menus when this occurs.
 
-```sh
-terminal-tree --tools
-terminal-tree --eza .
-terminal-tree --7zip-list example.7z
-terminal-tree --git-status .
-```
+<a id="add-ons"></a>
 
-eza is a display-only detailed listing. 7-Zip lists selected regular archives, never extracts or changes them. Git status is explicit and intended only for trusted repositories: local configuration and attributes may execute helpers. No automatic Git commands, staging, commit, pull or push. Companion output is bounded, escaped display text, never a file-operation plan. The existing native engine remains responsible for filesystem mutations. These companions are separate programs, not sandboxed code; GNU timeout limits foreground execution. Their respective upstream licenses remain applicable to the separately installed programs.
+## 🧩 Add-ons
 
-## Preview and archives
+Add-ons are optional. Terminal Tree works without them and does not install external software automatically.
 
-Use p/F3 for text or automatic hex, F8 for hex, I for PPM images and A for USTAR archive listing in dual panes. Native Linux archive commands support bounded regular-file USTAR and tar.gz data:
+| Add-on | What it does |
+| :--- | :--- |
+| eza | Detailed directory listing |
+| 7-Zip | Inspect archive contents |
+| Git | Status, diffs, history, staging, local commits and branches |
+| Visual Preview | Display PNG, JPEG, WebP, GIF, BMP and PDF |
+| X11 Overlay | High-resolution visual previews in GNOME Terminal on X11 |
 
-```sh
-terminal-tree --archive-list archive.tar
-terminal-tree --archive-layout archive.tar
-terminal-tree --archive-member archive.tar item.txt --stdout > new-output.txt
-terminal-tree --archive-build --gzip --stdout item.txt input.txt > new-archive.tar.gz
-```
+Install the external companion packages on Ubuntu or Linux Mint:
 
-Use new output filenames; shell redirection can overwrite a file before the program runs. Use Bash noclobber if appropriate. Archive extraction in scoped mode publishes a new directory only; it cannot merge into an existing tree and does not restore archive metadata. ZIP, arbitrary image formats, recursive archive construction, and general lossy metadata conversion are not supported by these commands.
+~~~bash
+sudo apt install eza 7zip git
+~~~
 
-## Recovery and compatibility
+Older distributions may provide `p7zip-full` instead of `7zip`. Package availability varies.
 
-If a write fails or is interrupted, open j in the same scoped navigator to inspect pending journal records. A pending record does not prove an operation failed. Preserve the journal, source, destination, staging data and any retained original. Compare independently before attempting manual recovery. Never execute a path from an untrusted journal or repeat a deletion blindly. For a retained move with both the published and retained copies present, select the published file in scoped mode, press O, enter the independently inspected original absolute path and transaction ID, then a new filename. Review the four paths and type recover. The program checks the journal structure and matching current file manifests, copies to a new name without overwrite, and preserves both files and the old journal. This is not proof of historical provenance. Missing or conflicting evidence requires independent manual recovery; do not purge retention or overwrite existing data. The journal is not a backup.
+Open **Add-ons**, enable the integrations you want, then use **Tools** or Ctrl+P. For Git, open **Git** or press Alt+G in a trusted repository. The local Git manager does not provide remote push/pull or branch switching.
 
-Native operations are Linux-specific and depend on actual filesystem semantics, including permissions, metadata, mount isolation and no-replace rename. Unsupported operations fail rather than silently degrade. Native regression coverage includes Ubuntu 22.04/24.04, ext4, XFS, Btrfs, exFAT and an isolated size-limited mount; this does not mean every operation is supported on every filesystem. Windows is tested in reduced read-only mode. macOS runtime validation is deferred. Do not assume support for network shares, every terminal or hostile concurrent writers. The virtual power-cut matrix covers copy, move, Trash, restore and purge; the newer archive extraction, retained move and retained recovery paths have targeted interruption and conflict tests, not exhaustive power-loss coverage. Retained moves intentionally preserve the original in private retention and do not perform automatic cleanup. Use an independent backup and start in a disposable workspace.
+### Image and PDF previews (experimental)
 
-## Development checks
+Install the [Visual Preview helper](visual-preview/README.md) from source into your own home directory (no sudo required), then enable **Visual Preview** in Add-ons. Select an image or PDF; scroll to turn PDF pages and use Alt+V to expand.
 
-```sh
-cargo test --locked --manifest-path rust/Cargo.toml --features native-ops
-```
+For GNOME Terminal on X11, the optional [X11 Overlay helper](x11-overlay/README.md) provides higher-resolution previews.
 
-Resource benchmarks use synthetic fixtures, GNU time and a Linux PTY. They report raw samples, binary size, startup and navigation latency, idle/peak RSS, CPU time and filesystem I/O operation counts; these are not performance guarantees. Run only with the matching release binary and benchmark example.
+Both helpers have separate install, update and uninstall instructions. They are experimental, source-only and not bundled with either download. Existing system-wide installations remain supported.
+
+See [companion tools](OPTIONAL-TOOLS.md) for external program setup.
+
+<a id="help-and-troubleshooting"></a>
+
+## 🛠️ Help and troubleshooting
+
+| Problem | What to try |
+| :--- | :--- |
+| Image shows as text or blocks | Install and enable Visual Preview; check graphics backend |
+| Icons are missing | Select Unicode or ASCII in Settings → Icons |
+| Panels are hidden | Enlarge the terminal, or check Settings → Display |
+| Copy or rename is unavailable | Open an explicitly scoped workspace |
+| Settings are not saved | Settings → Save application preferences |
+| A file operation was interrupted | Preserve the journal and all copies; inspect before recovery |
+
+Run the executable with `--help` to see the commands available in your build. Terminal Tree never promises universal filesystem compatibility or substitutes for backups.
+
+---
+
+<div align="center">
+
+[Releases](https://github.com/lipinle/Terminal-Tree/releases) · [License](LICENSE) · [Icon notices](ICON-NOTICES.md) · [Optional tool licenses](OPTIONAL-TOOLS.md)
+
+MIT-licensed Terminal Tree. Optional external programs retain their own licenses.
+
+</div>

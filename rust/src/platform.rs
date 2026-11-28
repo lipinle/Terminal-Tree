@@ -6,7 +6,9 @@ use std::{
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn spawn(program: &str, args: &[&str], path: &Path) -> io::Result<Child> {
+    // Desktop open needs the session environment, unlike scoped GIO Trash.
     Command::new(program)
+        .env("PATH", "/usr/bin:/bin")
         .args(args)
         .arg(path)
         .stdin(Stdio::null())
@@ -22,9 +24,9 @@ pub fn open_file(path: &Path) -> io::Result<Child> {
         ));
     }
     #[cfg(target_os = "linux")]
-    return match spawn("xdg-open", &[], path) {
+    return match spawn("/usr/bin/xdg-open", &[], path) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            match spawn("gio", &["open", "--"], path) {
+            match spawn("/usr/bin/gio", &["open", "--"], path) {
                 Err(e) if e.kind() == io::ErrorKind::NotFound => Err(io::Error::new(
                     io::ErrorKind::NotFound,
                     "No desktop opener: install xdg-utils or GLib/GIO, or use file preview",
@@ -35,7 +37,7 @@ pub fn open_file(path: &Path) -> io::Result<Child> {
         other => other,
     };
     #[cfg(target_os = "macos")]
-    return spawn("open", &["--"], path);
+    return spawn("/usr/bin/open", &["--"], path);
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     Err(io::Error::new(
         io::ErrorKind::Unsupported,

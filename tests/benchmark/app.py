@@ -5,12 +5,14 @@ import os
 from pathlib import Path
 import pty
 import struct
+import shutil
 import subprocess
 import sys
 import tempfile
 import termios
 
 from parity import wait_output
+from visual_preview import pdf, png
 
 
 def session(binary, args, root, marker, steps, width=120):
@@ -43,6 +45,13 @@ def session(binary, args, root, marker, steps, width=120):
 def main(binary):
     with tempfile.TemporaryDirectory(prefix="tt-app-") as tmp:
         root = Path(tmp)
+        helper = os.environ.get("TT_TEST_VISUAL_HELPER")
+        if helper:
+            directory = root / ".local" / "bin"
+            directory.mkdir(mode=0o700, parents=True)
+            directory.parent.chmod(0o700)
+            shutil.copyfile(helper, directory / "tt-visual-preview")
+            (directory / "tt-visual-preview").chmod(0o700)
         (root / "file.txt").write_text("preview-content-marker\n")
         session(binary, [], root, b"preview-content-marker", [
             (b"\x1b[23~", b"Icon style"),
@@ -55,6 +64,10 @@ def main(binary):
             (b"\x1b[<80;25;5M", b"Zoom 2"),
             (b"\x1b[<81;25;5M", b"Zoom 1"),
             (b"\x1b[<0;106;2M", b"List View"),
+            (b"\x1b[<0;63;4M", "Size ↑".encode()),
+            (b"\x1bp", b"Preview [Info]"),
+            (b"\x1bp", b"Preview [Hex]"),
+            (b"\x1bp", b"Preview [Auto]"),
             (b"\x1b[<0;113;2M", b"Tree View"),
             (b"\x1b[<0;83;2M", b"Location:"),
             (b"\x1b", b" > " + root.name.encode()),
@@ -90,8 +103,35 @@ def main(binary):
             (b"\x1bh", b"Terminal / Bash |"),
             (b"\x1b[<0;64;1M", b"[Terminal +]"),
             (b"\x1b[<0;64;1M", b"[Terminal -]"),
+            (b"\x1bs", b"Interactive shell uses OS permissions"),
+            (b"\x1b[B\r", b"Terminal / PTY *"),
+            (b"export TT_UI=kept; cd /\r", b"tt$"),
+            (b"printf '%s:%s\\n' \"$TT_UI\" \"$PWD\"\r", b"kept:/"),
+            (b"\x1bt", b"Terminal / PTY |"),
+            (b"\x1bs", b"Close interactive shell?"),
+            (b"\x1b[B\r", b"Terminal / Bash |"),
         ])
         session(binary, ["--app", str(root)], root, b"Files *", [], width=45)
+        session(binary, ["--app", str(root)], root, b"Tree View", [
+            (b"1", b"Grid View"),
+            (b"2", b"List View"),
+            (b"3", b"Tree View"),
+            (b"\x1b[19~", b"Dual Pane"),
+            (b"0", b"Tree View"),
+            (b"1", b"Grid View"),
+        ])
+        # At 120x26 the sidebar is 19 cells; the console begins at x=20,
+        # y=16 and ends above the three-line global status strip.
+        session(binary, ["--app", str(root)], root, b"Terminal / Bash |", [
+            (b"\x1b[<0;21;17M",b"[Terminal +]"),
+            (b"\x1bh",b"Terminal / Bash |"),
+            (b"\x1b[<0;21;18M",b"Terminal / Bash *"),
+            (b"\x1b",b"Terminal / Bash |"),
+        ])
+        session(binary, ["--app", str(root)], root, b"Modified (UTC)", [
+            (b"\x14",b"[2 "),
+            (b"\x1b[<0;34;3M",b"[1 "),
+        ],width=190)
         config = root / ".config"
         config.mkdir(mode=0o700)
         session(binary, ["--app", str(root)], root, b"Tree View", [
@@ -150,6 +190,37 @@ def main(binary):
         assert (work / "new-folder" / "source").read_text() == "preserve me"
         assert (work / "source").read_text() == "preserve me"
         assert not list(journal.glob("*.pending.json"))
+        git = root / "git-ui-fixture"
+        git.mkdir()
+        subprocess.run(["/usr/bin/git","init","-b","main",str(git)],check=True,capture_output=True)
+        (git / "new.txt").write_text("git UI marker")
+        session(binary,["--app",str(git)],root,b"Tree View",[
+            (b"\x1bg",b"Trusted repository only"),
+            (b"\x1b[B\r",b"Git Manager |"),
+            (b"\r",b"Changes | left=staged"),
+            (b"\x1b",b"Git Manager |"),
+            (b"\x1b",b"Tree View"),
+        ])
+        image_disabled=root/"visual-disabled"
+        image_disabled.mkdir()
+        (image_disabled/"image.png").write_bytes(png)
+        session(binary,["--app",str(image_disabled)],root,b"Visual Preview:",[])
+        if os.environ.get("TT_TEST_VISUAL_PREVIEW")=="1":
+            image_dir=root/"visual-ui"
+            image_dir.mkdir()
+            (image_dir/"document.pdf").write_bytes(pdf)
+            (image_dir/"image.png").write_bytes(png)
+            session(binary,["--app",str(image_dir)],root,b"Tree View",[
+                (b"\x1b[<0;55;1M",b"Add-ons / Integrations"),
+                (b"\x1b[<0;2;5M",b"Visual Preview | Installed | Enabled"),
+                (b"\x1b",b"Page 1/2"),
+                (b"\x1b[B\x1b[A",b"Page 1/2"),
+                (b"\x1b[<65;100;8M",b"Page 2/2"),
+                (b"\x1b[<64;100;8M",b"Page 1/2"),
+                (b"\x1b[B",b"Thumbnail"),
+                (b"\x1bv",b"Expanded Preview"),
+                (b"\x1b",b"Thumbnail"),
+            ])
     print("TT_APP dashboard, preview, menus, compact layout and shared clipboard passed")
 
 

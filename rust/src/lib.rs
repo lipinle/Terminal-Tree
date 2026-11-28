@@ -5,9 +5,13 @@ compile_error!("native-ops requires the Linux safety backend; use the default re
 pub mod archive;
 pub mod archive_build;
 pub mod bookmarks;
-pub mod image_preview;
 #[cfg(all(feature = "native-ops", target_os = "linux"))]
 pub mod external_tools;
+#[cfg(all(feature = "native-ops", target_os = "linux"))]
+pub mod git_manager;
+#[cfg(all(feature = "native-ops", target_os = "linux"))]
+pub mod helper_paths;
+pub mod image_preview;
 pub mod keymap;
 pub mod layout;
 #[cfg(all(feature = "native-ops", target_os = "linux"))]
@@ -17,13 +21,19 @@ pub mod preview;
 #[cfg(all(feature = "native-ops", target_os = "linux"))]
 mod readonly_file;
 #[cfg(all(feature = "native-ops", target_os = "linux"))]
+pub mod visual_preview;
+#[cfg(all(feature = "native-ops", target_os = "linux"))]
 pub fn read_icon_pack(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
     use std::io::Read;
     let session = readonly_file::ReadSession::open(path)?;
-    if session.len() > 4096 { return Err(std::io::Error::other("icon pack exceeds 4096 bytes")); }
+    if session.len() > 4096 {
+        return Err(std::io::Error::other("icon pack exceeds 4096 bytes"));
+    }
     let mut bytes = Vec::new();
     session.file().take(4097).read_to_end(&mut bytes)?;
-    if bytes.len() > 4096 { return Err(std::io::Error::other("icon pack exceeds 4096 bytes")); }
+    if bytes.len() > 4096 {
+        return Err(std::io::Error::other("icon pack exceeds 4096 bytes"));
+    }
     session.verify()?;
     Ok(bytes)
 }
@@ -371,11 +381,13 @@ impl Model {
 
     pub fn viewport(&mut self, height: usize) -> (usize, usize) {
         let height = height.max(1);
+        // Selection and top are public: normalize before doing viewport math.
+        self.selected = self.selected.min(self.entries.len().saturating_sub(1));
         self.top = self.top.min(self.entries.len().saturating_sub(height));
         if self.selected < self.top {
             self.top = self.selected;
         } else if self.selected.saturating_sub(self.top) >= height {
-            self.top = self.selected + 1 - height;
+            self.top = self.selected.saturating_sub(height - 1);
         }
         (
             self.top,
@@ -410,6 +422,26 @@ mod tests {
     impl Drop for Fixture {
         fn drop(&mut self) {
             fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+
+    #[test]
+    fn viewport_normalizes_out_of_range_public_indices() {
+        let f = Fixture::new();
+        let mut model = Model::new(f.0.clone()).unwrap();
+        for height in [0, 1, usize::MAX] {
+            model.selected = usize::MAX;
+            model.top = usize::MAX;
+            assert_eq!(model.viewport(height), (0, 0));
+            assert_eq!(model.selected, 0);
+        }
+        fs::write(f.0.join("entry"), b"x").unwrap();
+        model.reload().unwrap();
+        for height in [0, 1, usize::MAX] {
+            model.selected = usize::MAX;
+            model.top = usize::MAX;
+            assert_eq!(model.viewport(height), (0, 1));
+            assert_eq!(model.selected, 0);
         }
     }
 

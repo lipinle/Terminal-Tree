@@ -32,17 +32,55 @@ impl Style {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
-    Link, Folder, File, Text, Image, Audio, Video, Archive, Pdf, Document,
-    Table, Presentation, Rust, Python, Javascript, Typescript, Json,
-    Html, Css, Markdown, Shell, Config, Git, License, Xml, Go, Java,
-    C, Cpp, Lua, Docker, Font, Binary, Yaml,
+    Link,
+    Folder,
+    File,
+    Text,
+    Image,
+    Audio,
+    Video,
+    Archive,
+    Pdf,
+    Document,
+    Table,
+    Presentation,
+    Rust,
+    Python,
+    Javascript,
+    Typescript,
+    Json,
+    Html,
+    Css,
+    Markdown,
+    Shell,
+    Config,
+    Git,
+    License,
+    Xml,
+    Go,
+    Java,
+    C,
+    Cpp,
+    Lua,
+    Docker,
+    Font,
+    Binary,
+    Yaml,
 }
 
 fn classify(path: &Path, directory: bool, symlink: bool) -> Kind {
     use Kind::*;
-    if symlink { return Link; }
-    if directory { return Folder; }
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_ascii_lowercase();
+    if symlink {
+        return Link;
+    }
+    if directory {
+        return Folder;
+    }
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
     match name.as_str() {
         "dockerfile" | "containerfile" | ".dockerignore" => return Docker,
         "license" | "license.md" | "license.txt" | "copying" | "notice" => return License,
@@ -51,7 +89,13 @@ fn classify(path: &Path, directory: bool, symlink: bool) -> Kind {
         "readme" | "changelog" => return Markdown,
         _ => (),
     }
-    match path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase().as_str() {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
         "rs" => Rust,
         "py" | "pyw" | "pyi" => Python,
         "js" | "jsx" | "mjs" | "cjs" => Javascript,
@@ -69,7 +113,8 @@ fn classify(path: &Path, directory: bool, symlink: bool) -> Kind {
         "c" | "h" => C,
         "cpp" | "cc" | "cxx" | "hpp" => Cpp,
         "lua" => Lua,
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "bmp" | "ico" | "avif" | "heic" | "ppm" => Image,
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "bmp" | "ico" | "avif" | "heic"
+        | "ppm" => Image,
         "mp3" | "flac" | "wav" | "ogg" | "m4a" | "opus" => Audio,
         "mp4" | "mkv" | "webm" | "avi" | "mov" | "mpeg" => Video,
         "zip" | "7z" | "rar" | "tar" | "gz" | "xz" | "bz2" | "zst" | "tgz" | "jar" => Archive,
@@ -125,11 +170,14 @@ pub fn icon(path: &Path, directory: bool, symlink: bool, style: Style) -> (&'sta
         Binary => ("▣", "\u{e64e}", "B", Color::Green),
         Yaml => ("Y", "\u{e6a8}", "Y", Color::Red),
     };
-    (match style {
-        Style::Unicode => unicode,
-        Style::Seti => seti,
-        Style::Ascii => ascii,
-    }, color)
+    (
+        match style {
+            Style::Unicode => unicode,
+            Style::Seti => seti,
+            Style::Ascii => ascii,
+        },
+        color,
+    )
 }
 
 #[cfg(test)]
@@ -140,10 +188,14 @@ mod tests {
     #[test]
     fn names_extensions_and_links_are_classified_without_io() {
         for (name, kind) in [
-            ("main.RS", Kind::Rust), ("script.py", Kind::Python),
-            ("Dockerfile", Kind::Docker), (".gitignore", Kind::Git),
-            ("LICENSE.md", Kind::License), ("archive.tar.gz", Kind::Archive),
-            ("photo.PNG", Kind::Image), ("report.xlsx", Kind::Table),
+            ("main.RS", Kind::Rust),
+            ("script.py", Kind::Python),
+            ("Dockerfile", Kind::Docker),
+            (".gitignore", Kind::Git),
+            ("LICENSE.md", Kind::License),
+            ("archive.tar.gz", Kind::Archive),
+            ("photo.PNG", Kind::Image),
+            ("report.xlsx", Kind::Table),
             ("unknown", Kind::File),
         ] {
             assert_eq!(classify(Path::new(name), false, false), kind);
@@ -151,11 +203,16 @@ mod tests {
                 let (glyph, _) = icon(Path::new(name), false, false, style);
                 assert!((1..=2).contains(&glyph.width()));
                 assert!(!glyph.chars().any(char::is_control));
-                if style == Style::Ascii { assert!(glyph.is_ascii()); }
+                if style == Style::Ascii {
+                    assert!(glyph.is_ascii());
+                }
             }
         }
         assert_eq!(classify(Path::new("main.rs"), true, false), Kind::Folder);
         assert_eq!(classify(Path::new("main.rs"), true, true), Kind::Link);
-        assert_eq!(icon(Path::new("main.rs"), false, false, Style::Seti).0, "\u{e68b}");
+        assert_eq!(
+            icon(Path::new("main.rs"), false, false, Style::Seti).0,
+            "\u{e68b}"
+        );
     }
 }

@@ -257,7 +257,15 @@ impl Workspace {
         let Some((items, kind)) = &self.clipboard else {
             return vec!["Clipboard is empty".into()];
         };
-        let mut lines = vec![format!("{} | {} items", if matches!(kind, Transfer::Copy) { "Copy" } else { "Cut" }, items.len())];
+        let mut lines = vec![format!(
+            "{} | {} items",
+            if matches!(kind, Transfer::Copy) {
+                "Copy"
+            } else {
+                "Cut"
+            },
+            items.len()
+        )];
         lines.extend(items.iter().map(|item| path_text(item.path())));
         lines
     }
@@ -448,7 +456,10 @@ impl Workspace {
                 let kind = *kind;
                 let mut items = Vec::with_capacity(reviews.len());
                 for review in reviews {
-                    let name = review.path().file_name().unwrap();
+                    let name = review
+                        .path()
+                        .file_name()
+                        .ok_or_else(|| error("missing filename"))?;
                     let dst = if key == 'V' {
                         if reviews.len() != 1 {
                             return Err(error("keep both requires one clipboard item"));
@@ -511,7 +522,7 @@ impl Workspace {
                                     undos.push(u);
                                 }
                                 done += 1;
-                                progress.finished(done);
+                                progress.finished(done)?;
                             }
                             Err(e) => {
                                 failure = Some((review.path().to_path_buf(), e));
@@ -540,7 +551,12 @@ impl Workspace {
                     return Err(error("cut one regular file first"));
                 }
                 let review = &reviews[0];
-                let path = model.directory.join(review.path().file_name().unwrap());
+                let path = model.directory.join(
+                    review
+                        .path()
+                        .file_name()
+                        .ok_or_else(|| error("missing filename"))?,
+                );
                 self.ordinary(review.path())?;
                 self.ordinary(&path)?;
                 let target = self.engine.destination(&path)?;
@@ -579,7 +595,7 @@ impl Workspace {
                         allow_time_rounding,
                         &mut |point| progress.checkpoint(point),
                     )?;
-                    progress.finished(1);
+                    progress.finished(1)?;
                     Ok(retained)
                 });
                 self.clipboard = None;
@@ -636,7 +652,7 @@ impl Workspace {
                         }
                         progress.checkpoint(point)
                     })?;
-                    progress.finished(outcome.completed);
+                    progress.finished(outcome.completed)?;
                     Ok(outcome)
                 })?;
                 self.undo.extend(outcome.undos);
@@ -656,7 +672,12 @@ impl Workspace {
                 let dst = model.directory.join(name);
                 self.ordinary(&dst)?;
                 let target = self.engine.destination(&dst)?;
-                if !confirm_review("Rename item", &[review.path(), target.path()], "yes", self.quick_review)? {
+                if !confirm_review(
+                    "Rename item",
+                    &[review.path(), target.path()],
+                    "yes",
+                    self.quick_review,
+                )? {
                     return Ok("Cancelled".into());
                 }
                 if let Some(undo) = worker::run(1, |p| {
@@ -795,7 +816,7 @@ impl Workspace {
                         &bytes,
                         &mut |point| progress.checkpoint(point),
                     )?;
-                    progress.finished(1);
+                    progress.finished(1)?;
                     Ok(())
                 })?;
                 "Archive extracted"
@@ -848,7 +869,7 @@ impl Workspace {
                         .copy_retained_recovery(&review, &target, &mut |point| {
                             progress.checkpoint(point)
                         })?;
-                    progress.finished(1);
+                    progress.finished(1)?;
                     Ok(())
                 })?;
                 "Recovery copy created; retained and published files preserved"
@@ -898,7 +919,7 @@ impl Workspace {
                             {
                                 Ok(()) => {
                                     done += 1;
-                                    p.finished(done);
+                                    p.finished(done)?;
                                 }
                                 Err(e) => {
                                     failure = Some((r.path().to_path_buf(), e));
@@ -947,7 +968,7 @@ impl Workspace {
                             {
                                 Ok(terminal_tree::operations::RestoreOutcome::Restored) => {
                                     done += 1;
-                                    p.finished(done);
+                                    p.finished(done)?;
                                 }
                                 Ok(_) => {
                                     failure = Some((
@@ -993,7 +1014,7 @@ impl Workspace {
                             }) {
                                 Ok(terminal_tree::operations::PurgeOutcome::Deleted) => {
                                     done += 1;
-                                    p.finished(done);
+                                    p.finished(done)?;
                                 }
                                 Ok(_) => {
                                     failure = Some((

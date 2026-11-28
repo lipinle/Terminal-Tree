@@ -27,8 +27,11 @@ fn gzip_filter(input: &[u8], decompress: bool, limit: usize) -> io::Result<Vec<u
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()?;
-    let mut stdin = child.stdin.take().expect("piped stdin");
-    let stdout = child.stdout.take().expect("piped stdout");
+    let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
+        let _ = child.kill();
+        child.wait()?;
+        return Err(io::Error::other("gzip pipe unavailable"));
+    };
     std::thread::scope(|scope| {
         let writer = scope.spawn(move || stdin.write_all(input));
         let mut output = Vec::new();
