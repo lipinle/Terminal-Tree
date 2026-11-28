@@ -26,6 +26,7 @@ pub enum Action {
 pub enum BindingError {
     ReservedOrUnsupported,
     Conflict,
+    InvalidSpecification,
 }
 
 const ACTIONS: [Action; 9] = [
@@ -39,6 +40,41 @@ const ACTIONS: [Action; 9] = [
     Action::Collapse,
     Action::Refresh,
 ];
+
+impl Action {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Up => "up",
+            Self::Down => "down",
+            Self::PageUp => "pageup",
+            Self::PageDown => "pagedown",
+            Self::First => "first",
+            Self::Last => "last",
+            Self::Expand => "expand",
+            Self::Collapse => "collapse",
+            Self::Refresh => "refresh",
+        }
+    }
+}
+
+fn named_key(name: &str) -> Option<KeyCode> {
+    Some(match name {
+        "up" => KeyCode::Up,
+        "down" => KeyCode::Down,
+        "left" => KeyCode::Left,
+        "right" => KeyCode::Right,
+        "pageup" => KeyCode::PageUp,
+        "pagedown" => KeyCode::PageDown,
+        "home" => KeyCode::Home,
+        "end" => KeyCode::End,
+        "f5" => KeyCode::F(5),
+        "f9" => KeyCode::F(9),
+        "f10" => KeyCode::F(10),
+        "f11" => KeyCode::F(11),
+        "f12" => KeyCode::F(12),
+        _ => return None,
+    })
+}
 
 fn default_binding(action: Action) -> Binding {
     let code = match action {
@@ -91,6 +127,46 @@ impl Default for Keymap {
 }
 
 impl Keymap {
+    /// Apply comma-separated action=key assignments to the default map.
+    /// Validate the complete map atomically, including simultaneous swaps.
+    pub fn from_spec(spec: &str) -> Result<Self, BindingError> {
+        if spec.is_empty() || spec.len() > 256 {
+            return Err(BindingError::InvalidSpecification);
+        }
+        let mut map = Self::default();
+        let mut bindings = map.bindings;
+        let mut seen = [false; ACTIONS.len()];
+        for assignment in spec.split(',') {
+            let (action, key) = assignment
+                .split_once('=')
+                .ok_or(BindingError::InvalidSpecification)?;
+            let action = ACTIONS
+                .iter()
+                .copied()
+                .find(|candidate| candidate.name() == action)
+                .ok_or(BindingError::InvalidSpecification)?;
+            let index = Self::index(action);
+            if seen[index] {
+                return Err(BindingError::InvalidSpecification);
+            }
+            seen[index] = true;
+            bindings[index] = Binding {
+                code: named_key(key).ok_or(BindingError::ReservedOrUnsupported)?,
+                modifiers: KeyModifiers::NONE,
+            };
+        }
+        map.replace_all(bindings)?;
+        Ok(map)
+    }
+
+    pub fn summary(&self) -> String {
+        ACTIONS
+            .iter()
+            .map(|&action| format!("{}={:?}", action.name(), self.binding(action).code))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
     pub fn binding(&self, action: Action) -> Binding {
         self.bindings[Self::index(action)]
     }
@@ -187,6 +263,33 @@ mod tests {
             Err(BindingError::ReservedOrUnsupported)
         );
         assert_eq!(map.binding(Action::Up), key(KeyCode::Up));
+    }
+
+    #[test]
+    fn specifications_support_swaps_and_reject_conflicts() {
+        let map = Keymap::from_spec("up=down,down=up,refresh=f9").unwrap();
+        assert_eq!(map.action(key(KeyCode::Down)), Some(Action::Up));
+        assert_eq!(map.action(key(KeyCode::Up)), Some(Action::Down));
+        assert_eq!(map.action(key(KeyCode::F(5))), None);
+        assert_eq!(map.action(key(KeyCode::F(9))), Some(Action::Refresh));
+        assert!(map.summary().contains("refresh=F(9)"));
+        assert_eq!(
+            Keymap::from_spec("up=down").unwrap_err(),
+            BindingError::Conflict
+        );
+        for invalid in ["", "up", "up=up,up=up", "unknown=up", "up=up,"] {
+            assert_eq!(
+                Keymap::from_spec(invalid).unwrap_err(),
+                BindingError::InvalidSpecification
+            );
+        }
+        for reserved in ["up=esc", "up=enter", "up=ctrl+c", "up=q"] {
+            assert_eq!(
+                Keymap::from_spec(reserved).unwrap_err(),
+                BindingError::ReservedOrUnsupported
+            );
+        }
+        assert!(Keymap::from_spec(&"x".repeat(257)).is_err());
     }
 
     #[test]

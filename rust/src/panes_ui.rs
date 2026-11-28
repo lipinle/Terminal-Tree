@@ -11,7 +11,9 @@ use std::ffi::OsStr;
 use std::io::{self, IsTerminal, Write};
 use std::path::Path;
 use terminal_tree::{
+    bookmarks::Bookmarks,
     display_name,
+    keymap::{Action, Binding, Keymap},
     layout::{Layout, Pane},
     theme::Theme,
     tree::TreeModel,
@@ -189,7 +191,7 @@ fn draw(
         Print(clip(message, limit)),
         MoveTo(0, height - 1),
         Print(clip(
-            "Tab focus | n new | [ ] switch | w close | arrows | F5 refresh | t theme | q exit",
+            "Tab focus | n new | [ ] switch | w close | b/B bookmarks | ? keys | t theme | q exit",
             limit
         )),
         ResetColor
@@ -223,24 +225,131 @@ fn toggle(model: &mut TreeModel) -> io::Result<()> {
     }
 }
 
-fn navigate(model: &mut TreeModel, code: KeyCode, capacity: usize) -> io::Result<()> {
-    match code {
-        KeyCode::Up => model.shift(-1),
-        KeyCode::Down => model.shift(1),
-        KeyCode::PageUp => model.shift(-(capacity as isize)),
-        KeyCode::PageDown => model.shift(capacity as isize),
-        KeyCode::Home => model.select(0),
-        KeyCode::End => model.select(usize::MAX),
-        KeyCode::Right => model.expand()?,
-        KeyCode::Left => model.collapse_or_parent(),
-        KeyCode::Enter => toggle(model)?,
-        KeyCode::F(5) => model.refresh()?,
-        _ => {}
+fn navigate(model: &mut TreeModel, action: Action, capacity: usize) -> io::Result<()> {
+    match action {
+        Action::Up => model.shift(-1),
+        Action::Down => model.shift(1),
+        Action::PageUp => model.shift(-(capacity as isize)),
+        Action::PageDown => model.shift(capacity as isize),
+        Action::First => model.select(0),
+        Action::Last => model.select(usize::MAX),
+        Action::Expand => model.expand()?,
+        Action::Collapse => model.collapse_or_parent(),
+        Action::Refresh => model.refresh()?,
     }
     Ok(())
 }
 
-pub(crate) fn browse(left: &Path, right: &Path) -> io::Result<()> {
+fn save_location(model: &TreeModel, marks: &mut Bookmarks) -> io::Result<()> {
+    let path = match model.rows().get(model.selected()) {
+        Some(row) if row.entry.directory && !row.entry.symlink => row.entry.path.as_path(),
+        _ => model.root(),
+    };
+    // Saved locations are read-only path values; refuse observed aliases.
+    if path.canonicalize()? != path || !std::fs::symlink_metadata(path)?.is_dir() {
+        return Err(io::Error::other("bookmark requires an unchanged directory"));
+    }
+    marks
+        .add(path.to_path_buf())
+        .map_err(|error| io::Error::other(format!("cannot save bookmark: {error:?}")))
+}
+
+enum BookmarkChoice {
+    Cancel,
+    Exit,
+    Open(usize),
+}
+
+fn bookmark_menu(marks: &mut Bookmarks) -> io::Result<BookmarkChoice> {
+    let mut selected = 0usize;
+    let mut top = 0usize;
+    loop {
+        if marks.paths().is_empty() {
+            return Ok(BookmarkChoice::Cancel);
+        }
+        let (width, height) = terminal::size()?;
+        let limit = usize::from(width.saturating_sub(1));
+        let cap = usize::from(height.saturating_sub(2)).max(1);
+        selected = selected.min(marks.paths().len() - 1);
+        if selected < top {
+            top = selected;
+        } else if selected >= top + cap {
+            top = selected + 1 - cap;
+        }
+        let mut out = io::stdout().lock();
+        queue!(
+            out,
+            ResetColor,
+            MoveTo(0, 0),
+            Clear(ClearType::All),
+            Print(clip("Bookmarks - session only", limit))
+        )?;
+        if height >= 3 {
+            for (index, path) in marks.paths().iter().enumerate().skip(top).take(cap) {
+                queue!(out, MoveTo(0, (index - top + 1) as u16))?;
+                if index == selected {
+                    queue!(
+                        out,
+                        SetBackgroundColor(crossterm::style::Color::DarkGrey),
+                        SetForegroundColor(crossterm::style::Color::White)
+                    )?;
+                }
+                queue!(
+                    out,
+                    Print(clip(&display_name(path.as_os_str()), limit)),
+                    ResetColor
+                )?;
+            }
+            queue!(
+                out,
+                MoveTo(0, height - 1),
+                Print(clip(
+                    "Up/Down | Enter open | x remove bookmark | Esc back",
+                    limit
+                ))
+            )?;
+        }
+        out.flush()?;
+        drop(out);
+        if let Event::Key(key) = event::read()? {
+            if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+                continue;
+            }
+            if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                return Ok(BookmarkChoice::Exit);
+            }
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => return Ok(BookmarkChoice::Cancel),
+                KeyCode::Enter if height >= 3 => return Ok(BookmarkChoice::Open(selected)),
+                KeyCode::Char('x') if height >= 3 => {
+                    marks
+                        .remove(selected)
+                        .map_err(|_| io::Error::other("invalid bookmark selection"))?;
+                }
+                KeyCode::Up => selected = selected.saturating_sub(1),
+                KeyCode::Down => selected = (selected + 1).min(marks.paths().len() - 1),
+                KeyCode::Home => selected = 0,
+                KeyCode::End => selected = marks.paths().len() - 1,
+                _ => {}
+            }
+        }
+    }
+}
+
+fn open_location(model: &mut TreeModel, marks: &Bookmarks, index: usize) -> io::Result<()> {
+    let path = marks
+        .get(index)
+        .ok_or_else(|| io::Error::other("invalid bookmark selection"))?;
+    if path.canonicalize()? != path || !std::fs::symlink_metadata(path)?.is_dir() {
+        return Err(io::Error::other("bookmark location changed"));
+    }
+    // Construct replacement first. Failure preserves the old pane.
+    let replacement = tree(path)?;
+    *model = replacement;
+    Ok(())
+}
+
+pub(crate) fn browse(left: &Path, right: &Path, keymap: &Keymap) -> io::Result<()> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return Err(io::Error::other("Interactive terminal required"));
     }
@@ -249,6 +358,7 @@ pub(crate) fn browse(left: &Path, right: &Path) -> io::Result<()> {
     let _terminal = Terminal::enter()?;
     let mut message = String::from("Read-only panes. File mutations disabled.");
     let mut theme = Theme::default();
+    let mut marks = Bookmarks::default();
     loop {
         let (width, height) = terminal::size()?;
         let regions = draw(&mut layout, &message, width, height, theme)?;
@@ -264,12 +374,36 @@ pub(crate) fn browse(left: &Path, right: &Path) -> io::Result<()> {
                 if regions.is_none() {
                     continue;
                 }
+                if key.code == KeyCode::Char('?') {
+                    message = keymap.summary();
+                    continue;
+                }
                 match key.code {
                     KeyCode::Tab => {
                         layout.toggle_focus();
                         Ok(())
                     }
                     KeyCode::Char('n') => new_tab(&mut layout),
+                    KeyCode::Char('b') => match save_location(layout.focused(), &mut marks) {
+                        Ok(()) => {
+                            message = format!("Bookmark saved | {} locations", marks.paths().len());
+                            continue;
+                        }
+                        Err(error) => Err(error),
+                    },
+                    KeyCode::Char('B') => {
+                        if marks.paths().is_empty() {
+                            Err(io::Error::other("no bookmarks; press b to save"))
+                        } else {
+                            match bookmark_menu(&mut marks)? {
+                                BookmarkChoice::Exit => break,
+                                BookmarkChoice::Cancel => Ok(()),
+                                BookmarkChoice::Open(index) => {
+                                    open_location(layout.focused_mut(), &marks, index)
+                                }
+                            }
+                        }
+                    }
                     KeyCode::Char('t') => {
                         theme = theme.next();
                         Ok(())
@@ -291,7 +425,16 @@ pub(crate) fn browse(left: &Path, right: &Path) -> io::Result<()> {
                             Err(io::Error::other("cannot close the last tab"))
                         }
                     }
-                    _ => navigate(layout.focused_mut(), key.code, usize::from(height - 4)),
+                    KeyCode::Enter => toggle(layout.focused_mut()),
+                    _ => match keymap.action(Binding {
+                        code: key.code,
+                        modifiers: key.modifiers,
+                    }) {
+                        Some(action) => {
+                            navigate(layout.focused_mut(), action, usize::from(height - 4))
+                        }
+                        None => Ok(()),
+                    },
                 }
             }
             Event::Mouse(mouse) => {

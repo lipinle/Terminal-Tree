@@ -79,5 +79,98 @@ def main(binary):
             os.close(slave)
 
 
+def custom_keys(binary):
+    with tempfile.TemporaryDirectory(prefix="tt-pane-keys-") as tmp:
+        root = Path(tmp)
+        (root / "a").write_bytes(b"a")
+        (root / "b").write_bytes(b"b")
+        invalid = subprocess.run(
+            [binary, "--panes", str(root), "--keys", "up=down"],
+            capture_output=True, timeout=8,
+        )
+        assert invalid.returncode != 0
+        assert b"invalid navigation keys" in invalid.stderr
+        master, slave = pty.openpty()
+        process = None
+        try:
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 120, 0, 0))
+            before = termios.tcgetattr(slave)
+            process = subprocess.Popen(
+                [binary, "--panes", str(root), "--keys", "up=down,down=up"],
+                stdin=slave, stdout=slave, stderr=slave,
+                env=dict(os.environ, TERM="xterm-256color"),
+            )
+            wait_output(master, process, b"Focus: Left | Row: 1")
+            os.write(master, b"\x1b[A")
+            wait_output(master, process, b"Focus: Left | Row: 2")
+            os.write(master, b"\x1b[B")
+            wait_output(master, process, b"Focus: Left | Row: 1")
+            os.write(master, b"?")
+            wait_output(master, process, b"up=Down down=Up")
+            os.write(master, b"\x03")
+            assert process.wait(timeout=8) == 0
+            assert termios.tcgetattr(slave) == before
+            assert (root / "a").read_bytes() == b"a"
+            assert (root / "b").read_bytes() == b"b"
+            print("TT_PANE_KEYS custom bindings and interrupt invariant passed")
+        finally:
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait()
+            os.close(master)
+            os.close(slave)
+
+
+def bookmarks(binary):
+    with tempfile.TemporaryDirectory(prefix="tt-pane-bookmarks-") as tmp:
+        root = Path(tmp)
+        left, right = root / "left", root / "right"
+        (left / "saved").mkdir(parents=True)
+        right.mkdir()
+        (left / "saved" / "saved-leaf").write_bytes(b"preserve")
+        (right / "right-file").write_bytes(b"keep")
+        master, slave = pty.openpty()
+        process = None
+        try:
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 160, 0, 0))
+            before = termios.tcgetattr(slave)
+            process = subprocess.Popen(
+                [binary, "--panes", str(left), str(right)],
+                stdin=slave, stdout=slave, stderr=slave,
+                env=dict(os.environ, TERM="xterm-256color"),
+            )
+
+            def step(keys, marker):
+                os.write(master, keys)
+                wait_output(master, process, marker)
+
+            wait_output(master, process, b"Focus: Left | Row: 1")
+            step(b"b", b"Bookmark saved | 1 locations")
+            step(b"b", b"cannot save bookmark: Duplicate")
+            step(b"\t", b"Focus: Right | Row: 1")
+            step(b"B", b"Bookmarks - session only")
+            step(b"\r", b"saved-leaf")
+            step(b"B", b"Bookmarks - session only")
+            step(b"x", b"Terminal Tree [panes / read-only]")
+            step(b"B", b"no bookmarks; press b to save")
+            step(b"b", b"Bookmark saved | 1 locations")
+            step(b"B", b"Bookmarks - session only")
+            os.write(master, b"\x03")
+            assert process.wait(timeout=8) == 0
+            assert termios.tcgetattr(slave) == before
+            assert (left / "saved" / "saved-leaf").read_bytes() == b"preserve"
+            assert (right / "right-file").read_bytes() == b"keep"
+            print("TT_PANE_BOOKMARKS save, open, remove and interrupt invariants passed")
+        finally:
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait()
+            os.close(master)
+            os.close(slave)
+
+
 if __name__ == "__main__":
-    main(str(Path(sys.argv[1]).resolve()))
+    binary = str(Path(sys.argv[1]).resolve())
+    main(binary)
+    custom_keys(binary)
+    bookmarks(binary)
