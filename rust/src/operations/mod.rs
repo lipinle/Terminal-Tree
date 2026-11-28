@@ -17,7 +17,9 @@ mod archive_extract;
 mod cross_device;
 mod manifest;
 mod policy;
+mod retained_recovery;
 mod trash;
+pub use retained_recovery::RetainedRecovery;
 pub use cross_device::FileTransferObservation;
 use manifest::{
     copy_tree, fd_path, manifest, manifest_with, snapshot, Identity, Manifest, Snapshot,
@@ -773,52 +775,55 @@ impl Engine {
                 truncated = true;
                 break;
             }
-            let result = (|| -> io::Result<serde_json::Value> {
-                let observed = fs::symlink_metadata(fd_path(&self.journal).join(&name))?;
-                let safe = |m: &Metadata| {
-                    m.is_file()
-                        && m.uid() == rustix::process::getuid().as_raw()
-                        && m.mode() & 0o077 == 0
-                        && m.nlink() == 1
-                        && m.len() <= 65536
-                };
-                require(safe(&observed), "unsafe or oversized recovery record")?;
-                let f: File = rx::openat(
-                    &self.journal,
-                    &name,
-                    OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
-                    Mode::empty(),
-                )?
-                .into();
-                let m = f.metadata()?;
-                require(
-                    safe(&m) && identity(&m) == identity(&observed),
-                    "unsafe or changed recovery record",
-                )?;
-                let mut bytes = Vec::new();
-                (&f).take(65537).read_to_end(&mut bytes)?;
-                let after = f.metadata()?;
-                require(
-                    bytes.len() as u64 == m.len()
-                        && safe(&after)
-                        && identity(&after) == identity(&m),
-                    "record changed during read",
-                )?;
-                let named = fs::symlink_metadata(fd_path(&self.journal).join(&name))?;
-                require(
-                    safe(&named) && identity(&named) == identity(&m),
-                    "record replaced during read",
-                )?;
-                let value: serde_json::Value =
-                    serde_json::from_slice(&bytes).map_err(io::Error::other)?;
-                require(value.is_object(), "invalid journal object")?;
-                Ok(value)
-            })();
+            let result = self.read_recovery_record(&name);
             out.push((name, result));
         }
         self.check_journal()?;
         out.sort_by(|a, b| a.0.cmp(&b.0));
         Ok((out, truncated))
+    }
+    fn read_recovery_record(&self, name: &OsStr) -> io::Result<serde_json::Value> {
+        one_name(name)?;
+        self.check_journal()?;
+        let observed = fs::symlink_metadata(fd_path(&self.journal).join(name))?;
+        let safe = |m: &Metadata| {
+            m.is_file()
+                && m.uid() == rustix::process::getuid().as_raw()
+                && m.mode() & 0o077 == 0
+                && m.nlink() == 1
+                && m.len() <= 65536
+        };
+        require(safe(&observed), "unsafe or oversized recovery record")?;
+        let f: File = rx::openat(
+            &self.journal,
+            name,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?
+        .into();
+        let m = f.metadata()?;
+        require(
+            safe(&m) && identity(&m) == identity(&observed),
+            "unsafe or changed recovery record",
+        )?;
+        let mut bytes = Vec::new();
+        (&f).take(65537).read_to_end(&mut bytes)?;
+        let after = f.metadata()?;
+        require(
+            bytes.len() as u64 == m.len()
+                && safe(&after)
+                && identity(&after) == identity(&m),
+            "record changed during read",
+        )?;
+        let named = fs::symlink_metadata(fd_path(&self.journal).join(name))?;
+        require(
+            safe(&named) && identity(&named) == identity(&m),
+            "record replaced during read",
+        )?;
+        let value: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+        require(value.is_object(), "invalid journal object")?;
+        Ok(value)
     }
     pub fn pending(&self) -> io::Result<Vec<serde_json::Value>> {
         self.check_journal()?;

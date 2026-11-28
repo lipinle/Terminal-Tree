@@ -755,6 +755,45 @@ impl Workspace {
                 self.settings.save(model)?;
                 return Ok("Rust view settings saved".into());
             }
+            'O' => {
+                if !self.marks.is_empty() {
+                    return Err(error("clear marks; select the existing published copy"));
+                }
+                let published = self.selected(model)?;
+                self.ordinary(&published)?;
+                let Some(original) = prompt("Original absolute path from inspected journal:")? else {
+                    return Ok("Cancelled".into());
+                };
+                let original = PathBuf::from(original);
+                if !original.is_absolute() {
+                    return Err(error("absolute original path required"));
+                }
+                self.ordinary(&original)?;
+                let Some(id) = prompt("Retained move transaction ID:")? else {
+                    return Ok("Cancelled".into());
+                };
+                let Some(name) = filename()? else {
+                    return Ok("Cancelled".into());
+                };
+                let output = model.directory.join(name);
+                self.ordinary(&output)?;
+                let target = self.engine.destination(&output)?;
+                let review = worker::run(1, |progress| {
+                    progress.item(path_text(&published), 0)?;
+                    self.engine.review_retained_recovery(&original, &published, &id, &mut |point| progress.checkpoint(point))
+                })?;
+                if !confirm("Recover verified retained copy to NEW path; preserve all evidence",
+                    &[&original, review.retained_path(), &published, target.path()], "recover")? {
+                    return Ok("Cancelled".into());
+                }
+                worker::run(1, |progress| {
+                    progress.item(path_text(review.retained_path()), 0)?;
+                    self.engine.copy_retained_recovery(&review, &target, &mut |point| progress.checkpoint(point))?;
+                    progress.finished(1);
+                    Ok(())
+                })?;
+                "Recovery copy created; retained and published files preserved"
+            }
             'j' => {
                 let (records, truncated) = self.engine.recovery_report()?;
                 super::recovery::show(&records, truncated)?;
