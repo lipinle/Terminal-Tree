@@ -331,39 +331,8 @@ fn properties(path: &Path) -> io::Result<()> {
     page("Properties", &platform::properties(path)?)
 }
 #[cfg(feature = "native-ops")]
-fn preview(path: &Path) -> io::Result<()> {
-    use rustix::fs::{self as rx, Mode, OFlags};
-    use std::io::Read;
-    use std::os::unix::fs::MetadataExt;
-    let before = std::fs::symlink_metadata(path)?;
-    if !before.is_file() {
-        return Err(io::Error::other("preview requires a regular non-link file"));
-    }
-    let f: std::fs::File = rx::open(
-        path,
-        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
-        Mode::empty(),
-    )?
-    .into();
-    let m = f.metadata()?;
-    if !m.is_file() || (m.dev(), m.ino()) != (before.dev(), before.ino()) {
-        return Err(io::Error::other("file changed before preview"));
-    }
-    let mut bytes = Vec::new();
-    f.take(65537).read_to_end(&mut bytes)?;
-    let mut lines = vec![display_name(path.as_os_str())];
-    if bytes.contains(&0) {
-        lines.push("Binary file; preview unavailable".into());
-    } else {
-        let truncated = bytes.len() > 65536;
-        bytes.truncate(65536);
-        for line in bytes.split(|&b| b == b'\n') {
-            lines.push(display_name(std::ffi::OsStr::from_bytes(line)));
-        }
-        if truncated {
-            lines.push("[Preview limited to 64 KiB]".into());
-        }
-    }
+fn preview(path: &Path, mode: terminal_tree::preview::Mode) -> io::Result<()> {
+    let lines = terminal_tree::preview::read_lines(path, mode)?;
     page("File preview", &lines)
 }
 
@@ -605,10 +574,15 @@ fn browse(
                         #[cfg(feature = "native-ops")]
                         KeyCode::Char('p') | KeyCode::F(3) => {
                             match model.entries.get(model.selected) {
-                                Some(e) => preview(&e.path),
+                                Some(e) => preview(&e.path, terminal_tree::preview::Mode::Auto),
                                 None => Err(io::Error::other("select a file")),
                             }
                         }
+                        #[cfg(feature = "native-ops")]
+                        KeyCode::F(8) => match model.entries.get(model.selected) {
+                            Some(e) => preview(&e.path, terminal_tree::preview::Mode::Hex),
+                            None => Err(io::Error::other("select a file")),
+                        },
                         KeyCode::F(1) | KeyCode::Char('?') => {
                             help::show(writable, personal, return_on_enter)
                         }
