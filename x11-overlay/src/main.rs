@@ -2,7 +2,7 @@
 //! Experimental click-through X11 child window. No screen capture, input grab,
 //! foreign window mutation, or top-level always-on-top window.
 use std::{error::Error,io::{self,Read,Write},sync::mpsc,thread,time::Duration};
-use x11rb::{connection::Connection,protocol::{xproto::{self,ConnectionExt,AtomEnum,Window,ImageFormat,WindowClass,CreateWindowAux,CreateGCAux,MapState,VisualClass,ImageOrder,ClipOrdering},shape::{self,ConnectionExt as _,SO,SK}},rust_connection::RustConnection,COPY_DEPTH_FROM_PARENT,COPY_FROM_PARENT};
+use x11rb::{connection::Connection,protocol::{xproto::{ConnectionExt,AtomEnum,Window,ImageFormat,WindowClass,CreateWindowAux,CreateGCAux,MapState,VisualClass,ImageOrder,ClipOrdering},shape::{ConnectionExt as _,SO,SK}},rust_connection::RustConnection,COPY_DEPTH_FROM_PARENT,COPY_FROM_PARENT};
 type Result<T>=std::result::Result<T,Box<dyn Error>>;
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 struct Rect{x:u16,y:u16,w:u16,h:u16}

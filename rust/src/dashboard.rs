@@ -890,7 +890,7 @@ impl State {
             let label = match rustix::fs::statvfs(path) {
                 Ok(s) => format!(
                     "Free: {}",
-                    human_size((s.f_bavail as u64).saturating_mul(s.f_frsize as u64))
+                    human_size(s.f_bavail.saturating_mul(s.f_frsize))
                 ),
                 Err(_) => "Free: unavailable".into(),
             };

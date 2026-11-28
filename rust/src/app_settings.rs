@@ -353,17 +353,19 @@ mod tests {
         use std::os::unix::ffi::OsStringExt;
         let path =
             std::path::PathBuf::from(std::ffi::OsString::from_vec(b"/tmp/raw-\xff".to_vec()));
-        let value = serde_json::json!({"bookmarks":encode_bookmarks(&[path.clone()]).unwrap()});
+        let value = serde_json::json!({"bookmarks":encode_bookmarks(std::slice::from_ref(&path)).unwrap()});
         assert_eq!(decode_bookmarks(&value).unwrap(), vec![path]);
         assert!(decode_bookmarks(&serde_json::json!({"bookmarks":"00"})).is_err());
         assert!(decode_bookmarks(&serde_json::json!({"bookmarks":"\u{e613}"})).is_err());
     }
     #[test]
     fn preferences_round_trip_and_reject_invalid_pack() {
-        let mut p = Preferences::default();
-        p.foreground = parse_color("#abcdef").unwrap();
-        p.companions[1] = false;
-        p.custom = parse_pack(&serde_json::json!({"rs":"R","zip":"Z"})).unwrap();
+        let p = Preferences {
+            foreground: parse_color("#abcdef").unwrap(),
+            companions: [true, false, true],
+            custom: parse_pack(&serde_json::json!({"rs":"R","zip":"Z"})).unwrap(),
+            ..Preferences::default()
+        };
         let value = p.encode(Style::Seti, false, "Grid", 3);
         let (q, style, preview, view, zoom) = Preferences::decode(&value).unwrap();
         assert_eq!(q.foreground, p.foreground);

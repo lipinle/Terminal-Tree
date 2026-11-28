@@ -201,8 +201,8 @@ impl Panel {
     }
     fn prompt_text(&self, width: usize) -> String {
         use unicode_width::UnicodeWidthStr;
-        let mut left = visible(self.input[..self.cursor].as_bytes());
-        let right = visible(self.input[self.cursor..].as_bytes());
+        let mut left = visible(&self.input.as_bytes()[..self.cursor]);
+        let right = visible(&self.input.as_bytes()[self.cursor..]);
         let room = width.saturating_sub(3);
         while left.width() > room.saturating_sub(1) && !left.is_empty() {
             let n = left.chars().next().map_or(0, char::len_utf8);

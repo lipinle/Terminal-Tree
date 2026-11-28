@@ -91,7 +91,7 @@ pub fn pixel_bounds(cols: u16, rows: u16) -> (u32, u32) {
 }
 fn b64(input: &[u8]) -> Vec<u8> {
     const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = Vec::with_capacity((input.len() + 2) / 3 * 4);
+    let mut out = Vec::with_capacity(input.len().div_ceil(3) * 4);
     for b in input.chunks(3) {
         let a = b[0];
         let c = *b.get(1).unwrap_or(&0);
@@ -133,7 +133,7 @@ fn encode(
         return Err(io::Error::other("invalid native graphics frame"));
     }
     // 3072 raw bytes => at most 4096 base64 bytes, no padding except final chunk.
-    let total = (pixels.len() + 3071) / 3072;
+    let total = pixels.len().div_ceil(3072);
     for (i, chunk) in pixels.chunks(3072).enumerate() {
         let more = u8::from(i + 1 < total);
         if i == 0 {
