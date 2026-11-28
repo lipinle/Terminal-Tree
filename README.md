@@ -76,6 +76,12 @@ The application displays a Bash command panel at the bottom by default when the 
 
 Commands run explicitly in the active file pane's current directory, with your ordinary OS permissions; the file manager's read-only/scoped label does **not** restrict shell commands. No command runs just by browsing. Output is escaped, bounded to 32 KiB, and displayed with exit status; Up/Down recall session-only command history, PageUp/PageDown or wheel scroll output, Ctrl+C stops the current process group, Ctrl+L clears output. A command is limited to 60 seconds. This is a noninteractive Bash command console, not a full PTY emulator: stdin is closed, commands such as vim, top, password prompts and interactive shells require a normal terminal; each command starts a new Bash process, so cd/export do not persist between commands. Commands that intentionally detach from the process group may outlive the console. File rows refresh after completion. Legacy CLI views remain unchanged.
 
+### File details
+
+Tree and List show responsive Size (IEC units), Type and Modified (UTC date) columns where space permits. Click column headings to sort through the existing model. Marks clear when reordering; the selected native path is retained where possible. Settings > Display > File detail columns toggles them. Directory sizes are not recursively calculated.
+
+Click the Preview header or press Alt+P to cycle Content, Properties and Hex; scroll over the preview to read additional lines. Properties shows observed entry metadata, not recursive directory size. Native Linux is required for content/hex reads. The status line reports marked items in the visible directory and whether Bash is running.
+
 ## Navigation and search
 
 Use the installed executable (examples below assume it is on your PATH), or substitute its full path.
