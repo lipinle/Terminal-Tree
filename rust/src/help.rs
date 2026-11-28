@@ -57,6 +57,8 @@ const TOPICS:&[Topic]=&[
         ("x","Cut selection or marked items into the reviewed clipboard. No move happens yet."),
         ("v","Paste into the current directory. Review paths and type yes."),
         ("r / F2","Rename one item; clear marks first. Enter a new name, review and type yes."),
+        ("Actions: Bulk rename","Mark items, choose Bulk rename in F6, enter literal search and replacement, review every pair and type yes. Stops on first failure."),
+        ("Actions: Keep both","For one clipboard item, choose Paste one item (keep both) in F6. Review the suggested unoccupied name and type yes. Never overwrites."),
         ("n","Create a directory: enter one name, review and type yes."),
         ("t","Create an empty file: enter one name, review and type yes."),
         ("u","Undo the most recent eligible move/rename in this session. Review and type yes; changed results or occupied destinations are refused."),

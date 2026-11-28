@@ -133,6 +133,9 @@ pub mod reviewed {
             needle: &OsStr,
             replacement: &OsStr,
         ) -> io::Result<Self> {
+            if sources.is_empty() || sources.len() > super::MAX_ITEMS {
+                return Err(io::Error::other("select 1..=1000 reviewed items"));
+            }
             let mut names = Vec::<OsString>::with_capacity(sources.len());
             for source in sources {
                 if source.path().parent() != Some(directory) {
