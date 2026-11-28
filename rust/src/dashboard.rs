@@ -362,6 +362,7 @@ impl State {
         if width>=X+label.len() as u16 {
             queue!(out,MoveTo(X,0),SetForegroundColor(self.prefs.accent),Print(label),SetForegroundColor(self.prefs.foreground))?;
         }
+        if width>=83 {queue!(out,MoveTo(78,0),SetForegroundColor(self.prefs.accent),Print(if self.prefs.companions[2]{"[Git]"}else{"[git]"}),SetForegroundColor(self.prefs.foreground))?;}
         Ok(())
     }
     fn layout(&self, w: u16, h: u16) -> Layout {
@@ -1191,7 +1192,7 @@ impl State {
             1 => vec![("Select a scoped workspace to enable file operations",KeyCode::Null,plain)],
             2 => vec![("Cycle preview mode (Alt+P)",KeyCode::Char('p'),KeyModifiers::ALT),("Tree view (Ctrl+3)",KeyCode::Char('3'),KeyModifiers::CONTROL),("Grid view (Ctrl+1)",KeyCode::Char('1'),KeyModifiers::CONTROL),("List view (Ctrl+2)",KeyCode::Char('2'),KeyModifiers::CONTROL),("Toggle dual pane (F8)",KeyCode::F(8),plain),("Toggle live preview",KeyCode::F(9),plain),("Open preview",KeyCode::F(3),plain),("Hidden files",KeyCode::Char('h'),plain),("Sort",KeyCode::Char('s'),plain),("Refresh",KeyCode::F(5),plain),("Filter",KeyCode::Char('/'),plain)],
             3 => vec![("Parent",KeyCode::Left,plain),("Back",KeyCode::Char('['),plain),("Forward",KeyCode::Char(']'),plain),("Locations",KeyCode::Char('m'),plain),("Bookmark current directory",KeyCode::Char('b'),plain),("Bookmarks",KeyCode::Char('B'),plain)],
-            4 => vec![("Companion tools",KeyCode::Char('p'),KeyModifiers::CONTROL),("Help",KeyCode::F(1),plain)],
+            4 => vec![("Companion tools",KeyCode::Char('p'),KeyModifiers::CONTROL),("Git Manager (Alt+G)",KeyCode::Char('g'),KeyModifiers::ALT),("Help",KeyCode::F(1),plain)],
             5 => vec![("Settings Center",KeyCode::Char(','),KeyModifiers::CONTROL)],
             _ => vec![("Manage integrations",KeyCode::F(11),KeyModifiers::SHIFT)],
         };
@@ -1206,7 +1207,7 @@ impl State {
         if category == 4 && writable { commands.push(("File actions",KeyCode::F(6),plain)); commands.push(("Recovery",KeyCode::Char('j'),plain)); }
 
         if !cfg!(feature = "native-ops") {
-            commands.retain(|(_,key,mods)| *key != KeyCode::F(3) && !(*mods == KeyModifiers::CONTROL && *key == KeyCode::Char('p')));
+            commands.retain(|(_,key,mods)| *key != KeyCode::F(3) && !(*mods == KeyModifiers::CONTROL && *key == KeyCode::Char('p')) && !(*mods == KeyModifiers::ALT && *key == KeyCode::Char('g')));
         }
         commands.retain(|(_,key,_)|*key!=KeyCode::Null);
         // Keep a readable explanation in the Edit menu when writes are disabled.
@@ -1263,6 +1264,11 @@ impl State {
         {
             if self.panel_rows(full_h)==0 {self.terminal_panel.focused=false;}
             if let Event::Mouse(mouse)=&event {
+                if self.location.is_none()&&mouse.row==0&&l.width>=83&&(78..83).contains(&mouse.column)&&mouse.kind==MouseEventKind::Down(MouseButton::Left)&&mouse.modifiers==KeyModifiers::NONE {
+                    self.terminal_panel.focused=false;self.expanded_tree=None;self.side_focus=false;
+                    super::git_ui::show(&model.directory,self.prefs.companions[2])?;
+                    model.reload()?;self.pane_switched=true;self.preview_key=None;return Ok(None);
+                }
                 if matches!(self.dragging,Some(Divider::Terminal)) {
                     match mouse.kind {
                         MouseEventKind::Drag(MouseButton::Left)=>self.resize_drag(Divider::Terminal,mouse.column,l.width,mouse.row,full_h),
@@ -1395,6 +1401,13 @@ impl State {
                 }
                 if k.code == KeyCode::F(11) && k.modifiers == KeyModifiers::SHIFT {
                     self.integrations()?;
+                    return Ok(None);
+                }
+                #[cfg(feature = "native-ops")]
+                if k.code == KeyCode::Char('g') && k.modifiers == KeyModifiers::ALT {
+                    self.expanded_tree=None;self.side_focus=false;
+                    super::git_ui::show(&model.directory,self.prefs.companions[2])?;
+                    model.reload()?;self.pane_switched=true;self.preview_key=None;
                     return Ok(None);
                 }
                 #[cfg(feature = "native-ops")]

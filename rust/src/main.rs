@@ -37,6 +37,8 @@ mod terminal_panel;
 #[cfg(feature = "native-ops")]
 mod tools_ui;
 #[cfg(feature = "native-ops")]
+mod git_ui;
+#[cfg(feature = "native-ops")]
 mod worker;
 #[cfg(feature = "native-ops")]
 mod workspace;

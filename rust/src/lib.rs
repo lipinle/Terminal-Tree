@@ -8,6 +8,8 @@ pub mod bookmarks;
 pub mod image_preview;
 #[cfg(all(feature = "native-ops", target_os = "linux"))]
 pub mod external_tools;
+#[cfg(all(feature = "native-ops", target_os = "linux"))]
+pub mod git_manager;
 pub mod keymap;
 pub mod layout;
 #[cfg(all(feature = "native-ops", target_os = "linux"))]

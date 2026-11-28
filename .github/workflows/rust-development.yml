@@ -34,7 +34,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends eza 7zip git
       - name: Verify companion tools on disposable fixtures
-        run: cargo test --locked --manifest-path rust/Cargo.toml --features native-ops --test external_tools -- --ignored
+        run: |
+          cargo test --locked --manifest-path rust/Cargo.toml --features native-ops --test external_tools -- --ignored
+          cargo test --locked --manifest-path rust/Cargo.toml --features native-ops --lib git_manager::tests::local_workflow -- --ignored
       - name: Exercise application shell through PTY
         run: |
           cargo build --locked --manifest-path rust/Cargo.toml --features native-ops --bin terminal-tree

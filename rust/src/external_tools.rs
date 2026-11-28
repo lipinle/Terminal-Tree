@@ -81,6 +81,9 @@ fn safe_lines(bytes: &[u8]) -> io::Result<Vec<String>> {
 }
 
 fn run(program: &Path, arguments: &[OsString], directory: &Path) -> io::Result<Vec<String>> {
+    safe_lines(&run_bytes(program,arguments,directory)?)
+}
+pub(crate) fn run_bytes(program: &Path, arguments: &[OsString], directory: &Path) -> io::Result<Vec<u8>> {
     let timeout = executable("timeout")
         .ok_or_else(|| io::Error::other("GNU timeout is required for companion tools"))?;
     let mut child = Command::new(timeout)
@@ -119,7 +122,7 @@ fn run(program: &Path, arguments: &[OsString], directory: &Path) -> io::Result<V
             "companion failed or exceeded time limit ({status})"
         )));
     }
-    safe_lines(&output)
+    Ok(output)
 }
 
 fn directory(path: &Path) -> io::Result<()> {
