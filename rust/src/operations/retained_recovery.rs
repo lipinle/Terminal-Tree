@@ -45,7 +45,10 @@ impl Engine {
         require(self.path(original)? == original, "original path changed")?;
         let parent = self.parent_for(original)?;
         let name = format!(".terminal-tree-copy-{id}");
-        let path = original.parent().ok_or_else(|| super::fail("missing parent"))?.join(&name);
+        let path = original
+            .parent()
+            .ok_or_else(|| super::fail("missing parent"))?
+            .join(&name);
         reject_mounts(&path)?;
         let dir = open_dir(&fd_path(&parent).join(&name))?;
         let m = dir.metadata()?;
@@ -214,11 +217,16 @@ impl Engine {
             dir_id(&parent)? == destination.parent,
             "recovery destination replaced",
         )?;
-        let name = dst.file_name().ok_or_else(|| super::fail("missing filename"))?;
+        let name = dst
+            .file_name()
+            .ok_or_else(|| super::fail("missing filename"))?;
         no_conflict(&fd_path(&parent).join(name))?;
         let id = unique()?;
         let stage_name = format!(".terminal-tree-copy-{id}");
-        let stage_path = dst.parent().ok_or_else(|| super::fail("missing parent"))?.join(&stage_name);
+        let stage_path = dst
+            .parent()
+            .ok_or_else(|| super::fail("missing parent"))?
+            .join(&stage_name);
         checkpoint("recovery-prepare")?;
         self.log(
             &id,

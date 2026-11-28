@@ -185,18 +185,26 @@ pub(super) fn run() -> io::Result<()> {
             if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
                 return print_help();
             }
-            super::browse_with_layout(env::current_dir()?, false, true,
+            super::browse_with_layout(
+                env::current_dir()?,
+                false,
+                true,
                 #[cfg(feature = "native-ops")]
                 None,
-            ).map(|_| ())
+            )
+            .map(|_| ())
         }
         Some("--app") => {
             let path = path_arg(args.next())?;
             end_of_args(&mut args)?;
-            super::browse_with_layout(path, false, true,
+            super::browse_with_layout(
+                path,
+                false,
+                true,
                 #[cfg(feature = "native-ops")]
                 None,
-            ).map(|_| ())
+            )
+            .map(|_| ())
         }
         Some("--help" | "-h") => {
             end_of_args(&mut args)?;
@@ -644,7 +652,13 @@ pub(super) fn run() -> io::Result<()> {
                 return Err(io::Error::other("unexpected argument"));
             }
             let w = workspace::Workspace::new(&root, &journal, &data)?;
-            super::browse_with_layout(w.root().to_path_buf(), false, mode == "--app-workspace", Some(w)).map(|_| ())
+            super::browse_with_layout(
+                w.root().to_path_buf(),
+                false,
+                mode == "--app-workspace",
+                Some(w),
+            )
+            .map(|_| ())
         }
         #[cfg(feature = "native-ops")]
         Some("--result") => {

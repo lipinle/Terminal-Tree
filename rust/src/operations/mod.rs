@@ -156,11 +156,16 @@ fn reject_mounts(path: &Path) -> io::Result<()> {
 fn reject_mounts_in(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let mut seen = false;
     for line in bytes.split(|b| *b == b'\n').filter(|line| !line.is_empty()) {
-        let raw = line.split(|b| *b == b' ').nth(4)
+        let raw = line
+            .split(|b| *b == b' ')
+            .nth(4)
             .ok_or_else(|| fail("invalid mountinfo"))?;
         let mount = policy::normal_absolute(&policy::unescape(raw)?)?;
         seen = true;
-        require(!mount.starts_with(path), "mount point or nested mount refused")?;
+        require(
+            !mount.starts_with(path),
+            "mount point or nested mount refused",
+        )?;
     }
     require(seen, "mount table unavailable")
 }
@@ -168,10 +173,17 @@ fn reject_mounts_in(path: &Path, bytes: &[u8]) -> io::Result<()> {
 // Bound recursive descriptor walks independently of the caller's stack size.
 const MAX_OPERATION_DEPTH: usize = 128;
 fn check_operation_depth(depth: usize) -> io::Result<()> {
-    require(depth <= MAX_OPERATION_DEPTH, "operation directory depth exceeds 128")
+    require(
+        depth <= MAX_OPERATION_DEPTH,
+        "operation directory depth exceeds 128",
+    )
 }
 fn check_relative_depth(path: &Path) -> io::Result<()> {
-    check_operation_depth(path.components().filter(|c| matches!(c, Component::Normal(_))).count())
+    check_operation_depth(
+        path.components()
+            .filter(|c| matches!(c, Component::Normal(_)))
+            .count(),
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -356,7 +368,9 @@ impl Engine {
         let path = self.path(path)?;
         reject_mounts(&path)?;
         let parent = self.parent_for(&path)?;
-        let m = fs::symlink_metadata(fd_path(&parent).join(path.file_name().ok_or_else(|| fail("missing filename"))?))?;
+        let m = fs::symlink_metadata(
+            fd_path(&parent).join(path.file_name().ok_or_else(|| fail("missing filename"))?),
+        )?;
         let (manifest, snapshot) = manifest_with(
             &fd_path(&parent).join(path.file_name().ok_or_else(|| fail("missing filename"))?),
             false,
@@ -389,7 +403,12 @@ impl Engine {
     fn check(&self, review: &Review) -> io::Result<File> {
         let parent = self.check_identity(review)?;
         let (content, ids) = manifest(
-            &fd_path(&parent).join(review.path.file_name().ok_or_else(|| fail("missing filename"))?),
+            &fd_path(&parent).join(
+                review
+                    .path
+                    .file_name()
+                    .ok_or_else(|| fail("missing filename"))?,
+            ),
             false,
         )?;
         require(
@@ -440,7 +459,9 @@ impl Engine {
     pub fn destination(&self, path: &Path) -> io::Result<Destination> {
         let path = self.path(path)?;
         let parent = self.parent_for(&path)?;
-        no_conflict(&fd_path(&parent).join(path.file_name().ok_or_else(|| fail("missing filename"))?))?;
+        no_conflict(
+            &fd_path(&parent).join(path.file_name().ok_or_else(|| fail("missing filename"))?),
+        )?;
         Ok(Destination {
             path,
             parent: dir_id(&parent)?,
@@ -466,10 +487,20 @@ impl Engine {
             dir_id(&parent)? == destination.parent,
             "reviewed destination replaced",
         )?;
-        no_conflict(&fd_path(&parent).join(dst.file_name().ok_or_else(|| fail("missing filename"))?))?;
+        no_conflict(
+            &fd_path(&parent).join(dst.file_name().ok_or_else(|| fail("missing filename"))?),
+        )?;
         if matches!(kind, Transfer::Move) {
             require(
-                fs::symlink_metadata(fd_path(&src).join(review.path.file_name().ok_or_else(|| fail("missing filename"))?))?.dev()
+                fs::symlink_metadata(
+                    fd_path(&src).join(
+                        review
+                            .path
+                            .file_name()
+                            .ok_or_else(|| fail("missing filename"))?,
+                    ),
+                )?
+                .dev()
                     == parent.metadata()?.dev(),
                 "cross-device move refused",
             )?;
@@ -564,11 +595,17 @@ impl Engine {
         let dest_entry = fd_path(&dest_parent).join(dest_name);
         no_conflict(&dest_entry)?;
         require(!dst.starts_with(&review.path), "destination inside source")?;
-        let src_name = review.path.file_name().ok_or_else(|| fail("missing filename"))?;
+        let src_name = review
+            .path
+            .file_name()
+            .ok_or_else(|| fail("missing filename"))?;
         let src = fd_path(&src_parent).join(src_name);
         let id = unique()?;
         let stage_name = format!(".terminal-tree-copy-{id}");
-        let stage_path = dst.parent().ok_or_else(|| fail("missing parent"))?.join(&stage_name);
+        let stage_path = dst
+            .parent()
+            .ok_or_else(|| fail("missing parent"))?
+            .join(&stage_name);
         let copy = matches!(kind, Transfer::Copy);
         if !copy {
             require(
@@ -869,8 +906,14 @@ mod panic_regression_tests {
         ] {
             assert!(reject_mounts_in(path, raw).is_err());
         }
-        assert!(reject_mounts_in(path, b"1 0 0:1 / /other\\040dir rw - ext4 /dev/test rw\n").is_ok());
-        assert!(reject_mounts_in(path, b"1 0 0:1 / /workspace/nested rw - ext4 /dev/test rw\n").is_err());
+        assert!(
+            reject_mounts_in(path, b"1 0 0:1 / /other\\040dir rw - ext4 /dev/test rw\n").is_ok()
+        );
+        assert!(reject_mounts_in(
+            path,
+            b"1 0 0:1 / /workspace/nested rw - ext4 /dev/test rw\n"
+        )
+        .is_err());
     }
 
     #[test]

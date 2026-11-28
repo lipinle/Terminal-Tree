@@ -257,7 +257,15 @@ impl Workspace {
         let Some((items, kind)) = &self.clipboard else {
             return vec!["Clipboard is empty".into()];
         };
-        let mut lines = vec![format!("{} | {} items", if matches!(kind, Transfer::Copy) { "Copy" } else { "Cut" }, items.len())];
+        let mut lines = vec![format!(
+            "{} | {} items",
+            if matches!(kind, Transfer::Copy) {
+                "Copy"
+            } else {
+                "Cut"
+            },
+            items.len()
+        )];
         lines.extend(items.iter().map(|item| path_text(item.path())));
         lines
     }
@@ -448,7 +456,10 @@ impl Workspace {
                 let kind = *kind;
                 let mut items = Vec::with_capacity(reviews.len());
                 for review in reviews {
-                    let name = review.path().file_name().ok_or_else(|| error("missing filename"))?;
+                    let name = review
+                        .path()
+                        .file_name()
+                        .ok_or_else(|| error("missing filename"))?;
                     let dst = if key == 'V' {
                         if reviews.len() != 1 {
                             return Err(error("keep both requires one clipboard item"));
@@ -540,7 +551,12 @@ impl Workspace {
                     return Err(error("cut one regular file first"));
                 }
                 let review = &reviews[0];
-                let path = model.directory.join(review.path().file_name().ok_or_else(|| error("missing filename"))?);
+                let path = model.directory.join(
+                    review
+                        .path()
+                        .file_name()
+                        .ok_or_else(|| error("missing filename"))?,
+                );
                 self.ordinary(review.path())?;
                 self.ordinary(&path)?;
                 let target = self.engine.destination(&path)?;
@@ -656,7 +672,12 @@ impl Workspace {
                 let dst = model.directory.join(name);
                 self.ordinary(&dst)?;
                 let target = self.engine.destination(&dst)?;
-                if !confirm_review("Rename item", &[review.path(), target.path()], "yes", self.quick_review)? {
+                if !confirm_review(
+                    "Rename item",
+                    &[review.path(), target.path()],
+                    "yes",
+                    self.quick_review,
+                )? {
                     return Ok("Cancelled".into());
                 }
                 if let Some(undo) = worker::run(1, |p| {

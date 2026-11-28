@@ -18,47 +18,47 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use terminal_tree::{display_name, scan, KindFilter, Model, Order};
 use unicode_width::UnicodeWidthChar;
+#[cfg(feature = "native-ops")]
+mod addons_ui;
 mod app_settings;
 mod command_palette;
 mod dashboard;
 mod dashboard_frame;
-#[cfg(feature = "native-ops")]
-mod addons_ui;
-#[cfg(feature = "native-ops")]
-mod visual_ui;
-#[cfg(feature = "native-ops")]
-mod native_graphics;
-#[cfg(feature = "native-ops")]
-mod sixel;
-#[cfg(feature = "native-ops")]
-mod x11_overlay;
-#[cfg(feature = "native-ops")]
-mod preview_worker;
 mod edition;
 mod file_icons;
+#[cfg(feature = "native-ops")]
+mod git_ui;
 mod help;
+#[cfg(feature = "native-ops")]
+mod native_graphics;
 mod panes_ui;
 mod places;
 mod platform;
 #[cfg(feature = "native-ops")]
-mod recovery;
-#[cfg(feature = "native-ops")]
-mod settings;
-mod tree_ui;
-#[cfg(feature = "native-ops")]
-mod terminal_panel;
-#[cfg(feature = "native-ops")]
-mod shell_text;
+mod preview_worker;
 #[cfg(feature = "native-ops")]
 mod pty_shell;
 #[cfg(feature = "native-ops")]
-mod tools_ui;
+mod recovery;
 #[cfg(feature = "native-ops")]
-mod git_ui;
+mod settings;
+#[cfg(feature = "native-ops")]
+mod shell_text;
+#[cfg(feature = "native-ops")]
+mod sixel;
+#[cfg(feature = "native-ops")]
+mod terminal_panel;
+#[cfg(feature = "native-ops")]
+mod tools_ui;
+mod tree_ui;
+#[cfg(feature = "native-ops")]
+mod visual_ui;
 #[cfg(feature = "native-ops")]
 mod worker;
 #[cfg(feature = "native-ops")]
 mod workspace;
+#[cfg(feature = "native-ops")]
+mod x11_overlay;
 
 fn clip(text: &str, limit: usize) -> String {
     let mut width = 0;
@@ -117,14 +117,19 @@ impl Terminal {
         let guard = Self;
         execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture, Hide)?;
         #[cfg(feature = "native-ops")]
-        if x11_overlay::requested(){let _=x11_overlay::supported();execute!(io::stdout(),crossterm::event::EnableFocusChange)?;}
+        if x11_overlay::requested() {
+            let _ = x11_overlay::supported();
+            execute!(io::stdout(), crossterm::event::EnableFocusChange)?;
+        }
         Ok(guard)
     }
 }
 impl Drop for Terminal {
     fn drop(&mut self) {
         #[cfg(feature = "native-ops")]
-        if x11_overlay::requested(){let _=execute!(io::stdout(),crossterm::event::DisableFocusChange);}
+        if x11_overlay::requested() {
+            let _ = execute!(io::stdout(), crossterm::event::DisableFocusChange);
+        }
         let _ = execute!(
             io::stdout(),
             ResetColor,
@@ -407,7 +412,9 @@ fn browse(
     #[cfg(feature = "native-ops")] workspace: Option<workspace::Workspace>,
 ) -> io::Result<Option<PathBuf>> {
     browse_with_layout(
-        path, return_on_enter, false,
+        path,
+        return_on_enter,
+        false,
         #[cfg(feature = "native-ops")]
         workspace,
     )
@@ -464,14 +471,20 @@ fn browse_with_layout(
         }
     }
     #[cfg(feature = "native-ops")]
-    if let Some(w)=&mut workspace { w.observe(&model); }
+    if let Some(w) = &mut workspace {
+        w.observe(&model);
+    }
     loop {
         #[cfg(feature = "native-ops")]
-        if let Some(ui)=&mut dashboard {
+        if let Some(ui) = &mut dashboard {
             if ui.tick_terminal()? {
                 match model.reload() {
-                    Ok(())=>{if let Some(w)=&mut workspace {w.observe_pane(&model);}},
-                    Err(error)=>message=display_name(std::ffi::OsStr::new(&error.to_string())),
+                    Ok(()) => {
+                        if let Some(w) = &mut workspace {
+                            w.observe_pane(&model);
+                        }
+                    }
+                    Err(error) => message = display_name(std::ffi::OsStr::new(&error.to_string())),
                 }
             }
         }
@@ -480,12 +493,25 @@ fn browse_with_layout(
             let clipboard = workspace.as_ref().map_or(0, |w| w.clipboard_count());
             #[cfg(not(feature = "native-ops"))]
             let clipboard = 0;
-            ui.draw(&mut model, &message, searching, writable, personal, clipboard, |path| {
-                #[cfg(feature = "native-ops")]
-                { workspace.as_ref().is_some_and(|w| w.marked(path)) }
-                #[cfg(not(feature = "native-ops"))]
-                { let _ = path; false }
-            })?;
+            ui.draw(
+                &mut model,
+                &message,
+                searching,
+                writable,
+                personal,
+                clipboard,
+                |path| {
+                    #[cfg(feature = "native-ops")]
+                    {
+                        workspace.as_ref().is_some_and(|w| w.marked(path))
+                    }
+                    #[cfg(not(feature = "native-ops"))]
+                    {
+                        let _ = path;
+                        false
+                    }
+                },
+            )?;
         } else {
             draw(
                 &mut model,
@@ -496,16 +522,26 @@ fn browse_with_layout(
                 workspace.as_ref(),
             )?;
         }
-        let next_event=loop {
+        let next_event = loop {
             #[cfg(feature = "native-ops")]
-            if dashboard.as_ref().is_some_and(|ui|ui.needs_poll()) && !event::poll(std::time::Duration::from_millis(100))? {break None;}
-            let input=event::read()?;
+            if dashboard.as_ref().is_some_and(|ui| ui.needs_poll())
+                && !event::poll(std::time::Duration::from_millis(100))?
+            {
+                break None;
+            }
+            let input = event::read()?;
             // Mouse motion without a button does not alter the dashboard.
             // Drag, scroll, resize and all key events are still delivered.
-            if dashboard.is_some()&&matches!(&input,Event::Mouse(m) if m.kind==MouseEventKind::Moved){continue;}
+            if dashboard.is_some()
+                && matches!(&input,Event::Mouse(m) if m.kind==MouseEventKind::Moved)
+            {
+                continue;
+            }
             break Some(input);
         };
-        let Some(mut event)=next_event else{continue;};
+        let Some(mut event) = next_event else {
+            continue;
+        };
         if let Some(ui) = &mut dashboard {
             let previous = model.directory.clone();
             event = ui.remap_input(event, searching);
@@ -858,7 +894,9 @@ fn browse_with_layout(
         }
     }
     #[cfg(feature = "native-ops")]
-    if let Some(ui)=&mut dashboard { ui.save_on_exit(&model)?; }
+    if let Some(ui) = &mut dashboard {
+        ui.save_on_exit(&model)?;
+    }
     Ok(None)
 }
 

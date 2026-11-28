@@ -43,7 +43,12 @@ impl Engine {
     ) -> io::Result<FileTransferObservation> {
         self.check_journal()?;
         let src_parent = self.check_identity(review)?;
-        let src = fd_path(&src_parent).join(review.path.file_name().ok_or_else(|| super::fail("missing filename"))?);
+        let src = fd_path(&src_parent).join(
+            review
+                .path
+                .file_name()
+                .ok_or_else(|| super::fail("missing filename"))?,
+        );
         let observed = fs::symlink_metadata(&src)?;
         eligible(&observed)?;
         let dst = self.path(&destination.path)?;
@@ -53,12 +58,20 @@ impl Engine {
             dir_id(&dst_parent)? == destination.parent,
             "reviewed destination replaced",
         )?;
-        no_conflict(&fd_path(&dst_parent).join(dst.file_name().ok_or_else(|| super::fail("missing filename"))?))?;
+        no_conflict(
+            &fd_path(&dst_parent).join(
+                dst.file_name()
+                    .ok_or_else(|| super::fail("missing filename"))?,
+            ),
+        )?;
         // Use descriptor-relative no-follow acquisition and compare to the
         // reviewed identity before reading attributes or validating content.
         let file: fs::File = super::rx::openat(
             &src_parent,
-            review.path.file_name().ok_or_else(|| super::fail("missing filename"))?,
+            review
+                .path
+                .file_name()
+                .ok_or_else(|| super::fail("missing filename"))?,
             super::OFlags::RDONLY
                 | super::OFlags::NOFOLLOW
                 | super::OFlags::NONBLOCK
@@ -83,7 +96,12 @@ impl Engine {
         require(attributes(&file)?.is_empty(), "extended attributes changed")?;
         self.check_parent(&review.path, &src_parent)?;
         self.check_parent(&dst, &dst_parent)?;
-        no_conflict(&fd_path(&dst_parent).join(dst.file_name().ok_or_else(|| super::fail("missing filename"))?))?;
+        no_conflict(
+            &fd_path(&dst_parent).join(
+                dst.file_name()
+                    .ok_or_else(|| super::fail("missing filename"))?,
+            ),
+        )?;
         self.check_journal()?;
         Ok(FileTransferObservation {
             source_device: opened.dev(),
@@ -120,13 +138,23 @@ impl Engine {
         require(observed.crosses_devices(), "different devices required")?;
         let source_parent = self.check(review)?;
         let target_parent = self.parent_for(destination.path())?;
-        let source_name = review.path.file_name().ok_or_else(|| super::fail("missing filename"))?;
-        let target_name = destination.path.file_name().ok_or_else(|| super::fail("missing filename"))?;
+        let source_name = review
+            .path
+            .file_name()
+            .ok_or_else(|| super::fail("missing filename"))?;
+        let target_name = destination
+            .path
+            .file_name()
+            .ok_or_else(|| super::fail("missing filename"))?;
         let src = fd_path(&source_parent).join(source_name);
         let dst = fd_path(&target_parent).join(target_name);
         let id = unique()?;
         let retention_name = format!(".terminal-tree-copy-{id}");
-        let retention = review.path.parent().ok_or_else(|| super::fail("missing parent"))?.join(&retention_name);
+        let retention = review
+            .path
+            .parent()
+            .ok_or_else(|| super::fail("missing parent"))?
+            .join(&retention_name);
         let retained = retention.join("original");
         no_conflict(&fd_path(&source_parent).join(&retention_name))?;
         checkpoint("retained-prepare")?;

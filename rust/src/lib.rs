@@ -5,11 +5,13 @@ compile_error!("native-ops requires the Linux safety backend; use the default re
 pub mod archive;
 pub mod archive_build;
 pub mod bookmarks;
-pub mod image_preview;
 #[cfg(all(feature = "native-ops", target_os = "linux"))]
 pub mod external_tools;
 #[cfg(all(feature = "native-ops", target_os = "linux"))]
 pub mod git_manager;
+#[cfg(all(feature = "native-ops", target_os = "linux"))]
+pub mod helper_paths;
+pub mod image_preview;
 pub mod keymap;
 pub mod layout;
 #[cfg(all(feature = "native-ops", target_os = "linux"))]
@@ -17,19 +19,21 @@ pub mod operations;
 #[cfg(all(feature = "native-ops", target_os = "linux"))]
 pub mod preview;
 #[cfg(all(feature = "native-ops", target_os = "linux"))]
-pub mod visual_preview;
-#[cfg(all(feature = "native-ops", target_os = "linux"))]
-pub mod helper_paths;
-#[cfg(all(feature = "native-ops", target_os = "linux"))]
 mod readonly_file;
+#[cfg(all(feature = "native-ops", target_os = "linux"))]
+pub mod visual_preview;
 #[cfg(all(feature = "native-ops", target_os = "linux"))]
 pub fn read_icon_pack(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
     use std::io::Read;
     let session = readonly_file::ReadSession::open(path)?;
-    if session.len() > 4096 { return Err(std::io::Error::other("icon pack exceeds 4096 bytes")); }
+    if session.len() > 4096 {
+        return Err(std::io::Error::other("icon pack exceeds 4096 bytes"));
+    }
     let mut bytes = Vec::new();
     session.file().take(4097).read_to_end(&mut bytes)?;
-    if bytes.len() > 4096 { return Err(std::io::Error::other("icon pack exceeds 4096 bytes")); }
+    if bytes.len() > 4096 {
+        return Err(std::io::Error::other("icon pack exceeds 4096 bytes"));
+    }
     session.verify()?;
     Ok(bytes)
 }
