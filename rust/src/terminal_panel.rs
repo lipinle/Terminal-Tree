@@ -8,6 +8,7 @@ use crossterm::{
 };
 use std::{io::{self,Read,Write},path::Path,process::{Child,Command,Stdio},time::{Duration,Instant}};
 use std::os::unix::{ffi::OsStrExt,process::CommandExt};
+use super::shell_text::{self,Line};
 use rustix::{fs::{fcntl_getfl,fcntl_setfl,OFlags},process::{kill_process_group,Pid,Signal}};
 
 const OUTPUT_LIMIT:usize=32*1024;
@@ -97,7 +98,7 @@ pub struct Panel {
     history_at:Option<usize>,
     job:Option<Job>,
     shell:Option<super::pty_shell::Shell>,
-    output:Vec<String>,
+    output:Vec<super::shell_text::Line>,
     scroll:usize,
 }
 fn visible(bytes:&[u8])->String {
@@ -144,10 +145,10 @@ impl Panel {
         if let Some(shell)=&mut self.shell {
             match shell.tick(){
                 Ok(false)=>return Ok(false),
-                Ok(true)=>self.output.extend(shell.lines()),
-                Err(e)=>self.output.push(format!("[PTY error: {}]",visible(e.to_string().as_bytes()))),
+                Ok(true)=>self.output.extend(shell.styled_lines()),
+                Err(e)=>self.output.push(Line::plain(format!("[PTY error: {}]",visible(e.to_string().as_bytes())))),
             }
-            self.close_shell();self.output.push("[Interactive shell closed]".into());self.trim_scrollback();
+            self.close_shell();self.output.push(Line::plain("[Interactive shell closed]".into()));self.trim_scrollback();
             return Ok(true);
         }
         let Some(job)=&mut self.job else{return Ok(false);};
@@ -157,10 +158,10 @@ impl Panel {
         // Drain already queued data, without blocking on a detached writer.
         job.collect()?;
         let job=self.job.take().expect("running job");
-        self.output.push(format!("$ {}",visible(job.command.as_bytes())));
-        self.output.extend(job.bytes.split(|&b|b==b'\n').filter(|line|!line.is_empty()).map(visible));
-        if job.truncated {self.output.push("[Output truncated at 32 KiB]".into());}
-        self.output.push(match job.stopped {Some(reason)=>format!("[Stopped: {reason}]"),None=>format!("[{status}]")});
+        self.output.push(Line::plain(format!("$ {}",visible(job.command.as_bytes()))));
+        self.output.extend(shell_text::parse(&job.bytes));
+        if job.truncated {self.output.push(Line::plain("[Output truncated at 32 KiB]".into()));}
+        self.output.push(Line::plain(match job.stopped {Some(reason)=>format!("[Stopped: {reason}]"),None=>format!("[{status}]")}));
         self.trim_scrollback();self.scroll=0;
         Ok(true)
     }
@@ -221,7 +222,7 @@ impl Panel {
         Ok(())
     }
     pub fn scroll(&mut self,up:bool){
-        let len=self.shell.as_ref().map_or(self.output.len(),|s|s.lines().len());
+        let len=self.shell.as_ref().map_or(self.output.len(),|s|s.styled_lines().len());
         if up {self.scroll=(self.scroll+1).min(len.saturating_sub(1));}
         else {self.scroll=self.scroll.saturating_sub(1);}
     }
@@ -234,10 +235,10 @@ impl Panel {
         let cwd=if let Some(shell)=&self.shell {format!("Started in: {} | Alt+T focus | Alt+S close",terminal_tree::display_name(shell.initial_directory().as_os_str()))}else{format!("cwd: {}",terminal_tree::display_name(directory.as_os_str()))};
         queue!(out,MoveTo(left,top+1),Print(super::clip(&cwd,width)))?;
         let live;
-        let lines=if let Some(shell)=&self.shell{live=shell.lines();&live}else if let Some(job)=&self.job {
+        let lines=if let Some(shell)=&self.shell{live=shell.styled_lines();&live}else if let Some(job)=&self.job {
             let mut current=self.output.clone();
-            current.push(format!("$ {}",visible(job.command.as_bytes())));
-            current.extend(job.bytes.split(|&b|b==b'\n').filter(|line|!line.is_empty()).map(visible));
+            current.push(Line::plain(format!("$ {}",visible(job.command.as_bytes()))));
+            current.extend(shell_text::parse(&job.bytes));
             live=current;
             &live
         }else{&self.output};
@@ -245,7 +246,8 @@ impl Panel {
         let end=lines.len().saturating_sub(self.scroll.min(lines.len()));
         let start=end.saturating_sub(capacity);
         for (row,line) in lines[start..end].iter().enumerate(){
-            queue!(out,MoveTo(left,top+2+row as u16),Print(super::clip(line,width)))?;
+            queue!(out,MoveTo(left,top+2+row as u16))?;
+            line.draw(out,width,prefs.foreground,prefs.background)?;
         }
         let prompt=if self.interactive(){"Interactive Bash (TERM=dumb) | Alt+T file manager | Alt+S close".into()}
         else if self.running(){"Running Bash... Ctrl+C to stop".into()}
@@ -270,9 +272,9 @@ mod tests {
             panel.input(KeyEvent::new(key,KeyModifiers::NONE),dir).unwrap();
         }
         assert_eq!(panel.input,"Xbไย");
-        panel.output=vec!["x".repeat(1000);3000];
+        panel.output=vec![Line::plain("x".repeat(1000));3000];
         panel.trim_scrollback();
-        assert!(panel.output.iter().map(String::len).sum::<usize>()<=SCROLLBACK_LIMIT);
+        assert!(panel.output.iter().map(Line::len).sum::<usize>()<=SCROLLBACK_LIMIT);
     }
     #[test]
     fn bash_runs_in_selected_directory_and_escapes_output(){
@@ -284,13 +286,13 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(!panel.running());
-        assert!(panel.output.iter().any(|s|s=="panel-marker"));
-        assert!(panel.output.iter().any(|s|s.contains("/tmp")));
-        assert!(panel.output.iter().all(|s|!s.contains('\x1b')));
+        assert!(panel.output.iter().any(|s|s.text()=="panel-marker"));
+        assert!(panel.output.iter().any(|s|s.text().contains("/tmp")));
+        assert!(panel.output.iter().all(|s|!s.text().contains('\x1b')));
         panel.replace_input("printf second-marker".into());
         panel.input(KeyEvent::new(KeyCode::Enter,KeyModifiers::NONE),Path::new("/tmp")).unwrap();
         for _ in 0..100 {if panel.tick().unwrap(){break;}std::thread::sleep(Duration::from_millis(10));}
-        assert!(panel.output.iter().any(|s|s=="panel-marker"));
-        assert!(panel.output.iter().any(|s|s=="second-marker"));
+        assert!(panel.output.iter().any(|s|s.text()=="panel-marker"));
+        assert!(panel.output.iter().any(|s|s.text()=="second-marker"));
     }
 }

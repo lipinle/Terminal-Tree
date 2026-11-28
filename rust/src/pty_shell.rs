@@ -3,7 +3,6 @@
 use crossterm::event::{KeyCode,KeyEvent,KeyEventKind,KeyModifiers};
 use rustix::{fs::{fcntl_getfl,fcntl_setfl,OFlags},pty::{OpenptFlags,openpt,grantpt,unlockpt,ioctl_tiocgptpeer},termios::{Winsize,tcsetwinsize}};
 use std::{fs::File,io::{self,Read,Write},path::{Path,PathBuf},process::{Child,Command,Stdio}};
-use std::os::unix::ffi::OsStrExt;
 const OUTPUT_LIMIT:usize=128*1024;
 const INPUT_LIMIT:usize=8192;
 pub struct Shell {
@@ -97,13 +96,10 @@ impl Shell {
         self.input.extend(bytes);
         Ok(())
     }
-    pub fn lines(&self)->Vec<String>{
-        // CRLF is a normal PTY newline. Other controls remain visibly escaped;
-        // no ANSI/OSC commands from children can reach the host terminal.
-        self.transcript.split(|&b|b==b'\n').map(|s|{
-            terminal_tree::display_name(std::ffi::OsStr::from_bytes(s.strip_suffix(b"\r").unwrap_or(s)))
-        }).collect()
-    }
+    pub fn styled_lines(&self)->Vec<super::shell_text::Line>{super::shell_text::parse(&self.transcript)}
+    #[cfg(test)]
+    pub fn lines(&self)->Vec<String>{self.styled_lines().iter().map(|l|l.text()).collect()}
+
 }
 impl Drop for Shell {
     fn drop(&mut self){
