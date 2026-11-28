@@ -70,13 +70,13 @@ impl Cells {
     }
 }
 
-fn draw_toolbar(out: &mut impl Write, width: u16, view: View) -> io::Result<u16> {
+fn draw_toolbar(out: &mut impl Write, width: u16, view: View, prefs: &super::app_settings::Preferences) -> io::Result<u16> {
     let Some(start) = toolbar_start(width) else { return Ok(width); };
     let mut x = start;
     for (name, label) in TOOLBAR {
         queue!(out, MoveTo(x, 1))?;
-        if name == view.name() { queue!(out, SetBackgroundColor(Color::DarkGrey), SetForegroundColor(Color::Cyan))?; }
-        queue!(out, Print(label), ResetColor)?;
+        if name == view.name() { queue!(out, SetBackgroundColor(prefs.selection), SetForegroundColor(prefs.accent))?; }
+        queue!(out, Print(label), SetForegroundColor(prefs.foreground), SetBackgroundColor(prefs.background))?;
         x += label.len() as u16 + 1;
     }
     Ok(start.saturating_sub(1))
@@ -100,8 +100,8 @@ fn row_text(entry: &Entry, index: usize, count: usize, view: View, glyph: &str, 
     }
 }
 
-const MENUS: [(&str, u16); 6] = [
-    ("File", 15), ("Edit", 21), ("View", 27), ("Go", 33), ("Tools", 37), ("Settings", 44),
+const MENUS: [(&str, u16); 7] = [
+    ("File", 15), ("Edit", 21), ("View", 27), ("Go", 33), ("Tools", 37), ("Settings", 44), ("Add-ons", 54),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -155,6 +155,12 @@ pub struct State {
     zoom: usize,
     location: Option<String>,
     expanded_tree: Option<TreeModel>,
+    icons: super::file_icons::Style,
+    prefs: super::app_settings::Preferences,
+    #[cfg(feature = "native-ops")]
+    store: Option<super::settings::Store>,
+    #[cfg(feature = "native-ops")]
+    last_tool: Option<String>,
 }
 
 impl State {
@@ -165,9 +171,212 @@ impl State {
             preview_key: None, preview_lines: Vec::new(),
             dual: false, active_right: false, other: None, pane_switched: false,
             view: View::Tree, zoom: 1, location: None, expanded_tree: None,
+            icons: super::file_icons::Style::from_environment(),
+            prefs: Default::default(),
+            #[cfg(feature = "native-ops")]
+            store: None,
+            #[cfg(feature = "native-ops")]
+            last_tool: None,
         };
         state.refresh_places();
         state
+    }
+
+    #[cfg(feature = "native-ops")]
+    pub fn load_preferences(&mut self) -> io::Result<()> {
+        let Some(path) = std::env::var_os("TT_APP_CONFIG_DIR").map(PathBuf::from).or_else(|| {
+            super::platform::home_dir().map(|home| {
+                std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from)
+                    .filter(|p| p.is_absolute()).unwrap_or_else(|| home.join(".config"))
+                    .join("terminal-tree")
+            }).filter(|p| p.exists())
+        }) else { return Ok(()); };
+        let store = super::settings::Store::new(&path)?;
+        if let Some(value) = store.load_app()? {
+            let (prefs,icons,preview,view,zoom) = super::app_settings::Preferences::decode(&value)?;
+            self.prefs = prefs;
+            if std::env::var_os("TT_ICON_STYLE").is_none() { self.icons = icons; }
+            self.preview_enabled = preview;
+            self.view = match view.as_str() { "Grid" => View::Grid, "List" => View::List, _ => View::Tree };
+            self.zoom = zoom;
+        }
+        self.store = Some(store);
+        Ok(())
+    }
+
+    fn layout(&self, w: u16, h: u16) -> Layout {
+        let mut layout = Layout::new(w,h,self.preview_enabled);
+        if !self.prefs.sidebar { layout.sidebar = 0; }
+        layout
+    }
+
+    fn appearance(&mut self) -> io::Result<()> {
+        loop {
+            let labels = [
+                "Terminal defaults".into(), "Dark theme".into(), "Light theme".into(),
+                "Custom text color (#RRGGBB)".into(), "Custom background color".into(),
+                "Custom accent color".into(), "Custom selection color".into(),
+                "Font family and size help".into(),
+            ];
+            match super::choose("Settings / Appearance", &labels)? {
+                None => return Ok(()),
+                Some(0) => {
+                    let defaults = super::app_settings::Preferences::default();
+                    (self.prefs.foreground,self.prefs.background,self.prefs.accent,self.prefs.selection) =
+                        (defaults.foreground,defaults.background,defaults.accent,defaults.selection);
+                }
+                Some(1) => {
+                    self.prefs.foreground=Color::Rgb{r:230,g:230,b:230};
+                    self.prefs.background=Color::Rgb{r:36,g:36,b:36};
+                    self.prefs.accent=Color::Rgb{r:100,g:190,b:245};
+                    self.prefs.selection=Color::Rgb{r:60,g:85,b:110};
+                }
+                Some(2) => {
+                    self.prefs.foreground=Color::Rgb{r:25,g:25,b:25};
+                    self.prefs.background=Color::Rgb{r:245,g:245,b:245};
+                    self.prefs.accent=Color::Rgb{r:0,g:80,b:160};
+                    self.prefs.selection=Color::Rgb{r:190,g:215,b:240};
+                }
+                Some(i @ 3..=6) => {
+                    #[cfg(feature = "native-ops")]
+                    if let Some(value)=super::workspace::prompt("Color (#RRGGBB or default):")? {
+                        match super::app_settings::parse_color(&value) {
+                            Ok(color)=>match i {3=>self.prefs.foreground=color,4=>self.prefs.background=color,5=>self.prefs.accent=color,_=>self.prefs.selection=color},
+                            Err(error)=>super::page("Invalid color",&[error.to_string()])?,
+                        }
+                    }
+                    #[cfg(not(feature = "native-ops"))]
+                    { let _ = i; super::page("Appearance",&["Custom RGB entry requires native Linux".into()])?; }
+                }
+                _ => super::page("Terminal font", &[
+                    "Font family and actual point size are controlled by your terminal emulator.".into(),
+                    "For Seti glyphs, select a compatible Nerd Font Mono in the terminal.".into(),
+                    "Ctrl+mouse wheel changes the application layout density, not the font.".into(),
+                ])?,
+            }
+        }
+    }
+
+    fn display_settings(&mut self, model: &mut Model) -> io::Result<()> {
+        loop {
+            let labels = [
+                format!("Sidebar: {}",self.prefs.sidebar),
+                format!("Live preview: {}",self.preview_enabled),
+                format!("Location toolbar: {}",self.prefs.toolbar),
+                format!("File icons: {}",self.prefs.show_icons),
+                format!("File-type colors: {}",self.prefs.file_colors),
+                format!("Extra status details: {}",self.prefs.status_details),
+                format!("Hidden files: {}",model.hidden),
+                format!("Layout zoom: {}",self.zoom),
+                format!("File view: {}",self.view.name()),
+            ];
+            match super::choose("Settings / Display (Enter toggles)",&labels)? {
+                None=>return Ok(()),
+                Some(0)=>{self.prefs.sidebar=!self.prefs.sidebar; self.side_focus=false;},
+                Some(1)=>{self.preview_enabled=!self.preview_enabled; self.preview_key=None;},
+                Some(2)=>self.prefs.toolbar=!self.prefs.toolbar,
+                Some(3)=>self.prefs.show_icons=!self.prefs.show_icons,
+                Some(4)=>self.prefs.file_colors=!self.prefs.file_colors,
+                Some(5)=>self.prefs.status_details=!self.prefs.status_details,
+                Some(6)=>{model.set_view(!model.hidden,model.order,model.kind_filter,model.query.clone())?; self.pane_switched=true; self.expanded_tree=None;},
+                Some(7)=>self.zoom=self.zoom%3+1,
+                _=>self.choose_view(match self.view {View::Tree=>View::Grid,View::Grid=>View::List,View::List=>View::Tree}),
+            }
+        }
+    }
+
+    fn icon_settings(&mut self) -> io::Result<()> {
+        loop {
+            let labels = [
+                format!("Icon style: {}",self.icons.name()),
+                format!("Show icons: {}",self.prefs.show_icons),
+                format!("Custom extension mappings: {} (import JSON)",self.prefs.custom.len()),
+                "Remove custom mappings".into(),
+            ];
+            match super::choose("Settings / Icons",&labels)? {
+                None=>return Ok(()),
+                Some(0)=>self.choose_icons()?,
+                Some(1)=>self.prefs.show_icons=!self.prefs.show_icons,
+                Some(2)=>{
+                    #[cfg(feature = "native-ops")]
+                    if let Some(path)=super::workspace::prompt("Absolute icon JSON path:")? {
+                        let result=terminal_tree::read_icon_pack(std::path::Path::new(&path))
+                            .and_then(|bytes| serde_json::from_slice(&bytes).map_err(io::Error::other))
+                            .and_then(|v| super::app_settings::parse_pack(&v));
+                        match result {
+                            Ok(map)=>self.prefs.custom=map,
+                            Err(error)=>super::page("Icon import refused",&[terminal_tree::display_name(std::ffi::OsStr::new(&error.to_string()))])?,
+                        }
+                    }
+                    #[cfg(not(feature = "native-ops"))]
+                    super::page("Icon import",&["Native Linux required".into()])?;
+                }
+                _=>self.prefs.custom.clear(),
+            }
+        }
+    }
+
+    fn integrations(&mut self) -> io::Result<()> {
+        #[cfg(feature = "native-ops")]
+        loop {
+            use terminal_tree::external_tools::Tool;
+            let tools=[Tool::Eza,Tool::SevenZip,Tool::Git];
+            let mut labels:Vec<_>=tools.iter().enumerate().map(|(i,tool)| {
+                format!("{} | {} | {} | Idle",tool.label(),if tool.installed(){"Installed"}else{"Not installed"},
+                    if self.prefs.companions[i]{"Enabled"}else{"Disabled"})
+            }).collect();
+            labels.push(format!("Last run: {}",self.last_tool.as_deref().unwrap_or("None")));
+            labels.push("All companions run only when requested; no background services.".into());
+            match super::choose("Add-ons / Integrations (Enter toggles enabled)",&labels)? {
+                Some(i @ 0..=2)=>self.prefs.companions[i]=!self.prefs.companions[i],
+                Some(_)=>(),
+                None=>return Ok(()),
+            }
+        }
+        #[cfg(not(feature = "native-ops"))]
+        super::page("Add-ons",&["Companion integrations require native Linux.".into()])
+    }
+
+    fn settings_center(&mut self, model: &mut Model) -> io::Result<()> {
+        loop {
+            let labels = [
+                "Appearance / text and colors".into(),
+                "Icons / style and import".into(),
+                "Display / panels and view".into(),
+                "Add-ons / integration status".into(),
+                "Save application preferences".into(),
+                "Reset application preferences (session)".into(),
+            ];
+            match super::choose("Settings Center",&labels)? {
+                None=>return Ok(()),
+                Some(0)=>self.appearance()?,
+                Some(1)=>self.icon_settings()?,
+                Some(2)=>self.display_settings(model)?,
+                Some(3)=>self.integrations()?,
+                Some(4)=>{
+                    #[cfg(feature = "native-ops")]
+                    {
+                        if self.store.is_none() {
+                            super::page("Save preferences",&["Create an owned private directory (mode 0700), set TT_APP_CONFIG_DIR to it, and restart.".into(),
+                                "Or create ~/.config/terminal-tree with mode 0700. No automatic configuration directory creation.".into()])?;
+                        } else if let Some(store)=&self.store {
+                            let value=self.prefs.encode(self.icons,self.preview_enabled,self.view.name(),self.zoom);
+                            store.save_app(&value)?;
+                            super::page("Preferences saved",&["Application preferences saved.".into()])?;
+                        }
+                    }
+                    #[cfg(not(feature = "native-ops"))]
+                    super::page("Save preferences",&["Session only on portable builds.".into()])?;
+                }
+                _=>{
+                    let labels=["Cancel".into(),"Reset all application display and companion options".into()];
+                    if super::choose("Reset preferences?",&labels)?==Some(1) {
+                        self.prefs=Default::default(); self.icons=Default::default();
+                        self.preview_enabled=true; self.zoom=1; self.choose_view(View::Tree);
+                    }
+                }
+            }
+        }
     }
 
     fn refresh_places(&mut self) {
@@ -254,6 +463,19 @@ impl State {
                 vec![e.name.clone(), format!("{} bytes", e.size), "Content preview requires native Linux".into()]
             }
         };
+    }
+
+    fn choose_icons(&mut self) -> io::Result<()> {
+        use super::file_icons::Style;
+        let labels = [
+            "Unicode — standard terminal characters".into(),
+            "Seti — requires a compatible Nerd Font".into(),
+            "ASCII — maximum compatibility".into(),
+        ];
+        if let Some(index) = super::choose("Icon style", &labels)? {
+            self.icons = [Style::Unicode, Style::Seti, Style::Ascii][index];
+        }
+        Ok(())
     }
 
     fn choose_view(&mut self, view: View) {
@@ -406,11 +628,11 @@ impl State {
         let (w, h) = terminal::size()?;
         let width = w.saturating_sub(1);
         let mut out = io::stdout().lock();
-        queue!(out, MoveTo(0, 0), Clear(ClearType::All),
-            SetForegroundColor(Color::Cyan),
-            Print(super::clip("Terminal Tree  File  Edit  View  Go  Tools  Settings", usize::from(width))),
-            ResetColor)?;
-        if h < 8 { return out.flush(); }
+        queue!(out, MoveTo(0, 0), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background), Clear(ClearType::All),
+            SetForegroundColor(self.prefs.accent),
+            Print(super::clip("Terminal Tree  File  Edit  View  Go  Tools  Settings  Add-ons", usize::from(width))),
+            SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
+        if h < 8 { queue!(out,ResetColor)?; return out.flush(); }
         let side = if self.active_right { "Right" } else { "Left" };
         let mode = if personal { "Personal" } else if writable { "Workspace" } else { "Read-only" };
         let header = format!("Dual Pane | Active: {side} | [{} / {mode}]", super::edition::NAME);
@@ -421,20 +643,20 @@ impl State {
             let split = width / 2;
             let other = self.other.as_mut().ok_or_else(|| io::Error::other("second pane unavailable"))?;
             if self.active_right {
-                draw_column(&mut out, other, "Left", false, 0, split, cap, marked)?;
-                draw_column(&mut out, model, "Right", true, split + 1, width - split - 1, cap, marked)?;
+                draw_column(&mut out, other, "Left", false, 0, split, cap, marked, self.icons, &self.prefs)?;
+                draw_column(&mut out, model, "Right", true, split + 1, width - split - 1, cap, marked, self.icons, &self.prefs)?;
             } else {
-                draw_column(&mut out, model, "Left", true, 0, split, cap, marked)?;
-                draw_column(&mut out, other, "Right", false, split + 1, width - split - 1, cap, marked)?;
+                draw_column(&mut out, model, "Left", true, 0, split, cap, marked, self.icons, &self.prefs)?;
+                draw_column(&mut out, other, "Right", false, split + 1, width - split - 1, cap, marked, self.icons, &self.prefs)?;
             }
             for row in 3..h - 3 {
                 queue!(out, MoveTo(split, row), Print("│"))?;
             }
         } else {
-            draw_column(&mut out, model, side, true, 0, width, cap, marked)?;
+            draw_column(&mut out, model, side, true, 0, width, cap, marked, self.icons, &self.prefs)?;
         }
         let safety = if writable { "Scoped" } else { "Read-only" };
-        let status = format!("Clipboard: {clipboard} files | Tasks: idle | Safety: {safety} | {} entries", model.entries.len());
+        let status = if self.prefs.status_details { format!("Clipboard: {clipboard} files | Tasks: idle | Safety: {safety} | {} entries", model.entries.len()) } else { format!("Safety: {safety}") };
         let detail = if searching || !model.query.is_empty() {
             format!("Filter: {} | {message}", display_name(std::ffi::OsStr::new(&model.query)))
         } else { message.to_owned() };
@@ -447,6 +669,7 @@ impl State {
             } else {
                 "F8 Single  Tab Switch  F10 Menu  Ctrl+F Filter  q Exit"
             }, usize::from(width))))?;
+        queue!(out,ResetColor)?;
         out.flush()
     }
 
@@ -458,14 +681,14 @@ impl State {
             return self.draw_dual(model, message, searching, writable, personal, clipboard, &marked);
         }
         let (w,h) = terminal::size()?;
-        let l = Layout::new(w,h,self.preview_enabled);
+        let l = self.layout(w,h);
         if l.sidebar == 0 { self.side_focus = false; }
         let mut out = io::stdout().lock();
-        queue!(out, MoveTo(0,0), Clear(ClearType::All),
-            SetForegroundColor(Color::Cyan), Print(super::clip("Terminal Tree  File  Edit  View  Go  Tools  Settings", usize::from(l.width))), ResetColor)?;
-        if h < 8 { return out.flush(); }
+        queue!(out, MoveTo(0,0), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background), Clear(ClearType::All),
+            SetForegroundColor(self.prefs.accent), Print(super::clip("Terminal Tree  File  Edit  View  Go  Tools  Settings  Add-ons", usize::from(l.width))), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
+        if h < 8 { queue!(out,ResetColor)?; return out.flush(); }
         let mode = if personal { "Personal" } else if writable { "Workspace" } else { "Read-only" };
-        let path_width = draw_toolbar(&mut out, l.width, self.view)?;
+        let path_width = if self.prefs.toolbar { draw_toolbar(&mut out,l.width,self.view,&self.prefs)? } else { l.width };
         let path = if let Some(input) = &self.location {
             format!("Location: {}_", display_name(std::ffi::OsStr::new(input)))
         } else {
@@ -474,13 +697,13 @@ impl State {
         queue!(out, MoveTo(0,1), Print(super::clip(&path,usize::from(path_width))))?;
         queue!(out, MoveTo(0,2), Print("─".repeat(usize::from(l.width))))?;
         if l.sidebar > 0 {
-            queue!(out, MoveTo(0,3), SetForegroundColor(Color::Cyan),
-                Print(if self.side_focus { "Places *" } else { "Places" }), ResetColor)?;
+            queue!(out, MoveTo(0,3), SetForegroundColor(self.prefs.accent),
+                Print(if self.side_focus { "Places *" } else { "Places" }), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
         }
-        queue!(out, MoveTo(l.first(),3), SetForegroundColor(Color::Cyan),
-            Print(if self.side_focus { "Files" } else { "Files *" }), ResetColor)?;
+        queue!(out, MoveTo(l.first(),3), SetForegroundColor(self.prefs.accent),
+            Print(if self.side_focus { "Files" } else { "Files *" }), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
         if l.preview > 0 {
-            queue!(out, MoveTo(l.end()+1,3), SetForegroundColor(Color::Cyan), Print("Preview"), ResetColor)?;
+            queue!(out, MoveTo(l.end()+1,3), SetForegroundColor(self.prefs.accent), Print("Preview"), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
             let entry = if let Some(tree) = &self.expanded_tree {
                 tree.rows().get(tree.selected()).map(|r| r.entry.clone())
             } else { model.entries.get(model.selected).cloned() };
@@ -499,12 +722,15 @@ impl State {
             if l.sidebar > 0 {
                 if let Some((label,path)) = self.places.get(self.side_top+row) {
                     queue!(out, MoveTo(0,y))?;
-                    if path.is_none() { queue!(out, SetForegroundColor(Color::Cyan))?; }
+                    if path.is_none() { queue!(out, SetForegroundColor(self.prefs.accent))?; }
                     else if self.side_focus && self.side_top+row == self.side_cursor {
-                        queue!(out, SetBackgroundColor(Color::DarkGrey))?;
+                        queue!(out, SetBackgroundColor(self.prefs.selection))?;
                     }
-                    let text = if path.is_some() { format!("  {label}") } else { label.clone() };
-                    queue!(out, Print(super::clip(&text,usize::from(l.sidebar))), ResetColor)?;
+                    let text = if let Some(path) = path {
+                        let (glyph, _) = self.prefs.icon(path, true, false, self.icons);
+                        format!(" {glyph} {label}")
+                    } else { label.clone() };
+                    queue!(out, Print(super::clip(&text,usize::from(l.sidebar))), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
                 }
                 queue!(out, MoveTo(l.sidebar,y), Print("│"))?;
             }
@@ -524,33 +750,32 @@ impl State {
                 let row = &tree.rows()[index];
                 (&row.entry, tree.selected() == index, Some(row.depth), row.expanded)
             } else { (&model.entries[index], model.selected == index, None, false) };
-            let (glyph,color) = super::icon(e.directory,e.symlink);
+            let (glyph,color) = self.prefs.icon(&e.path,e.directory,e.symlink,self.icons);
             queue!(out, MoveTo(x,y))?;
-            if selected { queue!(out, SetBackgroundColor(Color::DarkGrey))?; }
+            if selected { queue!(out, SetBackgroundColor(self.prefs.selection))?; }
             queue!(out, SetForegroundColor(color))?;
             if self.view == View::Grid {
-                let icon = if e.symlink { "[LINK]" } else if e.directory { "[DIR]" } else { "[FILE]" };
                 let mark = if marked(&e.path) { "[x] " } else { "" };
-                queue!(out, Print(super::clip(&format!("{mark}{icon}"),usize::from(cells.width))))?;
+                queue!(out, Print(super::clip(&format!("{mark}{glyph}"),usize::from(cells.width))))?;
                 if y+1 < h-3 {
                     queue!(out, MoveTo(x,y+1), Print(super::clip(&e.name,usize::from(cells.width))))?;
                 }
             } else {
                 let text = if let Some(depth) = tree_depth {
-                    format!("{}{} {}", "  ".repeat(depth-1),
-                        if expanded { "−" } else if e.directory && !e.symlink { "+" } else { glyph }, e.name)
+                    format!("{}{} {glyph} {}", "  ".repeat(depth-1),
+                        if expanded { "−" } else if e.directory && !e.symlink { "+" } else { "·" }, e.name)
                 } else { row_text(e,index,model.entries.len(),self.view,glyph,marked(&e.path),cells.width) };
                 queue!(out, Print(super::clip(&text,usize::from(cells.width))))?;
             }
-            queue!(out, ResetColor)?;
+            queue!(out, SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
         }
         let safety = if self.expanded_tree.is_some() { "Tree inspection" } else if writable { "Scoped" } else { "Read-only" };
-        let status = format!("Clipboard: {clipboard} files | Tasks: idle | Safety: {safety} | {} | {} View | Zoom {}",model.entries.len(),self.view.name(),self.zoom);
+        let status = if self.prefs.status_details { format!("Clipboard: {clipboard} files | Tasks: idle | Safety: {safety} | {} | {} View | Zoom {}",model.entries.len(),self.view.name(),self.zoom) } else { format!("Safety: {safety} | {} View | Zoom {}",self.view.name(),self.zoom) };
         let detail = if self.expanded_tree.is_some() {
             "Expanded tree: Right expand / Left collapse / Enter open / Esc back".to_owned()
         } else if searching || !model.query.is_empty() {
             format!("Search: {} | {message}", display_name(std::ffi::OsStr::new(&model.query)))
-        } else { format!("[{} / {mode}] {message}",super::edition::NAME) };
+        } else { format!("[{} / {mode}] Icons: {} | {message}",super::edition::NAME,self.icons.name()) };
         queue!(out, MoveTo(0,h-3), Print(super::clip(&status,usize::from(l.width))),
             MoveTo(0,h-2), Print(super::clip(&detail,usize::from(l.width))),
             MoveTo(0,h-1), Print(super::clip(if searching {
@@ -560,6 +785,7 @@ impl State {
             } else {
                 "F1 Help  F3 Preview  F8 Dual  F10 Menu  Tab Focus  Ctrl+F Filter  q Exit"
             },usize::from(l.width))))?;
+        queue!(out,ResetColor)?;
         out.flush()
     }
 
@@ -572,6 +798,8 @@ impl State {
             }
         };
         let plain = KeyModifiers::NONE;
+        if category == 5 { return Ok(Some(Event::Key(KeyEvent::new(KeyCode::Char(','),KeyModifiers::CONTROL)))); }
+        if category == 6 { return Ok(Some(Event::Key(KeyEvent::new(KeyCode::F(11),KeyModifiers::SHIFT)))); }
         let mut commands = match category {
             0 => vec![("Open",KeyCode::Enter,plain),("Properties",KeyCode::Char('i'),plain),("Exit",KeyCode::Char('q'),plain)],
             1 if writable => vec![("Copy (Ctrl+C)",KeyCode::Char('c'),plain),("Cut (Ctrl+X)",KeyCode::Char('x'),plain),("Paste (Ctrl+V)",KeyCode::Char('v'),plain),("View clipboard",KeyCode::F(12),plain),("Rename",KeyCode::F(2),plain),("New folder",KeyCode::Char('n'),plain),("New file",KeyCode::Char('t'),plain),("Trash",KeyCode::Delete,plain),("Undo",KeyCode::Char('u'),plain)],
@@ -588,7 +816,7 @@ impl State {
             commands.insert(0,("Go to path",KeyCode::Char('g'),plain));
         }
         if category == 4 && writable { commands.push(("File actions",KeyCode::F(6),plain)); commands.push(("Recovery",KeyCode::Char('j'),plain)); }
-        if category == 5 && writable { commands.push(("Save view settings",KeyCode::Char('S'),plain)); }
+
         if !cfg!(feature = "native-ops") {
             commands.retain(|(_,key,mods)| *key != KeyCode::F(3) && !(*mods == KeyModifiers::CONTROL && *key == KeyCode::Char('p')));
         }
@@ -628,7 +856,7 @@ impl State {
     /// the existing navigator so the original review and write engine is used.
     pub fn input(&mut self, mut event: Event, model: &mut Model, searching: bool, writable: bool) -> io::Result<Option<Event>> {
         let (w,h) = terminal::size()?;
-        let l = Layout::new(w,h,self.preview_enabled);
+        let l = self.layout(w,h);
         if searching { return Ok(Some(event)); }
         if let Some(input) = &mut self.location {
             match &event {
@@ -665,7 +893,7 @@ impl State {
                     _ => (),
                 }
             }
-            if !self.dual && mouse.row == 1 && mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+            if !self.dual && self.prefs.toolbar && mouse.row == 1 && mouse.kind == MouseEventKind::Down(MouseButton::Left) {
                 match toolbar_hit(l.width, mouse.column) {
                     Some(0) => self.start_location(model),
                     Some(1) => {
@@ -692,6 +920,31 @@ impl State {
                     KeyCode::Char('-') if !self.dual => { self.zoom = self.zoom.saturating_sub(1).max(1); return Ok(None); }
                     KeyCode::Char('0') if !self.dual => { self.zoom = 1; return Ok(None); }
                     _ => (),
+                }
+            }
+        }
+        if let Event::Key(k) = &event {
+            if k.code == KeyCode::F(11) && k.modifiers == KeyModifiers::NONE && k.kind == KeyEventKind::Press {
+                self.choose_icons()?;
+                return Ok(None);
+            }
+        }
+        if let Event::Key(k) = &event {
+            if k.kind == KeyEventKind::Press {
+                if k.code == KeyCode::Char(',') && k.modifiers == KeyModifiers::CONTROL {
+                    self.expanded_tree=None;
+                    self.settings_center(model)?;
+                    return Ok(None);
+                }
+                if k.code == KeyCode::F(11) && k.modifiers == KeyModifiers::SHIFT {
+                    self.integrations()?;
+                    return Ok(None);
+                }
+                #[cfg(feature = "native-ops")]
+                if k.code == KeyCode::Char('p') && k.modifiers == KeyModifiers::CONTROL {
+                    self.expanded_tree=None;
+                    super::tools_ui::show_filtered(&model.directory,model.entries.get(model.selected).map(|e| e.path.as_path()),self.prefs.companions,&mut self.last_tool)?;
+                    return Ok(None);
                 }
             }
         }
@@ -914,21 +1167,23 @@ fn draw_column(
     width: u16,
     cap: usize,
     marked: &impl Fn(&std::path::Path) -> bool,
+    icons: super::file_icons::Style,
+    prefs: &super::app_settings::Preferences,
 ) -> io::Result<()> {
     let path = display_name(model.directory.as_os_str());
     let header = format!("{label}{} | {path}", if active { " *" } else { "" });
-    queue!(out, MoveTo(x, 3), SetForegroundColor(if active { Color::Cyan } else { Color::Grey }),
-        Print(super::clip(&header, usize::from(width))), ResetColor)?;
+    queue!(out, MoveTo(x, 3), SetForegroundColor(if active { prefs.accent } else { prefs.foreground }),
+        Print(super::clip(&header, usize::from(width))), SetForegroundColor(prefs.foreground), SetBackgroundColor(prefs.background))?;
     let (start, end) = model.viewport(cap);
     for (row, index) in (start..end).enumerate() {
         let entry = &model.entries[index];
-        let (glyph, color) = super::icon(entry.directory, entry.symlink);
+        let (glyph, color) = prefs.icon(&entry.path,entry.directory,entry.symlink,icons);
         let text = format!("{} {} {}", if active && marked(&entry.path) { "[x]" } else { "   " }, glyph, entry.name);
         queue!(out, MoveTo(x, row as u16 + 4))?;
         if active && index == model.selected {
-            queue!(out, SetBackgroundColor(Color::DarkGrey))?;
+            queue!(out, SetBackgroundColor(prefs.selection))?;
         }
-        queue!(out, SetForegroundColor(color), Print(super::clip(&text, usize::from(width))), ResetColor)?;
+        queue!(out, SetForegroundColor(color), Print(super::clip(&text, usize::from(width))), SetForegroundColor(prefs.foreground), SetBackgroundColor(prefs.background))?;
     }
     Ok(())
 }
