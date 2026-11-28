@@ -3,6 +3,7 @@
 #[cfg(all(feature = "native-ops", not(target_os = "linux")))]
 compile_error!("native-ops requires the Linux safety backend; use the default read-only build on other platforms");
 pub mod archive;
+pub mod archive_build;
 pub mod bookmarks;
 pub mod image_preview;
 pub mod keymap;
