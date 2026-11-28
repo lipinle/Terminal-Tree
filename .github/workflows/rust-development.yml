@@ -32,7 +32,7 @@ jobs:
       - name: Install companion tools for integration tests
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends eza 7zip git xvfb xauth xterm xdotool imagemagick fonts-dejavu-core
+          sudo apt-get install -y --no-install-recommends eza 7zip git xvfb xauth xterm xdotool imagemagick fonts-dejavu-core nano
       - name: Verify companion tools on disposable fixtures
         run: |
           cargo test --locked --manifest-path rust/Cargo.toml --features native-ops --test external_tools -- --ignored
@@ -41,6 +41,7 @@ jobs:
         run: |
           cargo build --locked --manifest-path rust/Cargo.toml --features native-ops --bin terminal-tree
           python3 tests/benchmark/app.py rust/target/debug/terminal-tree
+          cargo test --locked --manifest-path rust/Cargo.toml --features native-ops --bin terminal-tree pty_shell::tests::nano_fullscreen_smoke -- --ignored
       - name: Build and test optional visual preview
         run: |
           rustup run stable cargo test --manifest-path visual-preview/Cargo.toml

@@ -138,6 +138,22 @@ mod tests{
         assert!(s.lines().iter().any(|l|l=="before-alt"));
     }
     #[test]
+    #[ignore="requires installed nano and xterm terminfo"]
+    fn nano_fullscreen_smoke(){
+        let mut s=Shell::start(Path::new("/tmp"),80,24).unwrap();
+        send(&mut s,"TERM=xterm-256color /usr/bin/nano --ignorercfiles --view /dev/null; printf '\\nNANO_EXIT:%s\\n' \"$?\"\n");
+        let mut found=false;
+        for _ in 0..300{
+            s.tick().unwrap();
+            if s.lines().iter().any(|l|l.contains("GNU nano")){found=true;break;}
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(found,"nano did not draw its header: {:?}",s.lines());
+        s.key(KeyEvent::new(KeyCode::Char('x'),KeyModifiers::CONTROL)).unwrap();
+        wait(&mut s,"NANO_EXIT:0");
+        assert!(!s.alternate());
+    }
+    #[test]
     fn persistent_shell_cwd_env_and_tty(){
         let mut s=Shell::start(Path::new("/tmp"),80,12).unwrap();
         send(&mut s,"export TT_TEST=retained; cd /\n");

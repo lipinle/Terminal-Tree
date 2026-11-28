@@ -5,7 +5,7 @@ use std::{io::{self,Write},ffi::OsStr,os::unix::ffi::OsStrExt};
 use unicode_width::{UnicodeWidthChar,UnicodeWidthStr};
 use std::collections::VecDeque;
 #[derive(Clone,Copy,Debug,Default,PartialEq,Eq)]
-struct Style{fg:Option<Color>,bg:Option<Color>,bold:bool}
+struct Style{fg:Option<Color>,bg:Option<Color>,bold:bool,inverse:bool}
 #[derive(Clone,Debug,Default)]
 pub struct Line{spans:Vec<(Style,String)>}
 impl Line{
@@ -25,7 +25,9 @@ impl Line{
             let clipped=super::clip(text,room);
             let cells=clipped.width();
             if clipped.is_empty()&&!text.is_empty(){break;}
-            queue!(out,SetForegroundColor(style.fg.unwrap_or(fg)),SetBackgroundColor(style.bg.unwrap_or(bg)),
+            let colors=(style.fg.unwrap_or(fg),style.bg.unwrap_or(bg));
+            let (fg,bg)=if style.inverse{(colors.1,colors.0)}else{colors};
+            queue!(out,SetForegroundColor(fg),SetBackgroundColor(bg),
                 SetAttribute(if style.bold{Attribute::Bold}else{Attribute::NormalIntensity}),Print(&clipped))?;
             room=room.saturating_sub(cells);
             if clipped.len()!=text.len(){break;}
@@ -43,6 +45,7 @@ fn apply(style:&mut Style,params:&[u8])->bool{
         let n=nums[i];i+=1;
         match n{
             0=>next=Style::default(),1=>next.bold=true,22=>next.bold=false,
+            7=>next.inverse=true,27=>next.inverse=false,
             30..=37=>next.fg=Some(Color::AnsiValue((n-30) as u8)),
             90..=97=>next.fg=Some(Color::AnsiValue((n-90+8) as u8)),
             40..=47=>next.bg=Some(Color::AnsiValue((n-40) as u8)),
@@ -77,19 +80,20 @@ enum Input {#[default] Ground,Escape,Csi(Vec<u8>),DiscardCsi,ControlString(bool)
 pub fn bounds(cols:u16,rows:u16)->(u16,u16){(cols.clamp(1,MAX_COLS),rows.clamp(1,MAX_ROWS))}
 struct Primary {
     grid:Vec<Vec<Cell>>,x:usize,y:usize,saved:(usize,usize),style:Style,
-    cursor_visible:bool,
+    cursor_visible:bool,region:(usize,usize),origin:bool,wrap:bool,insert:bool,
 }
 pub struct Screen{
     cols:usize,rows:usize,grid:Vec<Vec<Cell>>,
     x:usize,y:usize,saved:(usize,usize),style:Style,input:Input,
     history:VecDeque<Line>,history_bytes:usize,
     primary:Option<Primary>,cursor_visible:bool,application_cursor:bool,
+    region:(usize,usize),origin:bool,wrap:bool,insert:bool,
 }
 impl Screen{
     pub fn new(cols:u16,rows:u16)->Self{
         let (cols,rows)=bounds(cols,rows);
         let (cols,rows)=(usize::from(cols),usize::from(rows));
-        Self{cols,rows,grid:vec![vec![Cell::default();cols];rows],x:0,y:0,saved:(0,0),style:Style::default(),input:Input::Ground,history:VecDeque::new(),history_bytes:0,primary:None,cursor_visible:true,application_cursor:false}
+        Self{cols,rows,grid:vec![vec![Cell::default();cols];rows],x:0,y:0,saved:(0,0),style:Style::default(),input:Input::Ground,history:VecDeque::new(),history_bytes:0,primary:None,cursor_visible:true,application_cursor:false,region:(0,rows-1),origin:false,wrap:true,insert:false}
     }
     fn line(cells:&[Cell])->Line{
         let mut line=Line::default();
@@ -108,13 +112,47 @@ impl Screen{
             if let Some(old)=self.history.pop_front(){self.history_bytes-=old.len();}else{break;}
         }
     }
-    fn newline(&mut self){
-        self.x=0;
-        if self.y+1<self.rows{self.y+=1;}
-        else{
-            let row=self.grid.remove(0);if self.primary.is_none(){self.remember(row);}
-            self.grid.push(vec![Cell::default();self.cols]);
+    fn blank_row(&self)->Vec<Cell>{
+        vec![Cell{style:self.style,..Cell::default()};self.cols]
+    }
+    fn scroll_up(&mut self,top:usize,bottom:usize,count:usize,history:bool){
+        let count=count.min(bottom-top+1);
+        for _ in 0..count{
+            let row=self.grid.remove(top);
+            if history&&top==0&&bottom==self.rows-1&&self.primary.is_none(){self.remember(row);}
+            self.grid.insert(bottom,self.blank_row());
         }
+    }
+    fn scroll_down(&mut self,top:usize,bottom:usize,count:usize){
+        for _ in 0..count.min(bottom-top+1){
+            self.grid.remove(bottom);
+            self.grid.insert(top,self.blank_row());
+        }
+    }
+    fn index(&mut self){
+        if self.y==self.region.1{self.scroll_up(self.region.0,self.region.1,1,true);}
+        else if self.y+1<self.rows{self.y+=1;}
+    }
+    fn reverse_index(&mut self){
+        if self.y==self.region.0{self.scroll_down(self.region.0,self.region.1,1);}
+        else{self.y=self.y.saturating_sub(1);}
+    }
+    fn newline(&mut self){self.x=0;self.index();}
+    fn repair(row:&mut [Cell]){
+        for x in 0..row.len(){
+            if (row[x].wide==2&&(x+1==row.len()||row[x+1].wide!=3))||
+                (row[x].wide==3&&(x==0||row[x-1].wide!=2)){row[x]=Cell::default();}
+        }
+    }
+    fn shift_cells(&mut self,insert:bool,count:usize){
+        let x=self.x.min(self.cols-1);
+        let count=count.min(self.cols-x);
+        let row=&mut self.grid[self.y];
+        if row[x].wide==3{Self::clear_cell(row,x);}
+        let tail=&mut row[x..];
+        if insert{tail.rotate_right(count);for c in &mut tail[..count]{*c=Cell{style:self.style,..Cell::default()};}}
+        else{tail.rotate_left(count);let end=tail.len();for c in &mut tail[end-count..]{*c=Cell{style:self.style,..Cell::default()};}}
+        Self::repair(row);
     }
     fn clear_cell(row:&mut [Cell],x:usize){
         if x>=row.len(){return;}
@@ -154,7 +192,8 @@ impl Screen{
             return;
         }
         if width>self.cols{return;}
-        if self.x+width>self.cols{self.newline();}
+        if self.x+width>self.cols{if self.wrap{self.newline();}else{self.x=self.cols-width;}}
+        if self.insert{self.shift_cells(true,width);}
         let row=&mut self.grid[self.y];
         Self::clear_cell(row,self.x);
         if width==2{Self::clear_cell(row,self.x+1);}
@@ -168,11 +207,12 @@ impl Screen{
     fn switch_screen(&mut self,on:bool){
         if on&&self.primary.is_none(){
             let grid=std::mem::replace(&mut self.grid,vec![vec![Cell::default();self.cols];self.rows]);
-            self.primary=Some(Primary{grid,x:self.x,y:self.y,saved:self.saved,style:self.style,cursor_visible:self.cursor_visible});
-            self.x=0;self.y=0;self.saved=(0,0);self.style=Style::default();
+            self.primary=Some(Primary{grid,x:self.x,y:self.y,saved:self.saved,style:self.style,cursor_visible:self.cursor_visible,region:self.region,origin:self.origin,wrap:self.wrap,insert:self.insert});
+            self.x=0;self.y=0;self.saved=(0,0);self.style=Style::default();self.region=(0,self.rows-1);self.origin=false;self.wrap=true;self.insert=false;
         }else if !on{
             if let Some(p)=self.primary.take(){
                 self.grid=p.grid;self.saved=p.saved;self.style=p.style;self.cursor_visible=p.cursor_visible;
+                self.region=p.region;self.origin=p.origin;self.wrap=p.wrap;self.insert=p.insert;
                 self.cursor(p.x,p.y);
             }
         }
@@ -185,6 +225,8 @@ impl Screen{
                     match mode{
                         "1"=>self.application_cursor=on,
                         "25"=>self.cursor_visible=on,
+                        "6"=>{self.origin=on;self.cursor(0,if on{self.region.0}else{0});},
+                        "7"=>self.wrap=on,
                         // Treat all three alternate-buffer modes as a fresh
                         // isolated buffer; never mix alternate output into history.
                         "47"|"1047"|"1049"=>self.switch_screen(on),
@@ -200,16 +242,31 @@ impl Screen{
         let raw=n.first().copied().unwrap_or(0);
         let a=raw.max(1);
         let b=n.get(1).copied().unwrap_or(0).max(1);
+        let top=if self.origin{self.region.0}else{0};
+        let bottom=if self.origin{self.region.1}else{self.rows-1};
         match cmd{
-            b'A'=>self.cursor(self.x,self.y.saturating_sub(a)),
-            b'B'=>self.cursor(self.x,self.y.saturating_add(a)),
+            b'r'=>{
+                let end=n.get(1).copied().unwrap_or(0);
+                let end=if end==0{self.rows}else{end};
+                if a<end&&end<=self.rows{self.region=(a-1,end-1);self.cursor(0,if self.origin{a-1}else{0});}
+            }
+            b'h'|b'l' if raw==4=>self.insert=cmd==b'h',
+            b'L' if (self.region.0..=self.region.1).contains(&self.y)=>self.scroll_down(self.y,self.region.1,a),
+            b'M' if (self.region.0..=self.region.1).contains(&self.y)=>self.scroll_up(self.y,self.region.1,a,false),
+            b'S'=>self.scroll_up(self.region.0,self.region.1,a,false),
+            b'T'=>self.scroll_down(self.region.0,self.region.1,a),
+            b'@'=>self.shift_cells(true,a),
+            b'P'=>self.shift_cells(false,a),
+            b'X'=>self.erase(self.y,self.x,self.x.saturating_add(a)),
+            b'A'=>self.cursor(self.x,self.y.saturating_sub(a).max(top)),
+            b'B'=>self.cursor(self.x,self.y.saturating_add(a).min(bottom)),
             b'C'=>self.cursor(self.x.saturating_add(a),self.y),
             b'D'=>self.cursor(self.x.saturating_sub(a),self.y),
-            b'E'=>self.cursor(0,self.y.saturating_add(a)),
-            b'F'=>self.cursor(0,self.y.saturating_sub(a)),
+            b'E'=>self.cursor(0,self.y.saturating_add(a).min(bottom)),
+            b'F'=>self.cursor(0,self.y.saturating_sub(a).max(top)),
             b'G'|b'\x60'=>self.cursor(a-1,self.y),
-            b'd'=>self.cursor(self.x,a-1),
-            b'H'|b'f'=>self.cursor(b-1,a-1),
+            b'd'=>self.cursor(self.x,(top+a-1).min(bottom)),
+            b'H'|b'f'=>self.cursor(b-1,(top+a-1).min(bottom)),
             b's'=>self.saved=(self.x,self.y),
             b'u'=>self.cursor(self.saved.0,self.saved.1),
             b'K'=>match raw{0=>self.erase(self.y,self.x,self.cols),1=>self.erase(self.y,0,self.x+1),2=>self.erase(self.y,0,self.cols),_=>()},
@@ -237,6 +294,7 @@ impl Screen{
             Input::Escape=>match b{
                 b'['=>self.input=Input::Csi(Vec::new()),
                 b']'|b'P'|b'_'|b'^'|b'X'=>self.input=Input::ControlString(false),
+                b'D'=>self.index(),b'M'=>self.reverse_index(),b'E'=>self.newline(),
                 b'7'=>self.saved=(self.x,self.y),
                 b'8'=>self.cursor(self.saved.0,self.saved.1),
                 27=>self.input=Input::Escape,
@@ -279,9 +337,9 @@ impl Screen{
             while p.grid.len()>rows{if p.y>=rows{p.grid.remove(0);p.y-=1;}else{p.grid.pop();}}
             for row in &mut p.grid{row.resize(cols,Cell::default());if row.last().is_some_and(|c|c.wide==2){row[cols-1]=Cell::default();}}
             p.grid.resize_with(rows,||vec![Cell::default();cols]);
-            p.x=p.x.min(cols-1);p.y=p.y.min(rows-1);
+            p.x=p.x.min(cols-1);p.y=p.y.min(rows-1);p.region=(0,rows-1);p.origin=false;
         }
-        self.cols=cols;self.rows=rows;self.cursor(self.x,self.y);
+        self.cols=cols;self.rows=rows;self.region=(0,rows-1);self.origin=false;self.cursor(self.x,self.y);
     }
     pub fn lines(&self)->Vec<Line>{self.display_lines(None)}
     pub fn display_lines(&self,cursor:Option<(Color,Color)>)->Vec<Line>{
@@ -362,6 +420,35 @@ pub fn parse(bytes:&[u8])->Vec<Line>{
         let line=s.display_lines(Some((Color::Black,Color::White)));
         assert!(line[0].spans.iter().any(|(st,_)|st.bg==Some(Color::White)));
         assert_eq!(s.lines()[0].text(),"primary");
+    }
+    #[test]fn scroll_region_and_line_edits_preserve_fixed_rows(){
+        let mut s=Screen::new(12,5);
+        s.feed(b"header\none\ntwo\nthree\nfooter\x1b[2;4r\x1b[4;1H\nnew");
+        let text:Vec<_>=s.lines().iter().map(Line::text).collect();
+        assert_eq!(text,["header","two","three","new","footer"]);
+        s.feed(b"\x1b[2;1H\x1b[Linsert");
+        let text:Vec<_>=s.lines().iter().map(Line::text).collect();
+        assert_eq!(text,["header","insert","two","three","footer"]);
+        s.feed(b"\x1b[2;1H\x1b[M");
+        assert_eq!(s.lines()[1].text(),"two");
+        assert_eq!(s.lines()[4].text(),"footer");
+        assert!(s.history.is_empty());
+        s.feed(b"\x1b[?6h\x1b[1;1Horigin");
+        assert_eq!(s.lines()[1].text(),"origin");
+        assert_eq!(s.lines()[0].text(),"header");
+    }
+    #[test]fn character_edits_inverse_and_wide_integrity(){
+        let mut s=Screen::new(10,3);
+        s.feed(b"abcd\x1b[1;2H\x1b[2@XY");
+        assert_eq!(s.lines()[0].text(),"aXYbcd");
+        s.feed(b"\x1b[1;2H\x1b[2P");
+        assert_eq!(s.lines()[0].text(),"abcd");
+        s.feed(b"\x1b[1;2H\x1b[2X");
+        assert_eq!(s.lines()[0].text(),"a  d");
+        s.feed(b"\x1b[2;1H\x1b[7mreverse\x1b[27m");
+        assert!(s.lines()[1].spans[0].0.inverse);
+        s.feed("\x1b[3;1H日Z\x1b[3;2H\x1b[P".as_bytes());
+        assert!(s.grid[2].iter().all(|c|c.wide!=2&&c.wide!=3));
     }
     #[test]fn malformed_and_wide_text_are_bounded(){
         let lines=parse("ไทย\x1b[32m日\x1b[0mZ".as_bytes());let mut out=Vec::new();
