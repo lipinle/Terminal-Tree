@@ -268,6 +268,44 @@ pub fn portable_layout_preview(reader: impl Read) -> io::Result<LayoutPreview> {
     Ok(layout)
 }
 
+/// Borrow one regular member's data from a fully validated portable archive.
+/// No partial result is returned for malformed trailing data or name aliases.
+/// This does not create files or authorize extraction to any destination.
+pub fn member_payload<'a>(bytes: &'a [u8], requested: &str) -> io::Result<&'a [u8]> {
+    let layout = portable_layout_preview(bytes)?;
+    if !layout.files.iter().any(|member| member.name == requested) {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "regular archive member not found",
+        ));
+    }
+    let mut offset = 0;
+    while let Some(header) = bytes.get(offset..offset + BLOCK) {
+        if header.iter().all(|&b| b == 0) {
+            break;
+        }
+        let header: &[u8; BLOCK] = header
+            .try_into()
+            .map_err(|_| invalid("invalid USTAR header length"))?;
+        let member = parse(header)?;
+        let size = usize::try_from(member.size).map_err(io::Error::other)?;
+        let start = offset + BLOCK;
+        let end = start
+            .checked_add(size)
+            .ok_or_else(|| invalid("USTAR payload offset overflow"))?;
+        let payload = bytes
+            .get(start..end)
+            .ok_or_else(|| invalid("truncated USTAR payload"))?;
+        if member.kind == Kind::File && member.name == requested {
+            return Ok(payload);
+        }
+        offset = end
+            .checked_add((BLOCK - size % BLOCK) % BLOCK)
+            .ok_or_else(|| invalid("USTAR padding offset overflow"))?;
+    }
+    Err(invalid("validated archive member missing"))
+}
+
 fn reserved_component(component: &str) -> bool {
     let stem = component
         .split('.')
@@ -334,6 +372,27 @@ mod layout_tests {
         append(&mut bytes, "folder/other", b"y");
         bytes.resize(bytes.len() + 2 * BLOCK, 0);
         assert!(portable_layout_preview(bytes.as_slice()).is_ok());
+    }
+
+    #[test]
+    fn member_payload_validates_entire_archive_before_returning_bytes() {
+        let mut bytes = Vec::new();
+        append(&mut bytes, "first", b"hello");
+        append(&mut bytes, "folder/second", &[7; 513]);
+        append(&mut bytes, "empty", b"");
+        bytes.resize(bytes.len() + 2 * BLOCK, 0);
+        assert_eq!(member_payload(&bytes, "first").unwrap(), b"hello");
+        assert_eq!(
+            member_payload(&bytes, "folder/second").unwrap(),
+            &[7; 513]
+        );
+        assert!(member_payload(&bytes, "empty").unwrap().is_empty());
+        assert!(member_payload(&bytes, "folder").is_err());
+        assert!(member_payload(&bytes, "missing").is_err());
+        assert!(member_payload(&bytes[..bytes.len() - 1], "first").is_err());
+        let end = bytes.len() - 1;
+        bytes[end] = 1;
+        assert!(member_payload(&bytes, "first").is_err());
     }
 
     #[test]
