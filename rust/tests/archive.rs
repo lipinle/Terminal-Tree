@@ -98,6 +98,22 @@ fn enforces_member_and_declared_byte_limits() {
 }
 
 #[test]
+fn rejects_controls_and_dot_components() {
+    for name in [
+        "a/./b",
+        "./file",
+        "file\nname",
+        "file\x1bname",
+        "file\rname",
+    ] {
+        let mut archive = Vec::new();
+        append(&mut archive, name, b'0', b"");
+        finish(&mut archive);
+        assert!(list(archive.as_slice()).is_err(), "{name:?}");
+    }
+}
+
+#[test]
 fn empty_basename_with_prefix_is_refused() {
     let mut h = header("", b'5', 0);
     h[345..351].copy_from_slice(b"folder");
