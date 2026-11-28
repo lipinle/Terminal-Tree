@@ -6,7 +6,8 @@ use super::view::{preview_hit_row, toolbar_hit, toolbar_start, Cells, View};
 use super::State;
 use crossterm::{
     event::{
-        Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+        Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
+        MouseEventKind,
     },
     terminal,
 };
@@ -552,11 +553,22 @@ impl State {
                                         "terminal panel needs at least 16 rows",
                                     ));
                                 }
-                                if crate::choose("Interactive shell uses OS permissions, outside file journal",&["Cancel".into(),"Start Bash PTY".into()])?==Some(1){
-                                    self.prefs.terminal_visible=true;
-                                    let (_,_,width,rows)=self.terminal_rect(full_h,self.layout(w,full_h-self.panel_rows(full_h)));
-                                    self.terminal_panel.start_shell(&model.directory,width,rows.saturating_sub(3))?;
-                                    self.side_focus=false;
+                                if crate::choose(
+                                    "Interactive shell uses OS permissions, outside file journal",
+                                    &["Cancel".into(), "Start Bash PTY".into()],
+                                )? == Some(1)
+                                {
+                                    self.prefs.terminal_visible = true;
+                                    let (_, _, width, rows) = self.terminal_rect(
+                                        full_h,
+                                        self.layout(w, full_h - self.panel_rows(full_h)),
+                                    );
+                                    self.terminal_panel.start_shell(
+                                        &model.directory,
+                                        width,
+                                        rows.saturating_sub(3),
+                                    )?;
+                                    self.side_focus = false;
                                 }
                             }
                             return Ok(true);
@@ -594,8 +606,7 @@ impl State {
                 {
                     match mouse.kind {
                         MouseEventKind::Down(MouseButton::Left)
-                            if mouse.row == terminal_top
-                                && mouse.column < terminal_left + 6 =>
+                            if mouse.row == terminal_top && mouse.column < terminal_left + 6 =>
                         {
                             self.prefs.terminal_visible = false;
                             self.terminal_panel.focused = false;
@@ -687,9 +698,11 @@ impl State {
     ) -> io::Result<Option<Event>> {
         let h = l.height;
         if mouse.kind == MouseEventKind::Down(MouseButton::Left) && mouse.row == 0 {
-            if let Some((i, _)) = MENUS.iter().enumerate().find(|(_, (name, x))| {
-                mouse.column >= *x && mouse.column < *x + name.len() as u16
-            }) {
+            if let Some((i, _)) = MENUS
+                .iter()
+                .enumerate()
+                .find(|(_, (name, x))| mouse.column >= *x && mouse.column < *x + name.len() as u16)
+            {
                 self.side_focus = false;
                 let Some(selected) = self.menu(Some(i), writable)? else {
                     return Ok(None);
