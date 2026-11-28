@@ -7,9 +7,11 @@ if (( $# != 2 )) || [[ -z "$1" || "$2" != --yes ]]; then
     echo "Usage: bash rust/uninstall-preview.sh INSTALL_DIRECTORY --yes" >&2
     exit 2
 fi
-here=$(builtin cd -- "$(dirname -- "$0")" && pwd -P)
-target=$(realpath -e -- "$1")
-[[ "$target" == "$(realpath -ms -- "$1")" && ! -L "$1" ]] ||
+IFS= read -r -d '' script_path < <(realpath -ze -- "$0")
+here=${script_path%/*}
+IFS= read -r -d '' target < <(realpath -ze -- "$1")
+IFS= read -r -d '' lexical < <(realpath -zms -- "$1")
+[[ "$target" == "$lexical" && ! -L "$1" ]] ||
     { echo "Plain installation directory required." >&2; exit 1; }
 builtin cd -- "$target"
 # Validate the pinned working directory and its current pathname before

@@ -597,13 +597,12 @@ pub(crate) fn browse(
     #[cfg(feature = "native-ops")]
     let store = preferences.map(super::settings::Store::new).transpose()?;
     #[cfg(feature = "native-ops")]
-    let saved = store
+    let (saved_theme, saved_keys) = store
         .as_ref()
         .map(|store| store.load_panes())
         .transpose()?
-        .flatten();
-    #[cfg(feature = "native-ops")]
-    let (saved_theme, saved_keys) = saved.unwrap_or_default();
+        .flatten()
+        .unwrap_or_default();
     #[cfg(not(feature = "native-ops"))]
     let (saved_theme, saved_keys) = (Theme::default(), Keymap::default());
     let keymap = keymap.unwrap_or(saved_keys);

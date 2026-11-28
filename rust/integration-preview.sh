@@ -1,7 +1,8 @@
 # Opt-in preview integration. Source explicitly; never modifies existing cd/clear.
 [[ $- == *i* ]] || return 0
-_tt_rust_dir=$(builtin cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
-_tt_rust_program="$_tt_rust_dir/terminal-tree"
+IFS= read -r -d '' _tt_rust_source < <(realpath -ze -- "${BASH_SOURCE[0]}") || return 1
+_tt_rust_program="${_tt_rust_source%/*}/terminal-tree"
+unset _tt_rust_source
 tt_rust_list() {
     "$_tt_rust_program" --list "$@"
 }

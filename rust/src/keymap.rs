@@ -57,42 +57,34 @@ impl Action {
     }
 }
 
+const NAVIGATION_KEYS: &[(&str, KeyCode)] = &[
+    ("up", KeyCode::Up),
+    ("down", KeyCode::Down),
+    ("left", KeyCode::Left),
+    ("right", KeyCode::Right),
+    ("pageup", KeyCode::PageUp),
+    ("pagedown", KeyCode::PageDown),
+    ("home", KeyCode::Home),
+    ("end", KeyCode::End),
+    ("f5", KeyCode::F(5)),
+    ("f9", KeyCode::F(9)),
+    ("f10", KeyCode::F(10)),
+    ("f11", KeyCode::F(11)),
+    ("f12", KeyCode::F(12)),
+];
+
 fn named_key(name: &str) -> Option<KeyCode> {
-    Some(match name {
-        "up" => KeyCode::Up,
-        "down" => KeyCode::Down,
-        "left" => KeyCode::Left,
-        "right" => KeyCode::Right,
-        "pageup" => KeyCode::PageUp,
-        "pagedown" => KeyCode::PageDown,
-        "home" => KeyCode::Home,
-        "end" => KeyCode::End,
-        "f5" => KeyCode::F(5),
-        "f9" => KeyCode::F(9),
-        "f10" => KeyCode::F(10),
-        "f11" => KeyCode::F(11),
-        "f12" => KeyCode::F(12),
-        _ => return None,
-    })
+    NAVIGATION_KEYS
+        .iter()
+        .find(|(label, _)| *label == name)
+        .map(|(_, key)| *key)
 }
 
 fn key_name(code: KeyCode) -> Option<&'static str> {
-    Some(match code {
-        KeyCode::Up => "up",
-        KeyCode::Down => "down",
-        KeyCode::Left => "left",
-        KeyCode::Right => "right",
-        KeyCode::PageUp => "pageup",
-        KeyCode::PageDown => "pagedown",
-        KeyCode::Home => "home",
-        KeyCode::End => "end",
-        KeyCode::F(5) => "f5",
-        KeyCode::F(9) => "f9",
-        KeyCode::F(10) => "f10",
-        KeyCode::F(11) => "f11",
-        KeyCode::F(12) => "f12",
-        _ => return None,
-    })
+    NAVIGATION_KEYS
+        .iter()
+        .find(|(_, key)| *key == code)
+        .map(|(name, _)| *name)
 }
 
 fn default_binding(action: Action) -> Binding {
@@ -117,19 +109,7 @@ fn permitted(binding: Binding) -> bool {
     // Restrict this first version to keys with no text/confirmation semantics.
     // Escape, Ctrl+C, Enter, Delete and existing workspace shortcuts cannot
     // be remapped by this navigation-only API.
-    binding.modifiers == KeyModifiers::NONE
-        && matches!(
-            binding.code,
-            KeyCode::Up
-                | KeyCode::Down
-                | KeyCode::Left
-                | KeyCode::Right
-                | KeyCode::PageUp
-                | KeyCode::PageDown
-                | KeyCode::Home
-                | KeyCode::End
-                | KeyCode::F(5 | 9 | 10 | 11 | 12)
-        )
+    binding.modifiers == KeyModifiers::NONE && key_name(binding.code).is_some()
 }
 
 #[derive(Clone, Debug)]

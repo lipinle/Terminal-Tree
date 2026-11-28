@@ -2,20 +2,25 @@
 # Install a native preview side by side, without editing .bashrc or Python runtime.
 set -euo pipefail
 if (( EUID == 0 )); then echo "Run as normal user, not sudo." >&2; exit 1; fi
-here=$(builtin cd -- "$(dirname -- "$0")" && pwd -P)
-if (( $# == 3 )) && [[ "$1" == --update && -n "$2" && -n "$3" ]]; then
-    # A side-by-side upgrade leaves the previous installation available.
-    bash "$here/verify-preview-install.sh" "$2"
-    shift 2
-fi
-if (( $# != 1 )) || [[ -z "$1" ]]; then
+IFS= read -r -d '' script_path < <(realpath -ze -- "$0")
+here=${script_path%/*}
+usage() {
     echo "Usage: bash rust/install-preview.sh NEW_DIRECTORY" >&2
     echo "       bash rust/install-preview.sh --update OLD_DIRECTORY NEW_DIRECTORY" >&2
     exit 2
+}
+if [[ ${1:-} == --update ]]; then
+    (( $# == 3 )) && [[ -n "$2" && -n "$3" ]] || usage
+    bash "$here/verify-preview-install.sh" "$2"
+    shift 2
 fi
-target=$(realpath -m -- "$1")
-if [[ -e "$target" || -L "$target" || -L "$1" ]]; then echo "Refusing existing destination." >&2; exit 1; fi
-parent=$(dirname -- "$target")
+(( $# == 1 )) && [[ -n "$1" ]] || usage
+IFS= read -r -d '' target < <(realpath -zm -- "$1")
+IFS= read -r -d '' lexical < <(realpath -zms -- "$1")
+[[ "$target" == "$lexical" && ! -L "$1" ]] ||
+    { echo "Plain installation path required." >&2; exit 1; }
+if [[ -e "$target" || -L "$target" ]]; then echo "Refusing existing destination." >&2; exit 1; fi
+IFS= read -r -d '' parent < <(dirname -z -- "$target")
 [[ -d "$parent" && -O "$parent" ]] || { echo "Owned existing parent required." >&2; exit 1; }
 # Use the same explicit build directory that supplies the installed binary.
 # An inherited CARGO_TARGET_DIR or cargo configuration must not select a

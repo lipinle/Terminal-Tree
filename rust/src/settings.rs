@@ -112,14 +112,7 @@ impl Store {
             Some("Links") => KindFilter::Links,
             _ => return Err(error("invalid kind setting")),
         };
-        let previous = (m.hidden, m.order, m.kind_filter);
-        (m.hidden, m.order, m.kind_filter) = (hidden, order, kind_filter);
-        // Model::reload scans before replacing its entries and selection.
-        if let Err(error) = m.reload() {
-            (m.hidden, m.order, m.kind_filter) = previous;
-            return Err(error);
-        }
-        Ok(())
+        m.set_view(hidden, order, kind_filter, m.query.clone())
     }
     pub fn save(&self, m: &Model) -> io::Result<()> {
         let v = serde_json::json!({"version":1,"hidden":m.hidden,"order":format!("{:?}",m.order),"kind":format!("{:?}",m.kind_filter)});

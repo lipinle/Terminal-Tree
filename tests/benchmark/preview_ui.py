@@ -12,7 +12,7 @@ import tempfile
 import termios
 import time
 
-BROWSE_END = b"F5 refresh | q exit"
+BROWSE_END = b"/ filter | q exit"
 PAGE_END = b"Up/Down | PgUp/PgDn | q/Esc close"
 
 

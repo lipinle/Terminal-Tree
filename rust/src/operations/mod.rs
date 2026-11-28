@@ -103,6 +103,14 @@ fn create_dir_at(parent: &File, name: &OsStr) -> io::Result<File> {
     parent.sync_all()?;
     Ok(dir)
 }
+fn hex_path(path: &Path) -> String {
+    path.as_os_str()
+        .as_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 fn unique() -> io::Result<String> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let n = SystemTime::now()
@@ -405,19 +413,12 @@ impl Engine {
         stage: Option<&Path>,
     ) -> io::Result<()> {
         self.check_journal()?;
-        let hex = |p: &Path| {
-            p.as_os_str()
-                .as_bytes()
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<String>()
-        };
         let record = serde_json::json!({
             "id": id, "operation": operation,
             "source": src.and_then(Path::to_str), "destination": dst.and_then(Path::to_str),
             "stage": stage.and_then(Path::to_str),
-            "source_bytes_hex": src.map(hex), "destination_bytes_hex": dst.map(hex),
-            "stage_bytes_hex": stage.map(hex), "started": id,
+            "source_bytes_hex": src.map(hex_path), "destination_bytes_hex": dst.map(hex_path),
+            "stage_bytes_hex": stage.map(hex_path), "started": id,
         });
         let mut file: File = rx::openat(
             &self.journal,

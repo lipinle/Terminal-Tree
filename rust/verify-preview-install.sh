@@ -7,12 +7,12 @@ if (( $# != 1 )) || [[ -z "$1" ]]; then
     echo "Usage: bash rust/verify-preview-install.sh INSTALL_DIRECTORY" >&2
     exit 2
 fi
-target=$(realpath -e -- "$1")
-lexical=$(realpath -ms -- "$1")
+IFS= read -r -d '' target < <(realpath -ze -- "$1")
+IFS= read -r -d '' lexical < <(realpath -zms -- "$1")
 [[ "$target" == "$lexical" && ! -L "$1" && -d "$target" ]] ||
     { echo "Plain installation directory required." >&2; exit 1; }
 builtin cd -- "$target"
-[[ $(pwd -P) == "$target" && $(stat -c '%u:%a' -- .) == "$EUID:700" ]] ||
+[[ "." -ef "$target" && $(stat -c '%u:%a' -- .) == "$EUID:700" ]] ||
     { echo "Private owned installation directory required." >&2; exit 1; }
 shopt -s dotglob nullglob
 entries=(*)

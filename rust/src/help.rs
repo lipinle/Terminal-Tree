@@ -13,93 +13,128 @@ type Row = (&'static str, &'static str);
 struct Topic {
     title: &'static str,
     rows: &'static [Row],
+    requires_workspace: bool,
 }
-const TOPICS:&[Topic]=&[
-    Topic{title:"Navigation",rows:&[
-        ("Up / Down","Select the previous / next entry."),
-        ("PgUp / PgDn","Move by one visible page."),
-        ("Home / End","Select the first / last entry."),
-        ("Left / Right","Go to parent / enter selected folder."),
-        ("Enter","Enter a folder or open a regular file where a desktop opener is supported. Linux uses xdg-open / gio; macOS uses open. An external application may edit the file."),
-        ("[ / ]","Go backward / forward in navigation history."),
-        ("g","Go to a path (native build). Relative paths, absolute paths and ~/ are supported. Enter accepts; Esc cancels."),
-        ("m / F4","My Computer: choose Home, existing home Trash, File System or mounted media. Discovery does not grant write access."),
-        ("q / Esc / Ctrl+C","Exit the navigator outside a prompt or operation."),
-        ("F1 / ?","Open this guide."),
-        ("Shell navigation","In tt_rust_nav, Enter on a folder exits to Bash in that folder. Right continues browsing."),
-    ]},
-    Topic{title:"View, search and settings",rows:&[
-        ("h","Toggle hidden entries."),
-        ("s","Cycle sort: Name, Size, Date, Type. Directories remain first."),
-        ("f / F5","Refresh from disk."),
-        ("/","Filter the current directory by name; type to update results. Backspace removes text, Enter accepts, Esc restores the previous filter. Not recursive."),
-        ("F7","Filter by entry type: All, Directories, non-directory non-links, or symbolic links."),
-        ("i","Properties: path, mode, size, owner, modification time, inode and links."),
-        ("p / F3","Preview a regular non-link file (native build); up to 64 KiB. NUL bytes in the first 64 KiB trigger hexadecimal preview; F8 handles other binary data."),
-        ("F8","Force hexadecimal preview of a regular non-link file (native build)."),
-        ("S","Save hidden, sort and type preferences for the current Rust workspace/personal journal. The name query is not saved."),
-        ("Menus","Up / Down, PgUp / PgDn, Home / End; Enter selects, q / Esc cancels."),
-        ("Read-only pages","Up / Down, PgUp / PgDn, Home / End; Enter, q or Esc closes properties, preview and recovery."),
-    ]},
-    Topic{title:"Mouse and selection",rows:&[
-        ("Wheel up / down","Move selection up / down."),
-        ("Left click","Select an entry; enter it if it is a folder."),
-        ("Right click","Select an entry without entering."),
-        ("Ctrl + left click","Toggle a mark on the clicked item (workspace/personal)."),
-        ("Shift + right click","Open actions for the clicked selection (workspace/personal). Some terminals intercept modifier clicks; use F6 or Space instead."),
-        ("Space","Toggle a mark on the selected item."),
-        ("a / A","Mark all visible entries / clear all marks."),
-        ("F6","Open the actions menu (workspace/personal); selecting an action still uses the normal safety checks."),
-        ("Marks","Up to 1,000 items. Marked items take precedence over the cursor for batch actions. Directory changes clear marks; hidden, missing or changed marks are refused. Use A to clear them before renaming."),
-    ]},
-    Topic{title:"Copy, move and create",rows:&[
-        ("c","Copy selection or marked items into the reviewed clipboard."),
-        ("x","Cut selection or marked items into the reviewed clipboard. No move happens yet."),
-        ("v","Paste into the current directory. Review paths and type yes."),
-        ("r / F2","Rename one item; clear marks first. Enter a new name, review and type yes."),
-        ("Actions: Bulk rename","Mark items, choose Bulk rename in F6, enter literal search and replacement, review every pair and type yes. Stops on first failure."),
-        ("Actions: Keep both","For one clipboard item, choose Paste one item (keep both) in F6. Review the suggested unoccupied name and type yes. Never overwrites."),
-        ("n","Create a directory: enter one name, review and type yes."),
-        ("t","Create an empty file: enter one name, review and type yes."),
-        ("Actions: Extract archive","Select one supported USTAR or gzip-compressed USTAR archive, review the layout, enter a new directory name and type yes. No overwrite or metadata restoration."),
-        ("u","Undo the most recent eligible move/rename in this session. Review and type yes; changed results or occupied destinations are refused."),
-        ("Example: copy","Select a file (or mark several), press c, navigate to the target, press v, review paths, then type yes."),
-        ("Example: move","Use x instead of c. Normal paste refuses cross-filesystem moves. Existing destinations are never overwritten."),
-        ("Actions: cross-device move","Cut one regular file, navigate to an approved target device, choose Move one file across devices in F6, choose strict or explicit time rounding, review and type the requested word. The verified copy is published first; the original is retained privately, not deleted. Record the displayed retention path. No automatic cleanup."),
-        ("Clipboard","Copy/cut replaces the old clipboard and clears marks after successful review. A successful move or failed transfer clears the clipboard."),
-        ("Batch","Each item commits separately. A failure stops the batch; already committed items remain. No automatic rollback."),
-    ]},
-    Topic{title:"Trash and permanent deletion",rows:&[
-        ("d / Delete","Move selected or marked items to Trash. Review and type yes."),
-        ("R","Restore selected or marked top-level Trash items to their original locations. Review and type yes."),
-        ("D","Permanently delete selected or marked top-level Trash items. Review and type DELETE exactly. Irreversible."),
-        ("Example: restore","Trash an item with d. Open the appropriate Trash/files directory using g (m / F4 may show home Trash). Select the item, press R, review and confirm."),
-        ("Workspace Trash","Use the workspace's supplied data directory followed by Trash/files, not the real home Trash."),
-        ("Personal Trash","Native home Trash must already exist with private permissions. Same-filesystem only."),
-        ("Safety","No fallback to permanent deletion if Trash fails. Restore refuses occupied destinations. A failed permanent deletion can be partial."),
-    ]},
-    Topic{title:"Review, recovery and safety",rows:&[
-        ("j","Open the read-only pending journal. Inspect source, destination and staging/metadata; pending does not mean failed."),
-        ("O","Select the existing published copy, enter the original absolute path and retained-move transaction ID from inspected evidence, then a new filename. Review and type recover. Requires matching current manifests; preserves both copies and original journal."),
-        ("Review paths","Up / Down scroll one line; PgUp / PgDn scroll a page. Enter advances to the end, then opens the confirmation prompt."),
-        ("Confirmation","Type yes (or round-time for opt-in timestamp rounding, DELETE for permanent deletion). Enter submits, Backspace edits, Esc / Ctrl+C cancels. Anything other than the required word declines the operation."),
-        ("During worker","Esc / Ctrl+C requests cancellation. It may wait for a safe checkpoint. Once commit begins, the current item must finish safely."),
-        ("After interruption","Inspect j and the actual paths before retrying. Staging and pending records can remain. Recovery does not replay, delete or roll back automatically."),
-        ("Undo limits","Undo is session-local and only for eligible moves/renames, not permanent deletion."),
-        ("Write scope","Writes require an explicit workspace or personal mode and approval by the safety policy. Root, protected paths and unapproved mounts are refused."),
-        ("Backups","A journal is not a backup. Keep independent copies of important files; never run as root."),
-    ]},
-    Topic{title:"Modes and shell commands",rows:&[
-        ("Read-only","--browse PATH; navigator writes and settings save are disabled. External file opening can still modify files."),
-        ("Workspace","--workspace ROOT JOURNAL DATA; private owned workspace, separate private journal and private data directory inside the workspace."),
-        ("Personal","--personal JOURNAL [EXTRA_MOUNT ...]; explicit approved roots, existing private journal, real account HOME."),
-        ("tt_rust_list","List a directory from Bash after sourcing preview integration.sh."),
-        ("tt_rust_ls","Use optional eza for a directory listing, or the native list if unavailable. No eza output is used for file operations."),
-        ("tt_rust_nav","Browse from the current directory, then select a directory to return to Bash."),
-        ("tt_rust_workspace","Launch the scoped workspace with ROOT JOURNAL DATA."),
-        ("tt_rust_personal","Launch personal mode with JOURNAL and optional approved mount roots."),
-        ("Preview install","Rust preview is separate from Python; it does not replace existing Bash integration."),
-    ]},
+const TOPICS: &[Topic] = &[
+    Topic {
+        title: "Navigation",
+        requires_workspace: false,
+        rows: &[
+            ("Up / Down", "Select the previous / next entry."),
+            ("PgUp / PgDn", "Move by one visible page."),
+            ("Home / End", "Select the first / last entry."),
+            ("Left / Right", "Go to parent / enter selected folder."),
+            ("Enter", "Enter a folder or open a regular file where a desktop opener is supported. Linux uses xdg-open / gio; macOS uses open. An external application may edit the file."),
+            ("[ / ]", "Go backward / forward in navigation history."),
+            ("g", "Go to a path (native build). Relative paths, absolute paths and ~/ are supported. Enter accepts; Esc cancels."),
+            ("m / F4", "My Computer: choose Home, existing home Trash, File System or mounted media. Discovery does not grant write access."),
+            ("q / Esc / Ctrl+C", "Exit the navigator outside a prompt or operation."),
+            ("F1 / ?", "Open this guide."),
+            ("Shell navigation", "In tt_rust_nav, Enter on a folder exits to Bash in that folder. Right continues browsing. Esc, q or Ctrl+C cancels the selection."),
+        ],
+    },
+    Topic {
+        title: "View and search",
+        requires_workspace: false,
+        rows: &[
+            ("h", "Toggle hidden entries."),
+            ("s", "Cycle sort: Name, Size, Date, Type. Directories remain first."),
+            ("f / F5", "Refresh from disk."),
+            ("/", "Filter the current directory by name; type to update results. Backspace removes text, Enter accepts, Esc restores the previous filter. Not recursive."),
+            ("F7", "Filter by entry type: All, Directories, non-directory non-links, or symbolic links."),
+            ("i", "Properties: path, mode, size, owner, modification time, inode and links."),
+            ("p / F3", "Preview a regular non-link file (native build); up to 64 KiB. NUL bytes in the first 64 KiB trigger hexadecimal preview; F8 handles other binary data."),
+            ("F8", "Force hexadecimal preview of a regular non-link file (native build)."),
+            ("Menus", "Up / Down, PgUp / PgDn, Home / End; Enter selects, q / Esc cancels."),
+            ("Read-only pages", "Up / Down, PgUp / PgDn, Home / End; Enter, q or Esc closes properties, preview and recovery."),
+        ],
+    },
+    Topic {
+        title: "Mouse navigation",
+        requires_workspace: false,
+        rows: &[
+            ("Wheel up / down", "Move selection up / down."),
+            ("Left click", "Select an entry; enter it if it is a folder."),
+            ("Right click", "Select an entry without entering."),
+        ],
+    },
+    Topic {
+        title: "Marks, actions and saved settings",
+        requires_workspace: true,
+        rows: &[
+            ("S", "Save hidden, sort and type preferences for the current Rust workspace/personal journal. The name query is not saved."),
+            ("Ctrl + left click", "Toggle a mark on the clicked item (workspace/personal)."),
+            ("Shift + right click", "Open actions for the clicked selection (workspace/personal). Some terminals intercept modifier clicks; use F6 or Space instead."),
+            ("Space", "Toggle a mark on the selected item."),
+            ("a / A", "Mark all visible entries / clear all marks."),
+            ("F6", "Open the actions menu (workspace/personal); selecting an action still uses the normal safety checks."),
+            ("Marks", "Up to 1,000 items. Marked items take precedence over the cursor for batch actions. Directory changes clear marks; hidden, missing or changed marks are refused. Use A to clear them before renaming."),
+        ],
+    },
+    Topic {
+        title: "Copy, move and create",
+        requires_workspace: true,
+        rows: &[
+            ("c", "Copy selection or marked items into the reviewed clipboard."),
+            ("x", "Cut selection or marked items into the reviewed clipboard. No move happens yet."),
+            ("v", "Paste into the current directory. Review paths and type yes."),
+            ("r / F2", "Rename one item; clear marks first. Enter a new name, review and type yes."),
+            ("Actions: Bulk rename", "Mark items, choose Bulk rename in F6, enter literal search and replacement, review every pair and type yes. Stops on first failure."),
+            ("Actions: Keep both", "For one clipboard item, choose Paste one item (keep both) in F6. Review the suggested unoccupied name and type yes. Never overwrites."),
+            ("n", "Create a directory: enter one name, review and type yes."),
+            ("t", "Create an empty file: enter one name, review and type yes."),
+            ("Actions: Extract archive", "Select one supported USTAR or gzip-compressed USTAR archive, review the layout, enter a new directory name and type yes. No overwrite or metadata restoration."),
+            ("u", "Undo the most recent eligible move/rename in this session. Review and type yes; changed results or occupied destinations are refused."),
+            ("Example: copy", "Select a file (or mark several), press c, navigate to the target, press v, review paths, then type yes."),
+            ("Example: move", "Use x instead of c. Normal paste refuses cross-filesystem moves. Existing destinations are never overwritten."),
+            ("Actions: cross-device move", "Cut one regular file, navigate to an approved target device, choose Move one file across devices in F6, choose strict or explicit time rounding, review and type the requested word. The verified copy is published first; the original is retained privately, not deleted. Record the displayed retention path. No automatic cleanup."),
+            ("Clipboard", "Copy/cut replaces the old clipboard and clears marks after successful review. A successful move or failed transfer clears the clipboard."),
+            ("Batch", "Each item commits separately. A failure stops the batch; already committed items remain. No automatic rollback."),
+        ],
+    },
+    Topic {
+        title: "Trash and permanent deletion",
+        requires_workspace: true,
+        rows: &[
+            ("d / Delete", "Move selected or marked items to Trash. Review and type yes."),
+            ("R", "Restore selected or marked top-level Trash items to their original locations. Review and type yes."),
+            ("D", "Permanently delete selected or marked top-level Trash items. Review and type DELETE exactly. Irreversible."),
+            ("Example: restore", "Trash an item with d. Open the appropriate Trash/files directory using g (m / F4 may show home Trash). Select the item, press R, review and confirm."),
+            ("Workspace Trash", "Use the workspace's supplied data directory followed by Trash/files, not the real home Trash."),
+            ("Personal Trash", "Native home Trash must already exist with private permissions. Same-filesystem only."),
+            ("Safety", "No fallback to permanent deletion if Trash fails. Restore refuses occupied destinations. A failed permanent deletion can be partial."),
+        ],
+    },
+    Topic {
+        title: "Review, recovery and safety",
+        requires_workspace: true,
+        rows: &[
+            ("j", "Open the read-only pending journal. Inspect source, destination and staging/metadata; pending does not mean failed."),
+            ("O", "Select the existing published copy, enter the original absolute path and retained-move transaction ID from inspected evidence, then a new filename. Review and type recover. Requires matching current manifests; preserves both copies and original journal."),
+            ("Review paths", "Up / Down scroll one line; PgUp / PgDn scroll a page. Enter advances to the end, then opens the confirmation prompt."),
+            ("Confirmation", "Type yes (or round-time for opt-in timestamp rounding, DELETE for permanent deletion). Enter submits, Backspace edits, Esc / Ctrl+C cancels. Anything other than the required word declines the operation."),
+            ("During worker", "Esc / Ctrl+C requests cancellation. It may wait for a safe checkpoint. Once commit begins, the current item must finish safely."),
+            ("After interruption", "Inspect j and the actual paths before retrying. Staging and pending records can remain. Recovery does not replay, delete or roll back automatically."),
+            ("Undo limits", "Undo is session-local and only for eligible moves/renames, not permanent deletion."),
+            ("Write scope", "Writes require an explicit workspace or personal mode and approval by the safety policy. Root, protected paths and unapproved mounts are refused."),
+            ("Backups", "A journal is not a backup. Keep independent copies of important files; never run as root."),
+        ],
+    },
+    Topic {
+        title: "Modes and shell commands",
+        requires_workspace: false,
+        rows: &[
+            ("Read-only", "--browse PATH; navigator writes and settings save are disabled. External file opening can still modify files."),
+            ("Workspace", "--workspace ROOT JOURNAL DATA; private owned workspace, separate private journal and private data directory inside the workspace."),
+            ("Personal", "--personal JOURNAL [EXTRA_MOUNT ...]; explicit approved roots, existing private journal, real account HOME."),
+            ("tt_rust_list", "List a directory from Bash after sourcing preview integration.sh."),
+            ("tt_rust_ls", "Use optional eza for a directory listing, or the native list if unavailable. No eza output is used for file operations."),
+            ("tt_rust_nav", "Browse from the current directory, then select a directory to return to Bash."),
+            ("tt_rust_workspace", "Launch the scoped workspace with ROOT JOURNAL DATA."),
+            ("tt_rust_personal", "Launch personal mode with JOURNAL and optional approved mount roots."),
+            ("Preview install", "Rust preview is separate from Python; it does not replace existing Bash integration."),
+        ],
+    },
 ];
 
 // Unicode-width wrapping with hard breaks for long words; never drop characters.
@@ -243,7 +278,11 @@ pub fn show(writable: bool, personal: bool, return_on_enter: bool) -> io::Result
         "read-only"
     };
     let title = format!("Terminal Tree help | {mode}");
-    let labels: Vec<_> = TOPICS
+    let topics: Vec<_> = TOPICS
+        .iter()
+        .filter(|topic| writable || !topic.requires_workspace)
+        .collect();
+    let labels: Vec<_> = topics
         .iter()
         .enumerate()
         .map(|(i, t)| format!("{}. {}", i + 1, t.title))
@@ -252,7 +291,7 @@ pub fn show(writable: bool, personal: bool, return_on_enter: bool) -> io::Result
         let Some(i) = super::choose(&title, &labels)? else {
             return Ok(());
         };
-        topic(&TOPICS[i])?;
+        topic(topics[i])?;
     }
 }
 #[cfg(test)]

@@ -158,6 +158,7 @@ impl Engine {
         for directory in &layout.directories {
             descend(&payload, Path::new(directory))?;
         }
+        let mut buffer = vec![0; 64 * 1024];
         for (path, expected) in &files {
             let p = file_parent(&payload, path)?;
             let name = path.file_name().unwrap();
@@ -166,7 +167,7 @@ impl Engine {
                 rx::FileType::from_raw_mode(stat.st_mode) == rx::FileType::RegularFile,
                 "staged file type changed",
             )?;
-            let file: File = rx::openat(
+            let mut file: File = rx::openat(
                 &p,
                 name,
                 OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
@@ -182,10 +183,11 @@ impl Engine {
                     && m.len() == expected.len() as u64,
                 "staged file identity changed",
             )?;
-            let mut actual = Vec::with_capacity(expected.len());
-            file.take(expected.len() as u64 + 1)
-                .read_to_end(&mut actual)?;
-            require(actual.as_slice() == *expected, "staged payload differs")?;
+            for chunk in expected.chunks(buffer.len()) {
+                file.read_exact(&mut buffer[..chunk.len()])?;
+                require(&buffer[..chunk.len()] == chunk, "staged payload differs")?;
+            }
+            require(file.read(&mut buffer[..1])? == 0, "staged payload grew")?;
         }
         checkpoint("extract-before-publish")?;
         self.check_journal()?;

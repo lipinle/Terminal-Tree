@@ -39,14 +39,6 @@ fn eligible(file: &File) -> io::Result<()> {
     )
 }
 
-fn hex_path(path: &Path) -> String {
-    path.as_os_str()
-        .as_bytes()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
-}
-
 impl Engine {
     fn retention_directory(&self, original: &Path, id: &str) -> io::Result<(File, File, PathBuf)> {
         require(id_valid(id), "invalid retained transaction ID")?;
@@ -115,7 +107,7 @@ impl Engine {
             ("stage_bytes_hex", retained.as_path()),
         ] {
             require(
-                record[key].as_str() == Some(hex_path(path).as_str()),
+                record[key].as_str() == Some(super::hex_path(path).as_str()),
                 "operator paths differ from journal evidence",
             )?;
         }

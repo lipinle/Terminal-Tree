@@ -24,6 +24,28 @@ def main(binary):
         finally:
             if p and p.poll() is None: p.kill(); p.wait()
             os.close(master); os.close(slave)
+        # Visiting a folder with Right is provisional until Enter selects a folder.
+        for index, cancel in enumerate((b"q", b"\x1b", b"\x03")):
+            channel = resultdir / f"cancel-{index}"
+            channel.touch(mode=0o600)
+            master, slave = pty.openpty()
+            try:
+                fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 120, 0, 0))
+                p = subprocess.Popen([binary, "--result", str(channel)], cwd=root,
+                                     stdin=slave, stdout=slave, stderr=slave,
+                                     env=dict(os.environ, TERM="xterm-256color"))
+                wait_output(master, p, b"Rust / read-only")
+                os.write(master, b"\x1b[C")
+                wait_output(master, p, os.fsencode(child.resolve()))
+                os.write(master, cancel)
+                assert p.wait(timeout=8) == 0
+                assert channel.read_bytes() == b""
+            finally:
+                if p.poll() is None:
+                    p.kill()
+                    p.wait()
+                os.close(master)
+                os.close(slave)
         sentinel=base/"sentinel"; sentinel.write_bytes(b"untouched")
         link=resultdir/"link"; link.symlink_to(sentinel)
         assert subprocess.run([binary,"--result",str(link)],capture_output=True).returncode!=0
@@ -34,7 +56,7 @@ def shell_wrappers(binary):
     root = Path(__file__).resolve().parents[2]
     with tempfile.TemporaryDirectory(prefix="tt-shell-wrappers-") as tmp:
         base = Path(tmp)
-        install = base / "preview with spaces"
+        install = base / "preview with spaces\n"
         install.mkdir(mode=0o700)
         import shutil
         shutil.copyfile(root / "rust/integration-preview.sh", install / "integration.sh")

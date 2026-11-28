@@ -89,7 +89,9 @@ pub(crate) fn prompt(label: &str) -> io::Result<Option<String>> {
             KeyCode::Backspace => {
                 input.pop();
             }
-            KeyCode::Char(c) if !c.is_control() && input.len() < 4096 => input.push(c),
+            KeyCode::Char(c) if !c.is_control() && input.len() + c.len_utf8() <= 4096 => {
+                input.push(c)
+            }
             _ => (),
         }
     }

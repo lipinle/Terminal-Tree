@@ -4,7 +4,9 @@ use super::{
     MAX_ARCHIVE_BYTES,
 };
 use crate::readonly_file::ReadSession;
+use std::io::BufReader;
 use std::io::{self, Read, Write};
+use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -61,6 +63,12 @@ pub fn compress_archive(bytes: &[u8]) -> io::Result<Vec<u8>> {
 /// The caller must still validate the resulting USTAR before using it.
 pub fn read_archive_bytes(path: &Path) -> io::Result<Vec<u8>> {
     let session = ReadSession::open(path)?;
+    let bytes = archive_bytes(&session)?;
+    session.verify()?;
+    Ok(bytes)
+}
+
+fn archive_bytes(session: &ReadSession) -> io::Result<Vec<u8>> {
     let len = session.len();
     if len > MAX_COMPRESSED_BYTES as u64 {
         return Err(invalid("archive input budget exceeded"));
@@ -78,20 +86,43 @@ pub fn read_archive_bytes(path: &Path) -> io::Result<Vec<u8>> {
         }
         bytes
     };
-    session.verify()?;
     Ok(bytes)
 }
 
+// Plain USTAR inspection only needs a buffered reader, even at the size limit.
+fn inspect<T>(path: &Path, parse: impl FnOnce(&mut dyn Read) -> io::Result<T>) -> io::Result<T> {
+    let session = ReadSession::open(path)?;
+    let mut magic = [0; 2];
+    if session.len() >= 2 {
+        session.file().read_exact_at(&mut magic, 0)?;
+    }
+    let result = if magic == [0x1f, 0x8b] {
+        parse(&mut archive_bytes(&session)?.as_slice())?
+    } else {
+        if session.len() > MAX_ARCHIVE_BYTES as u64 {
+            return Err(invalid("USTAR byte budget exceeded"));
+        }
+        let mut input = BufReader::new(session.file()).take(session.len() + 1);
+        let parsed = parse(&mut input)?;
+        if input.limit() != 1 {
+            return Err(invalid("archive input length changed"));
+        }
+        parsed
+    };
+    session.verify()?;
+    Ok(result)
+}
+
 pub fn list_file(path: &Path) -> io::Result<Vec<Member>> {
-    list(read_archive_bytes(path)?.as_slice())
+    inspect(path, |reader| list(reader))
 }
 
 pub fn layout_file(path: &Path) -> io::Result<LayoutPreview> {
-    layout_preview(read_archive_bytes(path)?.as_slice())
+    inspect(path, |reader| layout_preview(reader))
 }
 
 pub fn portable_layout_file(path: &Path) -> io::Result<LayoutPreview> {
-    portable_layout_preview(read_archive_bytes(path)?.as_slice())
+    inspect(path, |reader| portable_layout_preview(reader))
 }
 
 /// Return a regular member only after full portable archive validation.

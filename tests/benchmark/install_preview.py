@@ -5,7 +5,7 @@ from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[2]
 with tempfile.TemporaryDirectory(prefix="tt-preview-install-") as tmp:
-    base=Path(tmp); target=base/"native"
+    base=Path(tmp); target=base/"native\n"
     rc=base/".bashrc"; rc.write_bytes(b"# untouched\n")
     # Installer is passed an explicit target and must not read/write HOME's shell config.
     env=dict(os.environ,HOME=str(base),CARGO_HOME=os.environ.get("CARGO_HOME",str(Path.home()/".cargo")),RUSTUP_HOME=os.environ.get("RUSTUP_HOME",str(Path.home()/".rustup")))
@@ -50,6 +50,16 @@ with tempfile.TemporaryDirectory(prefix="tt-preview-install-") as tmp:
         env=env,capture_output=True,timeout=15,
     )
     assert refused.returncode!=0
+    nested_alias = subprocess.run(
+        ["bash", str(ROOT/"rust/install-preview.sh"), str(alias/"new")],
+        env=env, capture_output=True, timeout=15,
+    )
+    assert nested_alias.returncode != 0 and not (target/"new").exists()
+    missing_args = subprocess.run(
+        ["bash", str(ROOT/"rust/install-preview.sh"), "--update"],
+        cwd=base, env=env, capture_output=True, timeout=15,
+    )
+    assert missing_args.returncode == 2 and not (base/"--update").exists()
     assert alias.is_symlink() and alias.readlink()==target
     assert binary.read_bytes()==before
     assert integration.read_bytes()==original_integration
@@ -58,7 +68,7 @@ with tempfile.TemporaryDirectory(prefix="tt-preview-install-") as tmp:
     verify=ROOT/"rust/verify-preview-install.sh"
     uninstall=ROOT/"rust/uninstall-preview.sh"
     subprocess.run(["bash",str(verify),str(target)],check=True,env=env,timeout=15)
-    updated=base/"updated"
+    updated=base/"native"
     subprocess.run(["bash",str(ROOT/"rust/install-preview.sh"),"--update",str(target),str(updated)],
                    check=True,env=env,timeout=300)
     assert binary.read_bytes()==before

@@ -2,6 +2,8 @@
 
 Terminal Tree is a terminal file navigator with explicitly scoped native Linux file operations. This is a release candidate under validation, not a stable release or a replacement for independent backups. No stable release is implied by a successful build.
 
+To start browsing after building or installing, run `terminal-tree --browse .`. Use the arrow keys to navigate, F1 for help and q to exit. Run `terminal-tree --help` for the commands available in your build.
+
 ## Installation and updates
 
 On Linux, install the Rust toolchain, a C toolchain, Bash, GNU coreutils and gzip. Build as a normal user, never with sudo:
@@ -20,7 +22,7 @@ bash rust/verify-preview-install.sh "$HOME/terminal-tree-preview"
 source "$HOME/terminal-tree-preview/integration.sh"
 ```
 
-The integration is optional and does not change .bashrc, cd, or the previous Python installation. Use tt_rust_nav, tt_rust_list, tt_rust_tree, tt_rust_panes and tt_rust_find in that interactive Bash session. Update by installing alongside the verified old version:
+The integration is optional and does not change .bashrc, cd, or the previous Python installation. Use tt_rust_nav, tt_rust_list, tt_rust_tree, tt_rust_panes and tt_rust_find in that interactive Bash session. In tt_rust_nav, Right enters a folder while browsing, Enter selects a folder for Bash, and q, Esc or Ctrl+C exits without selecting. Update by installing alongside the verified old version:
 
 ```sh
 bash rust/install-preview.sh --update "$HOME/terminal-tree-preview" "$HOME/terminal-tree-preview-new"

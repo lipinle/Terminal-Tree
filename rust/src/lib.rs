@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Native read-only filesystem model. No file mutation API is exposed.
+//! Portable filesystem navigation with opt-in, scoped Linux file operations.
 #[cfg(all(feature = "native-ops", not(target_os = "linux")))]
 compile_error!("native-ops requires the Linux safety backend; use the default read-only build on other platforms");
 pub mod archive;
@@ -256,9 +256,32 @@ impl Model {
     }
 
     pub fn reload(&mut self) -> io::Result<()> {
-        let selected_path = self.entries.get(self.selected).map(|e| e.path.clone());
-        let mut entries = scan(&self.directory, self.hidden, self.order, &self.query)?;
-        entries.retain(|e| self.kind_filter.accepts(e));
+        self.set_view(
+            self.hidden,
+            self.order,
+            self.kind_filter,
+            self.query.clone(),
+        )
+    }
+
+    /// Publish view preferences and matching rows together after a successful scan.
+    pub fn set_view(
+        &mut self,
+        hidden: bool,
+        order: Order,
+        kind: KindFilter,
+        query: String,
+    ) -> io::Result<()> {
+        let mut entries = scan(&self.directory, hidden, order, &query)?;
+        entries.retain(|entry| kind.accepts(entry));
+        let selected_path = self
+            .entries
+            .get(self.selected)
+            .map(|entry| entry.path.clone());
+        self.hidden = hidden;
+        self.order = order;
+        self.kind_filter = kind;
+        self.query = query;
         self.entries = entries;
         self.selected = selected_path
             .and_then(|p| self.entries.iter().position(|e| e.path == p))
@@ -375,6 +398,24 @@ mod tests {
         fn drop(&mut self) {
             fs::remove_dir_all(&self.0).unwrap();
         }
+    }
+
+    #[test]
+    fn failed_view_change_preserves_filter_and_visible_rows() {
+        let fixture = Fixture::new();
+        let dir = fixture.0.join("view");
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("visible"), b"x").unwrap();
+        let mut model = Model::new(dir.clone()).unwrap();
+        fs::rename(dir, fixture.0.join("moved")).unwrap();
+        assert!(model
+            .set_view(true, Order::Date, KindFilter::Links, "other".into())
+            .is_err());
+        assert!(!model.hidden);
+        assert_eq!(model.order, Order::Name);
+        assert_eq!(model.kind_filter, KindFilter::All);
+        assert!(model.query.is_empty());
+        assert_eq!(model.entries[model.selected].name, "visible");
     }
 
     #[test]
