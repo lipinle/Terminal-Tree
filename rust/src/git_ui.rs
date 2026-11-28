@@ -58,7 +58,7 @@ pub fn show(directory:&Path,enabled:bool)->io::Result<()>{
             Some(4)=>{
                 if editing{editing=false;}else{
                     let detail=format!("Enable Git editing in {}",display_name(repo.root().as_os_str()));
-                    editing=review("Separate Git authority: outside file journal; hooks/signing disabled",&detail)?;
+                    editing=review("Separate Git authority: repository filters may execute programs; outside file journal; hooks/signing disabled",&detail)?;
                 }
             }
             Some(5) if editing=>{

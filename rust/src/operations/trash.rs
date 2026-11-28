@@ -568,22 +568,26 @@ impl<'a> Trash<'a> {
             .log(&id, "gio-trash", Some(&item.path), None, None)?;
         self.engine.check(item)?;
         checkpoint("trash-commit")?;
-        let status = Command::new("gio")
+        let status = Command::new("/usr/bin/gio")
             .arg("trash")
             .arg("--")
             .arg(&item.path)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("LC_ALL", "C")
+            .env("GIO_USE_VFS", "local")
             .env("XDG_DATA_HOME", &self.data_home)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .output()?;
+            .stderr(Stdio::null())
+            .status()?;
         require(
-            status.status.success(),
+            status.success(),
             "GIO trash failed; inspect pending journal",
         )?;
         // GIO owns destination selection. No permanent-delete fallback.
         no_conflict(&item.path)?;
-        same_parent(item.path.parent().unwrap(), &parent)?;
+        same_parent(item.path.parent().ok_or_else(|| io::Error::other("Trash item has no parent"))?, &parent)?;
         parent.sync_all()?;
         self.engine.complete(&id)
     }
@@ -596,7 +600,7 @@ impl<'a> Trash<'a> {
                 && item.parent == dir_id(&files)?,
             "select a top-level home Trash item",
         )?;
-        let mut name = item.path.file_name().unwrap().to_os_string();
+        let mut name = item.path.file_name().ok_or_else(|| io::Error::other("Trash item has no file name"))?.to_os_string();
         name.push(".trashinfo");
         let (info_identity, info_bytes) = info_file(&info_parent, &name)?;
         let original = parse_info(&info_bytes)?;
@@ -743,7 +747,7 @@ impl<'a> Trash<'a> {
             &item.snapshot,
             Path::new("."),
         )?;
-        let mut name = item.path.file_name().unwrap().to_os_string();
+        let mut name = item.path.file_name().ok_or_else(|| io::Error::other("Trash item has no file name"))?.to_os_string();
         name.push(".trashinfo");
         let info = match info_file(&info_parent, &name) {
             Ok((id, bytes)) => Some((self.root.join("info").join(&name), id, bytes)),

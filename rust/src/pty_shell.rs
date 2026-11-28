@@ -141,7 +141,15 @@ mod tests{
     #[ignore="requires installed nano and xterm terminfo"]
     fn nano_fullscreen_smoke(){
         let mut s=Shell::start(Path::new("/tmp"),80,24).unwrap();
-        send(&mut s,"TERM=xterm-256color /usr/bin/nano --ignorercfiles --view /dev/null; printf '\\nNANO_EXIT:%s\\n' \"$?\"\n");
+        // Nano rejects device files. Use a private regular-file fixture.
+        let fixture=Path::new("/tmp").join(format!("tt-nano-fixture-{}",std::process::id()));
+        let mut file=std::fs::OpenOptions::new().write(true).create_new(true).open(&fixture).unwrap();
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup{fn drop(&mut self){let _=std::fs::remove_file(&self.0);}}
+        let _cleanup=Cleanup(fixture.clone());
+        file.write_all(b"Terminal Tree editor fixture\n").unwrap();
+        drop(file);
+        send(&mut s,&format!("TERM=xterm-256color /usr/bin/nano --ignorercfiles --view /tmp/tt-nano-fixture-{}; printf '\\nNANO_EXIT:%s\\n' \"$?\"\n",std::process::id()));
         let mut found=false;
         for _ in 0..300{
             s.tick().unwrap();

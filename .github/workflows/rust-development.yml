@@ -27,6 +27,25 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
           key: cargo-registry-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust/Cargo.lock') }}
+      - name: Development formatting and lint report
+        continue-on-error: true
+        run: |
+          rustup toolchain install 1.100.0 --profile minimal --component rustfmt --component clippy
+          set +e
+          cargo +1.100.0 fmt --manifest-path rust/Cargo.toml --all -- --check > /tmp/tt-format.txt 2>&1
+          fmt_status=$?
+          cargo +1.100.0 clippy --locked --manifest-path rust/Cargo.toml --all-targets --all-features -- -D warnings > /tmp/tt-clippy.txt 2>&1
+          lint_status=$?
+          printf 'rustfmt=%s clippy=%s\n' "$fmt_status" "$lint_status"
+          grep -E '^error:|^warning:|^Diff in ' /tmp/tt-format.txt /tmp/tt-clippy.txt | head -n 100 || true
+          cargo +1.100.0 fmt --manifest-path rust/Cargo.toml --all
+          git diff --no-color -- rust > /tmp/tt-rustfmt.patch
+          git restore --worktree -- rust
+          mkdir -p quality-report
+          cp /tmp/tt-format.txt /tmp/tt-clippy.txt /tmp/tt-rustfmt.patch quality-report/
+          if (( fmt_status != 0 || lint_status != 0 )); then
+            echo "::warning::Development formatting/lint issues; see quality report. Release checks remain strict."
+          fi
       - name: Compile and test native Rust
         run: cargo test --locked --manifest-path rust/Cargo.toml --features native-ops
       - name: Install companion tools for integration tests
@@ -83,5 +102,6 @@ jobs:
             preview-dist/terminal-tree-ux-preview-linux-x86_64.tar.gz
             preview-dist/SHA256SUMS
             preview-dist/terminal-tree-screenshot.png
+            quality-report/
           if-no-files-found: error
           retention-days: 14

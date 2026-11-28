@@ -15,7 +15,7 @@ Browse files, organize folders, inspect documents and work with Git — without 
 
 </div>
 
-> **Choose your version:** [Standard 3.0.0](https://github.com/lipinle/Terminal-Tree/releases/tag/v3.0.0) is the stable Rust release. This development branch contains the experimental UX preview described below. New UI features and graphics add-ons are not part of the stable release archive.
+> **Choose your version:** [Standard 3.0.0](https://github.com/lipinle/Terminal-Tree/releases/tag/v3.0.0) is the stable Rust release. This development branch contains the experimental 3.1.0-alpha.1 UX preview described below. New UI features and graphics add-ons are not part of the stable release archive.
 
 The Rust edition is the actively developed product; legacy Python editions are historical and no longer maintained as the active edition. Existing Python installations are not modified by the Rust installer.
 

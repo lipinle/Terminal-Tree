@@ -76,7 +76,7 @@ const HISTORY_BYTES:usize=128*1024;
 #[derive(Clone,Default)]
 struct Cell {text:String,style:Style,wide:u8} // 0 blank, 1 normal, 2 lead, 3 continuation
 #[derive(Default)]
-enum Input {#[default] Ground,Escape,Csi(Vec<u8>),DiscardCsi,ControlString(bool),Utf8(Vec<u8>,usize)}
+enum Input {#[default] Ground,Escape,Charset,Csi(Vec<u8>),DiscardCsi,ControlString(bool),Utf8(Vec<u8>,usize)}
 pub fn bounds(cols:u16,rows:u16)->(u16,u16){(cols.clamp(1,MAX_COLS),rows.clamp(1,MAX_ROWS))}
 struct Primary {
     grid:Vec<Vec<Cell>>,x:usize,y:usize,saved:(usize,usize),style:Style,
@@ -293,6 +293,7 @@ impl Screen{
             },
             Input::Escape=>match b{
                 b'['=>self.input=Input::Csi(Vec::new()),
+                b'('|b')'|b'*'|b'+'=>self.input=Input::Charset,
                 b']'|b'P'|b'_'|b'^'|b'X'=>self.input=Input::ControlString(false),
                 b'D'=>self.index(),b'M'=>self.reverse_index(),b'E'=>self.newline(),
                 b'7'=>self.saved=(self.x,self.y),
@@ -300,6 +301,7 @@ impl Screen{
                 27=>self.input=Input::Escape,
                 _=>(),
             },
+            Input::Charset=>{if b==27{self.input=Input::Escape;}},
             Input::Csi(mut p)=>{
                 if (0x40..=0x7e).contains(&b){self.csi(&p,b);}
                 else if b==27{self.input=Input::Escape;}
