@@ -289,7 +289,7 @@ impl<'a> Trash<'a> {
     }
     fn private_dir(&self, name: &str) -> io::Result<File> {
         if let Some((root, files, info)) = &self.pinned {
-            let policy = self.engine.personal.as_ref().unwrap();
+            let policy = self.engine.personal.as_ref().ok_or_else(|| fail("pinned Trash requires personal policy"))?;
             require(
                 dir_id(&policy.trash_dir(&self.root)?)? == dir_id(root)?,
                 "Trash root replaced",
@@ -361,7 +361,7 @@ impl<'a> Trash<'a> {
         reject_mounts(&item.path)?;
         let parent = self.private_dir("files")?;
         require(dir_id(&parent)? == item.parent, "Trash parent changed")?;
-        let entry = fd_path(&parent).join(item.path.file_name().unwrap());
+        let entry = fd_path(&parent).join(item.path.file_name().ok_or_else(|| fail("missing filename"))?);
         require(
             identity(&fs::symlink_metadata(&entry)?) == item.identity,
             "Trash item changed",
@@ -383,13 +383,13 @@ impl<'a> Trash<'a> {
         let parent = self.engine.check(item)?;
         let files = self.private_dir("files")?;
         let info = self.private_dir("info")?;
-        let source = fd_path(&parent).join(item.path.file_name().unwrap());
+        let source = fd_path(&parent).join(item.path.file_name().ok_or_else(|| fail("missing filename"))?);
         require(
             fs::symlink_metadata(&source)?.dev() == files.metadata()?.dev(),
             "cross-device Trash refused; use Python for external Trash",
         )?;
         let id = unique()?;
-        let mut name = item.path.file_name().unwrap().as_bytes().to_vec();
+        let mut name = item.path.file_name().ok_or_else(|| fail("missing filename"))?.as_bytes().to_vec();
         name.truncate(180);
         name.extend_from_slice(format!("-tt-{id}").as_bytes());
         let name = OsString::from_vec(name);
@@ -469,7 +469,7 @@ impl<'a> Trash<'a> {
         checkpoint("trash-commit")?;
         rx::renameat_with(
             &parent,
-            item.path.file_name().unwrap(),
+            item.path.file_name().ok_or_else(|| fail("missing filename"))?,
             &files,
             &name,
             rx::RenameFlags::NOREPLACE,
@@ -527,7 +527,7 @@ impl<'a> Trash<'a> {
             dir_id(&dst)? == review.destination.parent,
             "restore destination replaced",
         )?;
-        no_conflict(&fd_path(&dst).join(review.destination.path().file_name().unwrap()))?;
+        no_conflict(&fd_path(&dst).join(review.destination.path().file_name().ok_or_else(|| fail("missing filename"))?))?;
         require(
             review.item.identity.0 == dst.metadata()?.dev(),
             "cross-device restore refused",
@@ -540,7 +540,7 @@ impl<'a> Trash<'a> {
         self.check_purge_info(review)?;
         preflight_purge(
             &parent,
-            review.item.path.file_name().unwrap(),
+            review.item.path.file_name().ok_or_else(|| fail("missing filename"))?,
             &review.item.snapshot,
             Path::new("."),
         )
@@ -628,7 +628,7 @@ impl<'a> Trash<'a> {
             dir_id(&parent)? == review.info_parent,
             "Trash info directory changed",
         )?;
-        let (id, bytes) = info_file(&parent, review.info.file_name().unwrap())?;
+        let (id, bytes) = info_file(&parent, review.info.file_name().ok_or_else(|| fail("missing filename"))?)?;
         require(
             id == review.info_identity && bytes == review.info_bytes,
             "Trash metadata changed",
@@ -652,7 +652,7 @@ impl<'a> Trash<'a> {
                 dir_id(&dst)? == review.destination.parent,
                 "restore destination replaced",
             )?;
-            no_conflict(&fd_path(&dst).join(review.destination.path().file_name().unwrap()))?;
+            no_conflict(&fd_path(&dst).join(review.destination.path().file_name().ok_or_else(|| fail("missing filename"))?))?;
         }
         let id = unique()?;
         self.engine.log(
@@ -671,8 +671,8 @@ impl<'a> Trash<'a> {
                 dir_id(&dst)? == review.destination.parent,
                 "restore destination replaced",
             )?;
-            let name = review.item.path.file_name().unwrap();
-            let target = review.destination.path().file_name().unwrap();
+            let name = review.item.path.file_name().ok_or_else(|| fail("missing filename"))?;
+            let target = review.destination.path().file_name().ok_or_else(|| fail("missing filename"))?;
             require(
                 fs::symlink_metadata(fd_path(&src).join(name))?.dev() == dst.metadata()?.dev(),
                 "cross-device restore refused",
@@ -718,7 +718,7 @@ impl<'a> Trash<'a> {
         }
         let cleanup = (|| -> io::Result<()> {
             let parent = self.check_info(review)?;
-            rx::unlinkat(&parent, review.info.file_name().unwrap(), AtFlags::empty())?;
+            rx::unlinkat(&parent, review.info.file_name().ok_or_else(|| fail("missing filename"))?, AtFlags::empty())?;
             checkpoint("restore-info-before-sync")?;
             parent.sync_all()?;
             checkpoint("restore-info-after-sync")?;
@@ -743,7 +743,7 @@ impl<'a> Trash<'a> {
         )?;
         preflight_purge(
             &files,
-            item.path.file_name().unwrap(),
+            item.path.file_name().ok_or_else(|| fail("missing filename"))?,
             &item.snapshot,
             Path::new("."),
         )?;
@@ -767,13 +767,13 @@ impl<'a> Trash<'a> {
             "Trash info directory changed",
         )?;
         if let Some((p, id, bytes)) = &review.info {
-            let actual = info_file(&dir, p.file_name().unwrap())?;
+            let actual = info_file(&dir, p.file_name().ok_or_else(|| fail("missing filename"))?)?;
             require(
                 actual.0 == *id && actual.1 == *bytes,
                 "Trash metadata changed",
             )?;
         } else {
-            let mut name = review.item.path.file_name().unwrap().to_os_string();
+            let mut name = review.item.path.file_name().ok_or_else(|| fail("missing filename"))?.to_os_string();
             name.push(".trashinfo");
             no_conflict(&fd_path(&dir).join(name))?;
         }
@@ -800,7 +800,7 @@ impl<'a> Trash<'a> {
             "Trash files directory changed",
         )?;
         self.check_purge_info(review)?;
-        let name = review.item.path.file_name().unwrap();
+        let name = review.item.path.file_name().ok_or_else(|| fail("missing filename"))?;
         preflight_purge(&parent, name, &review.item.snapshot, Path::new("."))?;
         let id = unique()?;
         self.engine.log(
@@ -831,7 +831,7 @@ impl<'a> Trash<'a> {
         let cleanup = (|| -> io::Result<()> {
             let info_parent = self.check_purge_info(review)?;
             if let Some((p, _, _)) = &review.info {
-                rx::unlinkat(&info_parent, p.file_name().unwrap(), AtFlags::empty())?;
+                rx::unlinkat(&info_parent, p.file_name().ok_or_else(|| fail("missing filename"))?, AtFlags::empty())?;
                 checkpoint("purge-info-before-sync")?;
                 info_parent.sync_all()?;
                 checkpoint("purge-info-after-sync")?;

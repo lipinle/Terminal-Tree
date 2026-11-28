@@ -362,9 +362,9 @@ impl Engine {
         let path = self.path(path)?;
         reject_mounts(&path)?;
         let parent = self.parent_for(&path)?;
-        let m = fs::symlink_metadata(fd_path(&parent).join(path.file_name().unwrap()))?;
+        let m = fs::symlink_metadata(fd_path(&parent).join(path.file_name().ok_or_else(|| fail("missing filename"))?))?;
         let (manifest, snapshot) = manifest_with(
-            &fd_path(&parent).join(path.file_name().unwrap()),
+            &fd_path(&parent).join(path.file_name().ok_or_else(|| fail("missing filename"))?),
             false,
             checkpoint,
         )?;
@@ -384,7 +384,7 @@ impl Engine {
         reject_mounts(&p)?;
         let parent = self.parent_for(&p)?;
         require(dir_id(&parent)? == review.parent, "source parent changed")?;
-        let entry = fd_path(&parent).join(p.file_name().unwrap());
+        let entry = fd_path(&parent).join(p.file_name().ok_or_else(|| fail("missing filename"))?);
         require(
             identity(&fs::symlink_metadata(&entry)?) == review.identity,
             "source changed",
@@ -395,7 +395,7 @@ impl Engine {
     fn check(&self, review: &Review) -> io::Result<File> {
         let parent = self.check_identity(review)?;
         let (content, ids) = manifest(
-            &fd_path(&parent).join(review.path.file_name().unwrap()),
+            &fd_path(&parent).join(review.path.file_name().ok_or_else(|| fail("missing filename"))?),
             false,
         )?;
         require(
@@ -446,7 +446,7 @@ impl Engine {
     pub fn destination(&self, path: &Path) -> io::Result<Destination> {
         let path = self.path(path)?;
         let parent = self.parent_for(&path)?;
-        no_conflict(&fd_path(&parent).join(path.file_name().unwrap()))?;
+        no_conflict(&fd_path(&parent).join(path.file_name().ok_or_else(|| fail("missing filename"))?))?;
         Ok(Destination {
             path,
             parent: dir_id(&parent)?,
@@ -472,10 +472,10 @@ impl Engine {
             dir_id(&parent)? == destination.parent,
             "reviewed destination replaced",
         )?;
-        no_conflict(&fd_path(&parent).join(dst.file_name().unwrap()))?;
+        no_conflict(&fd_path(&parent).join(dst.file_name().ok_or_else(|| fail("missing filename"))?))?;
         if matches!(kind, Transfer::Move) {
             require(
-                fs::symlink_metadata(fd_path(&src).join(review.path.file_name().unwrap()))?.dev()
+                fs::symlink_metadata(fd_path(&src).join(review.path.file_name().ok_or_else(|| fail("missing filename"))?))?.dev()
                     == parent.metadata()?.dev(),
                 "cross-device move refused",
             )?;
@@ -566,15 +566,15 @@ impl Engine {
             dir_id(&dest_parent)? == destination.parent,
             "reviewed destination replaced",
         )?;
-        let dest_name = dst.file_name().unwrap();
+        let dest_name = dst.file_name().ok_or_else(|| fail("missing filename"))?;
         let dest_entry = fd_path(&dest_parent).join(dest_name);
         no_conflict(&dest_entry)?;
         require(!dst.starts_with(&review.path), "destination inside source")?;
-        let src_name = review.path.file_name().unwrap();
+        let src_name = review.path.file_name().ok_or_else(|| fail("missing filename"))?;
         let src = fd_path(&src_parent).join(src_name);
         let id = unique()?;
         let stage_name = format!(".terminal-tree-copy-{id}");
-        let stage_path = dst.parent().unwrap().join(&stage_name);
+        let stage_path = dst.parent().ok_or_else(|| fail("missing parent"))?.join(&stage_name);
         let copy = matches!(kind, Transfer::Copy);
         if !copy {
             require(
@@ -733,7 +733,7 @@ impl Engine {
             dir_id(&parent)? == destination.parent,
             "reviewed destination replaced",
         )?;
-        let name = dst.file_name().unwrap();
+        let name = dst.file_name().ok_or_else(|| fail("missing filename"))?;
         no_conflict(&fd_path(&parent).join(name))?;
         let id = unique()?;
         self.log(

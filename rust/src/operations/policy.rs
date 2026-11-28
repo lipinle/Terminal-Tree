@@ -367,7 +367,7 @@ impl PersonalPolicy {
             }),
             "unapproved nested mount refused",
         )?;
-        let parent = open_absolute_dir(p.parent().unwrap())?;
+        let parent = open_absolute_dir(p.parent().ok_or_else(|| fail("missing parent"))?)?;
         require(
             mount_id(&parent)? == root.mount,
             "unapproved nested mount refused",
@@ -376,8 +376,8 @@ impl PersonalPolicy {
     }
     pub(super) fn parent(&self, p: &Path) -> io::Result<File> {
         let p = self.path(p)?;
-        let root = self.roots.iter().find(|r| p.starts_with(&r.path)).unwrap();
-        let dir = open_absolute_dir(p.parent().unwrap())?;
+        let root = self.roots.iter().find(|r| p.starts_with(&r.path)).ok_or_else(|| fail("outside approved personal roots"))?;
+        let dir = open_absolute_dir(p.parent().ok_or_else(|| fail("missing parent"))?)?;
         require(mount_id(&dir)? == root.mount, "parent mount changed")?;
         Ok(dir)
     }

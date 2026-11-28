@@ -448,7 +448,7 @@ impl Workspace {
                 let kind = *kind;
                 let mut items = Vec::with_capacity(reviews.len());
                 for review in reviews {
-                    let name = review.path().file_name().unwrap();
+                    let name = review.path().file_name().ok_or_else(|| error("missing filename"))?;
                     let dst = if key == 'V' {
                         if reviews.len() != 1 {
                             return Err(error("keep both requires one clipboard item"));
@@ -540,7 +540,7 @@ impl Workspace {
                     return Err(error("cut one regular file first"));
                 }
                 let review = &reviews[0];
-                let path = model.directory.join(review.path().file_name().unwrap());
+                let path = model.directory.join(review.path().file_name().ok_or_else(|| error("missing filename"))?);
                 self.ordinary(review.path())?;
                 self.ordinary(&path)?;
                 let target = self.engine.destination(&path)?;
