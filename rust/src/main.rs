@@ -570,12 +570,13 @@ fn browse(
                         #[cfg(feature = "native-ops")]
                         KeyCode::F(6) => {
                             if let Some(w) = &mut workspace {
-                                match actions_menu(w, &mut model)? {
-                                    Some(msg) => {
+                                match actions_menu(w, &mut model) {
+                                    Ok(Some(msg)) => {
                                         message = msg;
                                         Ok(())
                                     }
-                                    None => Ok(()),
+                                    Ok(None) => Ok(()),
+                                    Err(error) => Err(error),
                                 }
                             } else {
                                 Ok(())

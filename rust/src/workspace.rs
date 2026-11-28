@@ -415,10 +415,8 @@ impl Workspace {
                         if reviews.len() != 1 {
                             return Err(error("keep both requires one clipboard item"));
                         }
-                        let candidate = terminal_tree::rename_plan::native::suggest(
-                            &model.directory,
-                            name,
-                        )?;
+                        let candidate =
+                            terminal_tree::rename_plan::native::suggest(&model.directory, name)?;
                         model.directory.join(candidate)
                     } else {
                         model.directory.join(name)

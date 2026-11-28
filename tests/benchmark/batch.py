@@ -75,6 +75,17 @@ def main(binary):
             assert [(source/n).read_bytes() for n in ("a","b")]==[b"a",b"b"]
             assert outside.read_bytes()==b"outside"
             assert not list(journal.glob("*.pending.json"))
+            # Keep both: preserve existing target and explicitly confirm the suggested name.
+            go(source)
+            send(b"\x1b[H"); wait(b"Rust / workspace")
+            send(b"c"); wait(b"Clipboard ready")
+            go(dest)
+            (dest/"a").write_bytes(b"occupied")
+            send(b"\x1b[17~"); wait(b"Actions - writes require review")
+            send(b"\x1b[F"); send(b"\r"); confirm(b"Copy item",b"Transfer completed")
+            assert (dest/"a").read_bytes()==b"occupied"
+            assert (dest/"a (1)").read_bytes()==b"a"
+            assert (source/"a").read_bytes()==b"a"
             # Exercise the actual action menu and reviewed bulk rename.
             go(source)
             send(b"a"); wait(b"2 marked")
@@ -104,7 +115,7 @@ def main(binary):
             assert not list(journal.glob("*.pending.json"))
             send(b"q"); assert p.wait(timeout=8)==0
             assert termios.tcgetattr(slave)==before
-            print("TT_BATCH_PTY marks, stale refusal, collision preflight, copy, move, Trash, restore and purge passed")
+            print("TT_BATCH_PTY marks, stale refusal, collision preflight, copy, move, Trash, restore, purge, keep both and bulk rename passed")
         finally:
             if p and p.poll() is None: p.kill(); p.wait()
             os.close(master); os.close(slave)
