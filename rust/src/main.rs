@@ -1046,10 +1046,10 @@ fn run() -> io::Result<()> {
                     let name = name
                         .into_string()
                         .map_err(|_| io::Error::other("archive member name must be UTF-8"))?;
-                    let path = path_arg(Some(
-                        args.next()
-                            .ok_or_else(|| io::Error::other("archive input path required"))?,
-                    ))?;
+                    let path =
+                        path_arg(Some(args.next().ok_or_else(|| {
+                            io::Error::other("archive input path required")
+                        })?))?;
                     files.push((name, path));
                 }
                 let archive = terminal_tree::archive_build::native::build_files(&files)?;

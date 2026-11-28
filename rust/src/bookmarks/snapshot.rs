@@ -222,7 +222,8 @@ mod tests {
 
     #[test]
     fn directory_only_suffix_never_reads_or_creates_a_snapshot() {
-        let parent = std::env::temp_dir().join(format!("tt-snapshot-suffix-{}", std::process::id()));
+        let parent =
+            std::env::temp_dir().join(format!("tt-snapshot-suffix-{}", std::process::id()));
         fs::DirBuilder::new().mode(0o700).create(&parent).unwrap();
         let path = parent.join("snapshot");
         let marks = Bookmarks::default();

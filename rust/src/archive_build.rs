@@ -118,7 +118,15 @@ mod tests {
 
     #[test]
     fn refuses_invalid_names_collisions_and_limits() {
-        for name in ["", "../escape", "/absolute", "a//b", "bad\0name", "a/.", "a/"] {
+        for name in [
+            "",
+            "../escape",
+            "/absolute",
+            "a//b",
+            "bad\0name",
+            "a/.",
+            "a/",
+        ] {
             assert!(build(&[file(name, b"")]).is_err());
         }
         assert!(build(&[file(&"x".repeat(101), b"")]).is_err());
