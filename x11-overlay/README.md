@@ -5,7 +5,10 @@ An independent MIT Rust helper (x11rb, MIT/Apache-2.0 upstream). No new dependen
 Build and install manually from the same checkout:
 
     cargo +stable build --release --manifest-path x11-overlay/Cargo.toml
-    sudo install -m 755 x11-overlay/target/release/tt-x11-overlay /usr/local/bin/tt-x11-overlay
+    mkdir -p "$HOME/.local/bin"
+    install -m 700 x11-overlay/target/release/tt-x11-overlay "$HOME/.local/bin/tt-x11-overlay"
+
+No sudo or PATH change is needed with the current core. It checks the user-local helper first and the legacy root-owned /usr/local/bin helper second. Home, .local and bin must be account-owned non-symlink directories without group/world write access. Rebuild and reinstall after updating the source; to uninstall, close Terminal Tree and remove only $HOME/.local/bin/tt-x11-overlay. Remove any older system-wide copy separately after verifying ownership and purpose.
 
 Build/install the current Visual Preview helper (RGB v2) too. Enable Visual Preview in Add-ons. In a dedicated, active GNOME Terminal X11 window with no other tabs, start:
 

@@ -32,7 +32,7 @@ jobs:
       - name: Install companion tools for integration tests
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends eza 7zip git xvfb xauth
+          sudo apt-get install -y --no-install-recommends eza 7zip git xvfb xauth xterm xdotool imagemagick fonts-dejavu-core
       - name: Verify companion tools on disposable fixtures
         run: |
           cargo test --locked --manifest-path rust/Cargo.toml --features native-ops --test external_tools -- --ignored
@@ -46,8 +46,7 @@ jobs:
           rustup run stable cargo test --manifest-path visual-preview/Cargo.toml
           rustup run stable cargo build --manifest-path visual-preview/Cargo.toml
           python3 tests/benchmark/visual_preview.py visual-preview/target/debug/tt-visual-preview
-          sudo install -m 755 visual-preview/target/debug/tt-visual-preview /usr/local/bin/tt-visual-preview
-          TT_TEST_VISUAL_PREVIEW=1 python3 tests/benchmark/app.py rust/target/debug/terminal-tree
+          TT_TEST_VISUAL_PREVIEW=1 TT_TEST_VISUAL_HELPER="$PWD/visual-preview/target/debug/tt-visual-preview" python3 tests/benchmark/app.py rust/target/debug/terminal-tree
           rustup run stable cargo metadata --manifest-path visual-preview/Cargo.toml --format-version 1 > /tmp/tt-visual-dependencies.json
           python3 -c 'import json; d=json.load(open("/tmp/tt-visual-dependencies.json")); print("\\n".join(sorted(p["name"]+" "+p["version"]+" "+str(p["license"]) for p in d["packages"])))'
       - name: Test optional X11 overlay
@@ -62,7 +61,7 @@ jobs:
       - name: Package UX preview for side-by-side testing
         run: |
           cargo build --locked --release --manifest-path rust/Cargo.toml --features native-ops --bin terminal-tree
-          TT_TEST_VISUAL_PREVIEW=1 python3 tests/benchmark/app.py rust/target/release/terminal-tree
+          TT_TEST_VISUAL_PREVIEW=1 TT_TEST_VISUAL_HELPER="$PWD/visual-preview/target/debug/tt-visual-preview" python3 tests/benchmark/app.py rust/target/release/terminal-tree
           mkdir -p preview-dist/payload
           install -m 755 rust/target/release/terminal-tree preview-dist/payload/terminal-tree
           cp LICENSE README.md ICON-NOTICES.md OPTIONAL-TOOLS.md preview-dist/payload/
@@ -70,6 +69,11 @@ jobs:
           printf '%s\n' 'Experimental UX preview; not a stable release. Keep existing installation intact.' 'Run: TT_APP_CONFIG_DIR="$HOME/.config/terminal-tree-ux-preview" ./terminal-tree --app "$HOME"' 'Visual preview helper is not bundled; build separately from source pending license audit.' > preview-dist/payload/TESTING.txt
           tar -czf preview-dist/terminal-tree-ux-preview-linux-x86_64.tar.gz -C preview-dist/payload .
           (cd preview-dist && sha256sum terminal-tree-ux-preview-linux-x86_64.tar.gz > SHA256SUMS)
+      - name: Capture actual application screenshot
+        continue-on-error: true
+        run: |
+          xvfb-run -a -s "-screen 0 1920x1080x24" bash tests/benchmark/screenshot.sh rust/target/release/terminal-tree preview-dist/terminal-tree-screenshot.png
+          sha256sum preview-dist/terminal-tree-screenshot.png
       - name: Upload UX preview artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -77,5 +81,6 @@ jobs:
           path: |
             preview-dist/terminal-tree-ux-preview-linux-x86_64.tar.gz
             preview-dist/SHA256SUMS
+            preview-dist/terminal-tree-screenshot.png
           if-no-files-found: error
           retention-days: 14

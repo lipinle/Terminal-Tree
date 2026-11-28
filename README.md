@@ -11,11 +11,15 @@ Browse files, organize folders, inspect documents and work with Git — without 
 [![Linux](https://img.shields.io/badge/Linux-native-FCC624?style=flat-square&logo=linux&logoColor=black)](#system-requirements)
 [![License](https://img.shields.io/badge/License-MIT-2563eb?style=flat-square)](LICENSE)
 
-[Download](#install) · [Features](#features) · [Compatibility](#terminal-compatibility) · [Add-ons](#add-ons) · [Shortcuts](#shortcuts)
+[Download](#install) · [Features](#features) · [Compatibility](#terminal-compatibility) · [Update & Uninstall](#update-and-uninstall) · [Add-ons](#add-ons) · [Troubleshooting](#help-and-troubleshooting)
 
 </div>
 
 > **Choose your version:** [Standard 3.0.0](https://github.com/lipinle/Terminal-Tree/releases/tag/v3.0.0) is the stable Rust release. This development branch contains the experimental UX preview described below. New UI features and graphics add-ons are not part of the stable release archive.
+
+The Rust edition is the actively developed product; legacy Python editions are historical and no longer maintained as the active edition. Existing Python installations are not modified by the Rust installer.
+
+[UX preview builds and application screenshot artifacts](https://github.com/lipinle/Terminal-Tree/actions/workflows/rust-development.yml?query=branch%3Aux-companion-tools) (sign in to GitHub to download available artifacts).
 
 ## Features
 
@@ -25,7 +29,9 @@ Browse files, organize folders, inspect documents and work with Git — without 
 | Clickable sidebar and bookmarks | Scoped copy, move and rename | File-type icons and colors |
 | Tabs and clickable breadcrumbs | File and folder creation | Resizable panels and layout zoom |
 | Text, Markdown, image and PDF preview | Git manager and archive inspection | Custom navigation shortcuts |
-| Search and command palette | Built-in Bash panel | Saved preferences |
+| Search and command palette | Built-in Bash panel | Custom icon mappings |
+
+Session and application preferences can be saved through Settings.
 
 Image/PDF previews require optional helpers. The embedded interactive Bash panel is experimental; full-screen terminal programs are not yet supported.
 
@@ -36,7 +42,7 @@ Image/PDF previews require optional helpers. The embedded interactive Bash panel
 | Linux (Ubuntu 22.04 / 24.04) | Native file operations; stable source builds tested |
 | Linux Mint / Debian-based distributions | Build from source; compatibility depends on system libraries |
 | Other Linux distributions | Source build; not individually certified |
-| Windows | Reduced read-only build; stable Windows CI tested |
+| Windows | Reduced read-only source build; stable Windows CI tested; no downloadable executable |
 | macOS | Not runtime-validated; no supported release package yet |
 
 The stable prebuilt archive is Linux x86-64 and targets Ubuntu 24.04-compatible system libraries. The source build requires Rust, a C toolchain and GNU/Linux utilities. The optional visual helper requires Rust 1.92 or newer. The latest UX preview has development CI coverage, not a full release compatibility certification.
@@ -111,6 +117,17 @@ source "$HOME/terminal-tree-preview/integration.sh"
 tt_rust_nav
 ~~~
 
+### Windows (read-only source build)
+
+No Windows binary or installer is published. With Rust and its Windows MSVC C++ build tools installed, you can build the portable edition from the checkout in PowerShell:
+
+~~~powershell
+cargo build --locked --release --manifest-path rust/Cargo.toml --no-default-features --bin terminal-tree
+.\rust\target\release\terminal-tree.exe --app $HOME
+~~~
+
+Native file writes, the Bash panel and Linux-only add-ons are unavailable. The current UX preview has not completed Windows release testing.
+
 ## Update and uninstall
 
 ### Update the UX preview
@@ -165,7 +182,9 @@ Review the displayed paths before confirming an operation. The journal is not a 
 | Ctrl+T / Ctrl+W | New / close tab |
 | F8 / Tab | Dual panes / switch focus |
 | Ctrl+C / X / V | Copy / cut / paste in writable mode |
-| F9 / Alt+P / Alt+V | Toggle preview / change mode / expand visual |
+| F9 | Toggle preview panel |
+| Alt+P | Switch Auto / Info / Hex preview |
+| Alt+V | Open expanded visual preview |
 | Alt+T / Alt+H | Focus / show or hide terminal panel |
 | Alt+S | Start or close persistent Bash session |
 | Alt+G / Ctrl+P | Git manager / companion tools |
@@ -198,35 +217,13 @@ Open **Add-ons**, enable the integrations you want, then use **Tools** or Ctrl+P
 
 ### Image and PDF previews (experimental)
 
-Build the helper from your source checkout:
+Install the [Visual Preview helper](visual-preview/README.md) from source into your own home directory (no sudo required), then enable **Visual Preview** in Add-ons. Select an image or PDF; scroll to turn PDF pages and use Alt+V to expand.
 
-~~~bash
-cargo +stable build --release --manifest-path visual-preview/Cargo.toml
-sudo install -m 755 visual-preview/target/release/tt-visual-preview \
-  /usr/local/bin/tt-visual-preview
-~~~
+For GNOME Terminal on X11, the optional [X11 Overlay helper](x11-overlay/README.md) provides higher-resolution previews.
 
-Enable **Visual Preview** in Add-ons. Select an image or PDF; use the mouse wheel to turn PDF pages and Alt+V to expand. GIF previews are still images.
+Both helpers have separate install, update and uninstall instructions. They are experimental, source-only and not bundled with either download. Existing system-wide installations remain supported.
 
-**GNOME Terminal on X11:** optionally install the additional overlay helper:
-
-~~~bash
-cargo +stable build --release --manifest-path x11-overlay/Cargo.toml
-sudo install -m 755 x11-overlay/target/release/tt-x11-overlay \
-  /usr/local/bin/tt-x11-overlay
-~~~
-
-Open a dedicated GNOME Terminal window, then launch:
-
-~~~bash
-TT_GRAPHICS=x11 "$HOME/terminal-tree-preview/terminal-tree" --app "$HOME"
-~~~
-
-Enable Visual Preview if needed. If calibration is unavailable, use Unicode or open the original file from expanded preview with O.
-
-The two visual helpers are source-only experiments and are not bundled with the stable archive or UX preview artifact. To update, rebuild and reinstall the helper you previously installed. To uninstall manually installed helpers, remove only their exact files under `/usr/local/bin` after confirming they belong to this installation.
-
-See [Visual Preview setup](visual-preview/README.md), [X11 Overlay setup](x11-overlay/README.md), and [companion tools](OPTIONAL-TOOLS.md) for more information.
+See [companion tools](OPTIONAL-TOOLS.md) for external program setup.
 
 ## Help and troubleshooting
 

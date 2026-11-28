@@ -3,7 +3,7 @@ use crate::readonly_file::ReadSession;
 use std::{io::{self,Read},path::Path,process::{Command,Stdio},fs};
 use std::os::unix::fs::PermissionsExt;
 const LIMIT:usize=20+1024*1024*3;
-const HELPER:&str="/usr/local/bin/tt-visual-preview";
+const HELPER:&str="tt-visual-preview";
 
 #[derive(Debug)]
 pub struct Frame {pub width:usize,pub height:usize,pub pages:u32,pixels:Vec<u8>}
@@ -15,7 +15,7 @@ impl Frame {
     }
 }
 fn executable(path:&str)->bool {fs::metadata(path).is_ok_and(|m|m.is_file()&&m.permissions().mode()&0o111!=0)}
-pub fn installed()->bool {executable(HELPER)&&executable("/usr/bin/timeout")&&executable("/usr/bin/prlimit")}
+pub fn installed()->bool {crate::helper_paths::find(HELPER).is_some()&&executable("/usr/bin/timeout")&&executable("/usr/bin/prlimit")}
 pub fn format(path:&Path)->Option<&'static str> {
     match path.extension()?.to_str()?.to_ascii_lowercase().as_str(){
         "png"|"jpg"|"jpeg"|"webp"|"gif"|"bmp"=>Some("image"),
@@ -39,12 +39,13 @@ pub fn render_hd(path:&Path,page:u32,w:u32,h:u32)->io::Result<Frame>{
 fn render_version(path:&Path,page:u32,w:u32,h:u32,version:&str,max:u32)->io::Result<Frame>{
     if !(1..=max).contains(&w)||!(1..=max).contains(&h)||page==0||page>10000{return Err(io::Error::other("invalid preview bounds"));}
     if !installed(){return Err(io::Error::other("Visual Preview add-on not installed"));}
+    let helper=crate::helper_paths::find(HELPER).ok_or_else(||io::Error::other("Visual Preview helper unavailable"))?;
     let kind=format(path).ok_or_else(||io::Error::other("unsupported visual format"))?;
     let limit=20+w as usize*h as usize*3;
     let session=ReadSession::open(path)?;
     if session.len()>16*1024*1024{return Err(io::Error::other("Visual Preview input exceeds 16 MiB"));}
     let mut child=Command::new("/usr/bin/timeout")
-        .args(["--kill-after=1s","3s","/usr/bin/prlimit","--as=805306368","--cpu=3","--",HELPER,version,kind])
+        .args(["--kill-after=1s","3s","/usr/bin/prlimit","--as=805306368","--cpu=3","--"]).arg(helper).args([version,kind])
         .args([page.to_string(),w.to_string(),h.to_string()])
         .env_clear().env("PATH","/usr/bin:/bin").env("LC_ALL","C").current_dir("/")
         .stdin(Stdio::from(session.file().try_clone()?)).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?;

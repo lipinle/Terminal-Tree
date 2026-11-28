@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import pty
 import struct
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -44,6 +45,13 @@ def session(binary, args, root, marker, steps, width=120):
 def main(binary):
     with tempfile.TemporaryDirectory(prefix="tt-app-") as tmp:
         root = Path(tmp)
+        helper = os.environ.get("TT_TEST_VISUAL_HELPER")
+        if helper:
+            directory = root / ".local" / "bin"
+            directory.mkdir(mode=0o700, parents=True)
+            directory.parent.chmod(0o700)
+            shutil.copyfile(helper, directory / "tt-visual-preview")
+            (directory / "tt-visual-preview").chmod(0o700)
         (root / "file.txt").write_text("preview-content-marker\n")
         session(binary, [], root, b"preview-content-marker", [
             (b"\x1b[23~", b"Icon style"),

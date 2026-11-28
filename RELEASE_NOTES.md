@@ -1,6 +1,6 @@
 # Terminal Tree Standard 3.0.0
 
-First stable Rust Standard release for the documented supported scope. Linux x86-64 native binary; source is included by GitHub. Verify the archive using SHA256SUMS before extracting to a fresh owned directory. Start with `./terminal-tree --browse .` or a disposable workspace; do not run as root.
+First stable Rust Standard release for the documented supported scope. Rust is the actively developed edition; the legacy Python edition is historical. Linux x86-64 native binary; source is included by GitHub. Verify the archive using SHA256SUMS before extracting to a fresh owned directory. Start with `./terminal-tree --browse .` or a disposable workspace; do not run as root.
 
 - Bounded tree and dual-pane navigation, tabs, search, bookmarks, themes and explicit preferences.
 - Scoped, reviewed copy, move, rename, bulk rename, keep-both paste, Trash, restore and eligible undo.

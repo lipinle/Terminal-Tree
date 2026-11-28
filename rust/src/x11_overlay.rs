@@ -1,15 +1,15 @@
 //! Opt-in X11 overlay transport. Core sends only validated RGB data to a
 //! separately installed helper. A lifetime socket controls the child window.
-use std::{io::{self,Read,Write},os::{fd::OwnedFd,unix::{net::UnixStream,fs::PermissionsExt}},path::Path,process::{Child,Command,Stdio},time::Duration,sync::{Mutex,OnceLock}};
+use std::{io::{self,Read,Write},os::{fd::OwnedFd,unix::net::UnixStream},process::{Child,Command,Stdio},time::Duration,sync::{Mutex,OnceLock}};
 use terminal_tree::visual_preview::Frame;
-const HELPER:&str="/usr/local/bin/tt-x11-overlay";
+const HELPER:&str="tt-x11-overlay";
 #[derive(Clone,Copy)]
 struct Geometry{window:u32,left:u16,top:u16,cw:u16,ch:u16,trim_w:u16,trim_h:u16,client:Option<(u16,u16)>}
 #[derive(Default)]
 struct ProbeCache{attempted:bool,pinned:Option<u32>,size:Option<(u16,u16)>,value:Option<Geometry>}
 static CACHE:OnceLock<Mutex<ProbeCache>>=OnceLock::new();
 pub fn requested()->bool{std::env::var("TT_GRAPHICS").as_deref()==Ok("x11")}
-pub fn installed()->bool{std::fs::metadata(HELPER).is_ok_and(|m|m.is_file()&&m.permissions().mode()&0o111!=0)}
+pub fn installed()->bool{terminal_tree::helper_paths::find(HELPER).is_some()}
 fn window_id(s:&str)->Option<u32>{if let Some(hex)=s.strip_prefix("0x"){u32::from_str_radix(hex,16).ok()}else{s.parse().ok()}}
 fn parse_probe(text:&str)->Option<Geometry>{
     let v:Vec<u32>=text.split_ascii_whitespace().map(str::parse).collect::<Result<_,_>>().ok()?;
@@ -35,7 +35,7 @@ fn geometry()->Option<Geometry>{
     let pinned=match explicit{Some(s)=>Some(window_id(&s)?),None=>cache.pinned};
     cache.attempted=true;cache.size=Some(size);cache.value=None;
     let mut cmd=Command::new("/usr/bin/timeout");
-    cmd.args(["--kill-after=1s","1s",HELPER,"--probe"]).args([size.0.to_string(),size.1.to_string()]);
+    cmd.args(["--kill-after=1s","1s"]).arg(terminal_tree::helper_paths::find(HELPER)?).arg("--probe").args([size.0.to_string(),size.1.to_string()]);
     if let Some(id)=pinned{cmd.arg(id.to_string());}
     let output=cmd.stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
     if !output.status.success()||output.stdout.len()>128{return None;}
@@ -68,7 +68,8 @@ impl Overlay{
         socket.set_read_timeout(Some(Duration::from_millis(750)))?;
         let stdin:OwnedFd=other.try_clone()?.into();
         let stdout:OwnedFd=other.into();
-        let mut command=Command::new(Path::new(HELPER));
+        let helper=terminal_tree::helper_paths::find(HELPER).ok_or_else(||io::Error::other("X11 helper unavailable"))?;
+        let mut command=Command::new(helper);
         command.args([g.window.to_string(),left.to_string(),top.to_string(),width.to_string(),height.to_string()]);
         if let Some((w,h))=g.client{command.args([w.to_string(),h.to_string()]);}
         let child=command.stdin(Stdio::from(stdin)).stdout(Stdio::from(stdout)).stderr(Stdio::null()).spawn()?;
