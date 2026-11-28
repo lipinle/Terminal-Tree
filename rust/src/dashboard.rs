@@ -281,6 +281,8 @@ pub struct State {
     last_tool: Option<String>,
     #[cfg(feature = "native-ops")]
     last_saved: Option<serde_json::Value>,
+    #[cfg(feature = "native-ops")]
+    disk_cache: Option<(PathBuf,std::time::Instant,String)>,
 }
 
 impl State {
@@ -308,6 +310,8 @@ impl State {
             last_tool: None,
             #[cfg(feature = "native-ops")]
             last_saved: None,
+            #[cfg(feature = "native-ops")]
+            disk_cache: None,
         };
         state.refresh_places();
         state
@@ -431,6 +435,22 @@ impl State {
         }
         if width>=83 {queue!(out,MoveTo(78,0),SetForegroundColor(self.prefs.accent),Print(if self.prefs.companions[2]{"[Git]"}else{"[git]"}),SetForegroundColor(self.prefs.foreground))?;}
         Ok(())
+    }
+    fn disk_status(&mut self,path:&std::path::Path)->String{
+        #[cfg(feature = "native-ops")]
+        {
+            if let Some((cached,when,label))=&self.disk_cache{
+                if cached==path&&when.elapsed()<std::time::Duration::from_secs(2){return label.clone();}
+            }
+            let label=match rustix::fs::statvfs(path) {
+                Ok(s)=>format!("Free: {}",human_size((s.f_bavail as u64).saturating_mul(s.f_frsize as u64))),
+                Err(_)=>"Free: unavailable".into(),
+            };
+            self.disk_cache=Some((path.to_path_buf(),std::time::Instant::now(),label.clone()));
+            label
+        }
+        #[cfg(not(feature = "native-ops"))]
+        {let _=path;String::new()}
     }
     fn task_label(&self)->&'static str {
         #[cfg(feature = "native-ops")]
@@ -1085,7 +1105,8 @@ impl State {
             draw_column(&mut out, model, side, true, 0, width, cap, marked, self.icons, &self.prefs)?;
         }
         let safety = if writable { "Scoped" } else { "Read-only" };
-        let status = if self.prefs.status_details { format!("Clipboard: {clipboard} files | Tasks: {} | Safety: {safety} | {} entries",self.task_label(), model.entries.len()) } else { format!("Safety: {safety}") };
+        let disk=if self.prefs.status_details {self.disk_status(&model.directory)}else{String::new()};
+        let status = if self.prefs.status_details { format!("Clipboard: {clipboard} files | Tasks: {} | Safety: {safety} | {} entries | {disk}",self.task_label(), model.entries.len()) } else { format!("Safety: {safety}") };
         let detail = if searching || !model.query.is_empty() {
             format!("Filter: {} | {message}", display_name(std::ffi::OsStr::new(&model.query)))
         } else { message.to_owned() };
@@ -1226,7 +1247,8 @@ impl State {
             queue!(out, SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
         }
         let safety = if self.expanded_tree.is_some() { "Tree inspection" } else if writable { "Scoped" } else { "Read-only" };
-        let status = if self.prefs.status_details { format!("Clipboard: {clipboard} files | Tasks: {} | Safety: {safety} | {} | {} View | Zoom {}",self.task_label(),model.entries.len(),self.view.name(),self.zoom) } else { format!("Safety: {safety} | {} View | Zoom {}",self.view.name(),self.zoom) };
+        let disk=if self.prefs.status_details {self.disk_status(&model.directory)}else{String::new()};
+        let status = if self.prefs.status_details { format!("Clipboard: {clipboard} files | Tasks: {} | Safety: {safety} | {} | {} View | Zoom {} | {disk}",self.task_label(),model.entries.len(),self.view.name(),self.zoom) } else { format!("Safety: {safety} | {} View | Zoom {}",self.view.name(),self.zoom) };
         let detail = if self.expanded_tree.is_some() {
             "Expanded tree: Right expand / Left collapse / Enter open / Esc back".to_owned()
         } else if searching || !model.query.is_empty() {

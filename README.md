@@ -92,6 +92,10 @@ Click [Git] in the top bar, press Alt+G, or search Git Manager in the command pa
 
 Click a fully visible breadcrumb segment to navigate to its directory. In List view, click Name, Size or Type in the header to select the existing sort order. The active sort column has an indicator. Markdown Auto preview formats headings, lists, quotes and code fences, wraps to panel width, and never opens embedded links or images. The status bar reports when the embedded Bash console is running.
 
+### Terminal line editing and disk status
+
+The bottom command console retains bounded session scrollback across commands (up to 128 KiB and 2048 lines). Left/Right, Home/End, Backspace/Delete and Ctrl+A/E/U edit the command without retyping it. Ctrl+L clears scrollback. The status bar reports available filesystem space for the active directory on native Linux, cached for two seconds. The console remains noninteractive Bash, not a persistent PTY shell.
+
 ## Navigation and search
 
 Use the installed executable (examples below assume it is on your PATH), or substitute its full path.

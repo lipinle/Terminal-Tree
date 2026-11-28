@@ -11,6 +11,7 @@ import tempfile
 import termios
 
 from parity import wait_output
+from visual_preview import pdf
 
 
 def session(binary, args, root, marker, steps, width=120):
@@ -154,6 +155,28 @@ def main(binary):
         assert (work / "new-folder" / "source").read_text() == "preserve me"
         assert (work / "source").read_text() == "preserve me"
         assert not list(journal.glob("*.pending.json"))
+        git = root / "git-ui-fixture"
+        git.mkdir()
+        subprocess.run(["/usr/bin/git","init","-b","main",str(git)],check=True,capture_output=True)
+        (git / "new.txt").write_text("git UI marker")
+        session(binary,["--app",str(git)],root,b"Tree View",[
+            (b"\x1bg",b"Trusted repository only"),
+            (b"\x1b[B\r",b"Git Manager |"),
+            (b"\r",b"Changes | left=staged"),
+            (b"\x1b",b"Git Manager |"),
+            (b"\x1b",b"Tree View"),
+        ])
+        if os.environ.get("TT_TEST_VISUAL_PREVIEW")=="1":
+            image_dir=root/"visual-ui"
+            image_dir.mkdir()
+            (image_dir/"document.pdf").write_bytes(pdf)
+            session(binary,["--app",str(image_dir)],root,b"Tree View",[
+                (b"\x1b[<0;55;1M",b"Add-ons / Integrations"),
+                (b"\x1b[<0;2;5M",b"Visual Preview | Installed | Enabled"),
+                (b"\x1b",b"Page 1/2"),
+                (b"\x1b[<65;100;8M",b"Page 2/2"),
+                (b"\x1b[<64;100;8M",b"Page 1/2"),
+            ])
     print("TT_APP dashboard, preview, menus, compact layout and shared clipboard passed")
 
 

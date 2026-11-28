@@ -14,13 +14,17 @@ for i,obj in enumerate(objs,1):
     offsets.append(len(pdf)); pdf+=str(i).encode()+b" 0 obj\n"+obj+b"\nendobj\n"
 xref=len(pdf)
 pdf+=b"xref\n0 7\n0000000000 65535 f \n"+b"".join(f"{o:010d} 00000 n \n".encode() for o in offsets[1:])+b"trailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n"+str(xref).encode()+b"\n%%EOF\n"
-for kind, page, data, count in [("image","1",png,1),("pdf","1",pdf,2),("pdf","2",pdf,2)]:
-    result=subprocess.run([sys.argv[1],"rgb-v1",kind,page,"40","40"],input=data,capture_output=True,check=True,timeout=10).stdout
-    assert result[:8]==b"TTVRGB01"
-    w,h,pages=struct.unpack("<III",result[8:20])
-    assert 0<w<=40 and 0<h<=40 and pages==count and len(result)==20+w*h*3
-    if kind=="pdf":
-        center=result[20+((h//2)*w+w//2)*3:][:3]
-        assert center == (b"\xff\x00\x00" if page=="1" else b"\x00\x00\xff"),center
-assert subprocess.run([sys.argv[1],"rgb-v1","image","1","40","40"],input=b"invalid",capture_output=True,timeout=10).returncode!=0
-print("Visual preview PNG and two-page PDF fixtures passed")
+def main():
+    for kind, page, data, count in [("image","1",png,1),("pdf","1",pdf,2),("pdf","2",pdf,2)]:
+        result=subprocess.run([sys.argv[1],"rgb-v1",kind,page,"40","40"],input=data,capture_output=True,check=True,timeout=10).stdout
+        assert result[:8]==b"TTVRGB01"
+        w,h,pages=struct.unpack("<III",result[8:20])
+        assert 0<w<=40 and 0<h<=40 and pages==count and len(result)==20+w*h*3
+        if kind=="pdf":
+            center=result[20+((h//2)*w+w//2)*3:][:3]
+            assert center == (b"\xff\x00\x00" if page=="1" else b"\x00\x00\xff"),center
+    assert subprocess.run([sys.argv[1],"rgb-v1","image","1","40","40"],input=b"invalid",capture_output=True,timeout=10).returncode!=0
+    print("Visual preview PNG and two-page PDF fixtures passed")
+
+if __name__=="__main__":
+    main()

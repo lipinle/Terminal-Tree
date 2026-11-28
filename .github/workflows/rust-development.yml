@@ -46,6 +46,8 @@ jobs:
           rustup run stable cargo test --manifest-path visual-preview/Cargo.toml
           rustup run stable cargo build --manifest-path visual-preview/Cargo.toml
           python3 tests/benchmark/visual_preview.py visual-preview/target/debug/tt-visual-preview
+          sudo install -m 755 visual-preview/target/debug/tt-visual-preview /usr/local/bin/tt-visual-preview
+          TT_TEST_VISUAL_PREVIEW=1 python3 tests/benchmark/app.py rust/target/debug/terminal-tree
           rustup run stable cargo metadata --manifest-path visual-preview/Cargo.toml --format-version 1 > /tmp/tt-visual-dependencies.json
           python3 -c 'import json; d=json.load(open("/tmp/tt-visual-dependencies.json")); print("\\n".join(sorted(p["name"]+" "+p["version"]+" "+str(p["license"]) for p in d["packages"])))'
       - name: Validate shell script syntax
