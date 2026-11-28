@@ -2,6 +2,7 @@
 """Synthetic, same-filesystem, warm-cache transaction benchmark; no speed gates."""
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import statistics
@@ -58,7 +59,7 @@ def once(binary,base,shape,kind,lang,number):
     before=snapshot(source)
     cmd=([binary,str(work),str(journal),kind] if lang in ("rust","baseline") else
          [sys.executable,"-c",PYTHON,os.environ.get("TT_PYTHON_REFERENCE", str(ROOT/"legacy/python/src")),str(work),str(state),kind])
-    result=subprocess.run(cmd,check=True,capture_output=True,text=True)
+    result=subprocess.run(cmd,check=True,capture_output=True,text=True,timeout=180)
     assert snapshot(destination)==before
     if kind=="copy": assert snapshot(source)==before
     else: assert not source.exists()
@@ -66,7 +67,15 @@ def once(binary,base,shape,kind,lang,number):
     for line in result.stderr.splitlines():
         if line.startswith("TT_PHASES "):
             phases=json.loads(line.removeprefix("TT_PHASES "))
-    return float(result.stdout.strip()), phases
+    elapsed = float(result.stdout.strip())
+    if not math.isfinite(elapsed) or elapsed <= 0:
+        raise AssertionError("benchmark must report finite positive elapsed time")
+    if not isinstance(phases, dict) or any(
+        not isinstance(value, (int, float)) or isinstance(value, bool)
+        or not math.isfinite(value) or value < 0 for value in phases.values()
+    ):
+        raise AssertionError("invalid phase timing")
+    return elapsed, phases
 
 def main(binary,baseline=None):
     result={}

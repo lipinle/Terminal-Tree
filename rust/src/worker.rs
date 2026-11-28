@@ -39,6 +39,9 @@ impl Progress {
             }),
         }
     }
+    pub fn cancellation_flag(&self) -> &AtomicBool {
+        &self.cancel
+    }
     pub fn cancelled(&self) -> io::Result<()> {
         if self.cancel.load(Ordering::Acquire) {
             Err(io::Error::new(
@@ -82,7 +85,9 @@ impl Progress {
             "copy-verify-stage" => "Verifying and syncing staged data",
             "copy-verify-source" | "move-verify-source" => "Rechecking original data",
             "move-verify-result" => "Verifying committed result",
-            "copy-before-publish" => "Checking verified payload",
+            "copy-before-publish" | "extract-before-publish" => "Checking verified payload",
+            "extract-directory" | "extract-data" => "Extracting into private staging",
+            "extract-before-verify" => "Verifying staged archive data",
             "hash-chunk" | "manifest-entry" => return Ok(()),
             _ if s.committing => "Committing / syncing; cancellation deferred",
             _ => "Preparing / verifying",
@@ -102,8 +107,33 @@ impl Progress {
     }
 }
 
+// Always reserve the last row for cancellation guidance when it fits.
+fn progress_rows(height: u16) -> (bool, bool, bool, Option<u16>) {
+    (
+        height >= 3,
+        height >= 4,
+        height >= 5,
+        (height >= 2).then(|| height - 1),
+    )
+}
+
 pub fn run<T: Send>(
     total: usize,
+    job: impl FnOnce(&Progress) -> io::Result<T> + Send,
+) -> io::Result<T> {
+    run_modal(total, "File operation in progress", false, job)
+}
+
+pub fn run_search<T: Send>(
+    job: impl FnOnce(&Progress) -> io::Result<T> + Send,
+) -> io::Result<T> {
+    run_modal(1, "Search in progress", true, job)
+}
+
+fn run_modal<T: Send>(
+    total: usize,
+    title: &str,
+    read_only: bool,
     job: impl FnOnce(&Progress) -> io::Result<T> + Send,
 ) -> io::Result<T> {
     let progress = Progress::new(total);
@@ -134,15 +164,46 @@ pub fn run<T: Send>(
                         out,
                         MoveTo(0, 0),
                         Clear(ClearType::All),
-                        Print(super::clip("File operation in progress", width))
+                        Print(super::clip(title, width))
                     )?;
-                    if h > 3 {
-                        queue!(out,MoveTo(0,1),Print(super::clip(&format!("{done}/{total} items processed | {phase}"),width)),
-                        MoveTo(0,2),Print(super::clip(&label,width)),
-                        MoveTo(0,3),Print(super::clip(&format!("Current item: {copied} logical bytes copied (not yet committed)"),width)),
-                        MoveTo(0,h-1),Print(super::clip(if p.cancel.load(Ordering::Acquire){
-                            if committing{"Cancel requested; finishing committed item safely"}else{"Cancel requested; waiting for safe checkpoint"}
-                        }else{"Esc / Ctrl+C: request cancellation; commit cannot be interrupted"},width)))?;
+                    let (summary, item, bytes, footer) = progress_rows(h);
+                    if summary {
+                        queue!(
+                            out,
+                            MoveTo(0, 1),
+                            Print(super::clip(
+                                &format!("{done}/{total} items processed | {phase}"),
+                                width
+                            ))
+                        )?;
+                    }
+                    if item {
+                        queue!(out, MoveTo(0, 2), Print(super::clip(&label, width)))?;
+                    }
+                    if bytes && !read_only {
+                        queue!(out,MoveTo(0,3),Print(super::clip(&format!("Current item: {copied} logical bytes copied (not yet committed)"),width)))?;
+                    }
+                    if let Some(row) = footer {
+                        queue!(
+                            out,
+                            MoveTo(0, row),
+                            Print(super::clip(
+                                if p.cancel.load(Ordering::Acquire) {
+                                    if committing {
+                                        "Cancel requested; finishing committed item safely"
+                                    } else {
+                                        "Cancel requested; waiting for safe checkpoint"
+                                    }
+                                } else {
+                                    if read_only {
+                                        "Esc / Ctrl+C: cancel search"
+                                    } else {
+                                        "Esc / Ctrl+C: request cancellation; commit cannot be interrupted"
+                                    }
+                                },
+                                width
+                            ))
+                        )?;
                     }
                     out.flush()?;
                     drop(out);
@@ -181,6 +242,16 @@ pub fn run<T: Send>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn small_terminal_keeps_cancellation_footer_separate() {
+        assert_eq!(progress_rows(0), (false, false, false, None));
+        assert_eq!(progress_rows(1), (false, false, false, None));
+        assert_eq!(progress_rows(2), (false, false, false, Some(1)));
+        assert_eq!(progress_rows(3), (true, false, false, Some(2)));
+        assert_eq!(progress_rows(4), (true, true, false, Some(3)));
+        assert_eq!(progress_rows(5), (true, true, true, Some(4)));
+    }
+
     #[test]
     fn cancellation_before_commit_is_refused() {
         let p = Progress::new(1);

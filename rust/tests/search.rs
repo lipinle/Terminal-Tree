@@ -104,3 +104,94 @@ fn links_are_not_recursively_followed_and_raw_paths_survive() {
     assert_eq!(matches.len(), 1);
     assert_eq!(matches[0].path, path.canonicalize().unwrap());
 }
+
+#[test]
+fn oversized_query_is_refused() {
+    let f = Fixture::new();
+    let error = filenames(
+        &f.0,
+        &"x".repeat(4097),
+        false,
+        limits(8, 2, 8),
+        &AtomicBool::new(false),
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+}
+
+#[test]
+fn cli_search_respects_hidden_and_depth_options() {
+    use std::process::Command;
+    use terminal_tree::display_name;
+
+    let f = Fixture::new();
+    fs::create_dir(f.0.join("folder")).unwrap();
+    fs::create_dir(f.0.join(".secret")).unwrap();
+    fs::write(f.0.join("folder/Match.txt"), b"keep").unwrap();
+    fs::write(f.0.join(".secret/match.txt"), b"hidden").unwrap();
+    let run = |options: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_terminal-tree"))
+            .arg("--find")
+            .arg(&f.0)
+            .arg("MATCH")
+            .args(options)
+            .output()
+            .unwrap()
+    };
+    let shallow = run(&["--depth", "1"]);
+    assert!(shallow.status.success());
+    assert!(shallow.stdout.is_empty());
+
+    let visible = run(&["--depth", "2"]);
+    assert!(visible.status.success());
+    let expected = display_name(
+        f.0.join("folder/Match.txt")
+            .canonicalize()
+            .unwrap()
+            .as_os_str(),
+    );
+    assert_eq!(
+        String::from_utf8(visible.stdout).unwrap().trim_end(),
+        expected
+    );
+
+    let hidden = run(&["--hidden", "--depth", "2"]);
+    assert!(hidden.status.success());
+    let output = String::from_utf8(hidden.stdout).unwrap();
+    assert_eq!(output.lines().count(), 2);
+    assert!(output.contains(&expected));
+    let secret = display_name(
+        f.0.join(".secret/match.txt")
+            .canonicalize()
+            .unwrap()
+            .as_os_str(),
+    );
+    assert!(output.contains(&secret));
+    assert_eq!(fs::read(f.0.join("folder/Match.txt")).unwrap(), b"keep");
+}
+
+#[test]
+fn cli_invalid_options_fail_without_results() {
+    use std::process::Command;
+
+    let f = Fixture::new();
+    fs::write(f.0.join("match"), b"x").unwrap();
+    for options in [
+        vec!["--depth", "0"],
+        vec!["--depth", "17"],
+        vec!["--depth"],
+        vec!["--hidden", "--hidden"],
+        vec!["--depth", "1", "--depth", "2"],
+        vec!["--unknown"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_terminal-tree"))
+            .arg("--find")
+            .arg(&f.0)
+            .arg("match")
+            .args(options)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+    }
+}

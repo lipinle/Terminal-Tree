@@ -2,10 +2,25 @@
 //! Native read-only filesystem model. No file mutation API is exposed.
 #[cfg(all(feature = "native-ops", not(target_os = "linux")))]
 compile_error!("native-ops requires the Linux safety backend; use the default read-only build on other platforms");
+pub mod archive;
+pub mod archive_build;
 pub mod bookmarks;
+pub mod image_preview;
+pub mod keymap;
+pub mod layout;
 #[cfg(all(feature = "native-ops", target_os = "linux"))]
 pub mod operations;
+#[cfg(all(feature = "native-ops", target_os = "linux"))]
+pub mod preview;
+#[cfg(all(feature = "native-ops", target_os = "linux"))]
+mod readonly_file;
+#[cfg(all(feature = "native-ops", target_os = "linux"))]
+pub mod recovery_advice;
+#[cfg(all(feature = "native-ops", target_os = "linux"))]
+pub mod rename_plan;
 pub mod search;
+pub mod theme;
+pub mod tree;
 
 use std::ffi::OsStr;
 use std::fs;

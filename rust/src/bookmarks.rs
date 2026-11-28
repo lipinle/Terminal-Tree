@@ -1,4 +1,7 @@
 //! In-memory saved locations. Paths are data, never write authorization.
+#[cfg(all(feature = "native-ops", target_os = "linux"))]
+pub mod snapshot;
+
 use std::path::{Component, Path, PathBuf};
 
 pub const MAX_BOOKMARKS: usize = 128;

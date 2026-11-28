@@ -13,9 +13,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use xattr::FileExt;
 
+mod archive_extract;
+mod cross_device;
 mod manifest;
 mod policy;
 mod trash;
+pub use cross_device::FileTransferObservation;
 use manifest::{
     copy_tree, fd_path, manifest, manifest_with, snapshot, Identity, Manifest, Snapshot,
 };
@@ -322,6 +325,11 @@ impl Engine {
         require(
             dir_id(&open_dir(&self.root)?)? == self.root_identity,
             "workspace replaced",
+        )?;
+        let raw = path.as_os_str().as_bytes();
+        require(
+            !raw.ends_with(b"/") && !raw.ends_with(b"/."),
+            "file path must end in a filename",
         )?;
         let name = path.file_name().ok_or_else(|| fail("missing filename"))?;
         one_name(name)?;
@@ -738,7 +746,12 @@ impl Engine {
         self.check_journal()?;
         let mut out = Vec::new();
         let mut truncated = false;
-        for entry in fs::read_dir(fd_path(&self.journal))? {
+        const MAX_VISITED: usize = 4096;
+        for (index, entry) in fs::read_dir(fd_path(&self.journal))?.enumerate() {
+            if index == MAX_VISITED {
+                truncated = true;
+                break;
+            }
             let name = entry?.file_name();
             if !name.as_bytes().ends_with(b".pending.json") {
                 continue;
@@ -748,6 +761,15 @@ impl Engine {
                 break;
             }
             let result = (|| -> io::Result<serde_json::Value> {
+                let observed = fs::symlink_metadata(fd_path(&self.journal).join(&name))?;
+                let safe = |m: &Metadata| {
+                    m.is_file()
+                        && m.uid() == rustix::process::getuid().as_raw()
+                        && m.mode() & 0o077 == 0
+                        && m.nlink() == 1
+                        && m.len() <= 65536
+                };
+                require(safe(&observed), "unsafe or oversized recovery record")?;
                 let f: File = rx::openat(
                     &self.journal,
                     &name,
@@ -757,22 +779,21 @@ impl Engine {
                 .into();
                 let m = f.metadata()?;
                 require(
-                    m.is_file()
-                        && m.uid() == rustix::process::getuid().as_raw()
-                        && m.mode() & 0o077 == 0
-                        && m.nlink() == 1
-                        && m.len() <= 65536,
-                    "unsafe or oversized recovery record",
+                    safe(&m) && identity(&m) == identity(&observed),
+                    "unsafe or changed recovery record",
                 )?;
                 let mut bytes = Vec::new();
                 (&f).take(65537).read_to_end(&mut bytes)?;
+                let after = f.metadata()?;
                 require(
-                    bytes.len() <= 65536 && identity(&f.metadata()?) == identity(&m),
+                    bytes.len() as u64 == m.len()
+                        && safe(&after)
+                        && identity(&after) == identity(&m),
                     "record changed during read",
                 )?;
                 let named = fs::symlink_metadata(fd_path(&self.journal).join(&name))?;
                 require(
-                    identity(&named) == identity(&m),
+                    safe(&named) && identity(&named) == identity(&m),
                     "record replaced during read",
                 )?;
                 let value: serde_json::Value =

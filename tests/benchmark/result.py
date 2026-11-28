@@ -30,4 +30,42 @@ def main(binary):
         assert sentinel.read_bytes()==b"untouched"
         assert subprocess.run([binary,"--result",str(result)],capture_output=True).returncode!=0
         print("TT_RESULT_CHANNEL selection, terminal restoration, symlink and nonempty rejection passed")
-if __name__=="__main__": main(str(Path(sys.argv[1]).resolve()))
+def shell_wrappers(binary):
+    root = Path(__file__).resolve().parents[2]
+    with tempfile.TemporaryDirectory(prefix="tt-shell-wrappers-") as tmp:
+        base = Path(tmp)
+        install = base / "preview with spaces"
+        install.mkdir(mode=0o700)
+        import shutil
+        shutil.copyfile(root / "rust/integration-preview.sh", install / "integration.sh")
+        (install / "terminal-tree").symlink_to(binary)
+        fixture = base / "files with spaces"
+        fixture.mkdir()
+        match = fixture / "match file.txt"
+        match.write_bytes(b"keep")
+        script = r'''
+set -e
+cd_before=$(type -t cd)
+clear_before=$(type -t clear || :)
+source "$1"
+test "$(type -t tt_rust_tree)" = function
+test "$(type -t tt_rust_panes)" = function
+tt_rust_find "$2" "match file" --depth 1
+test "$(type -t cd)" = "$cd_before"
+test "$(type -t clear || :)" = "$clear_before"
+'''
+        output = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-ic", script, "bash",
+             str(install / "integration.sh"), str(fixture)],
+            capture_output=True, timeout=15, env=dict(os.environ, TERM="dumb"),
+        )
+        assert output.returncode == 0, output.stderr
+        assert os.fsencode(match.resolve()) + b"\n" == output.stdout
+        assert match.read_bytes() == b"keep"
+        print("TT_SHELL_WRAPPERS read-only wrappers and quoted search passed")
+
+
+if __name__ == "__main__":
+    binary = str(Path(sys.argv[1]).resolve())
+    main(binary)
+    shell_wrappers(binary)
