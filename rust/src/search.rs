@@ -1,4 +1,7 @@
 //! Bounded, read-only filename search. Results never authorize file operations.
+#[cfg(all(feature = "native-ops", target_os = "linux"))]
+pub mod content;
+
 use crate::{scan_bounded, Entry, Order};
 use std::fs;
 use std::io;
