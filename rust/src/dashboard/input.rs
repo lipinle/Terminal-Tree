@@ -1,11 +1,13 @@
 //! Keyboard and mouse event dispatch for the dashboard shell.
 use super::file_rows::{breadcrumb_hit, list_sort_hit};
-use super::geometry::{dual_split, Divider};
+use super::geometry::{dual_split, Divider, Layout};
 use super::menus::MENUS;
 use super::view::{preview_hit_row, toolbar_hit, toolbar_start, Cells, View};
 use super::State;
 use crossterm::{
-    event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind},
+    event::{
+        Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    },
     terminal,
 };
 use std::io;
@@ -16,7 +18,7 @@ impl State {
     /// the existing navigator so the original review and write engine is used.
     pub fn input(
         &mut self,
-        mut event: Event,
+        event: Event,
         model: &mut Model,
         searching: bool,
         writable: bool,
@@ -71,212 +73,14 @@ impl State {
         let (w, full_h) = terminal::size()?;
         let h = full_h - self.panel_rows(full_h);
         let l = self.layout(w, h);
-        #[cfg(feature = "native-ops")]
-        let (terminal_left, terminal_top, terminal_width, terminal_rows) =
-            self.terminal_rect(full_h, l);
         if searching {
             return Ok(Some(event));
         }
         #[cfg(feature = "native-ops")]
-        {
-            if self.panel_rows(full_h) == 0 {
-                self.terminal_panel.focused = false;
-            }
-            if let Event::Mouse(mouse) = &event {
-                if self.location.is_none()
-                    && mouse.row == 0
-                    && l.width >= 83
-                    && (78..83).contains(&mouse.column)
-                    && mouse.kind == MouseEventKind::Down(MouseButton::Left)
-                    && mouse.modifiers == KeyModifiers::NONE
-                {
-                    self.terminal_panel.focused = false;
-                    self.expanded_tree = None;
-                    self.side_focus = false;
-                    crate::git_ui::show(&model.directory, self.prefs.companions[2])?;
-                    model.reload()?;
-                    self.pane_switched = true;
-                    self.preview_key = None;
-                    return Ok(None);
-                }
-                if matches!(self.dragging, Some(Divider::Terminal)) {
-                    match mouse.kind {
-                        MouseEventKind::Drag(MouseButton::Left) => self.resize_drag(
-                            Divider::Terminal,
-                            mouse.column,
-                            l.width,
-                            mouse.row,
-                            full_h,
-                        ),
-                        MouseEventKind::Up(MouseButton::Left) => {
-                            self.resize_drag(
-                                Divider::Terminal,
-                                mouse.column,
-                                l.width,
-                                mouse.row,
-                                full_h,
-                            );
-                            self.dragging = None;
-                        }
-                        _ => self.dragging = None,
-                    }
-                    return Ok(None);
-                }
-                if self.location.is_none()
-                    && mouse.kind == MouseEventKind::Down(MouseButton::Left)
-                    && mouse.modifiers == KeyModifiers::NONE
-                {
-                    if mouse.row == 0 && l.width >= 75 && mouse.column >= 63 && mouse.column < 75 {
-                        self.prefs.terminal_visible = !self.prefs.terminal_visible;
-                        self.terminal_panel.focused = false;
-                        return Ok(None);
-                    }
-                    if terminal_rows > 0
-                        && mouse.row == terminal_top
-                        && terminal_width >= 48
-                        && mouse.column >= l.width - 8
-                        && mouse.column < l.width
-                    {
-                        self.dragging = Some(Divider::Terminal);
-                        return Ok(None);
-                    }
-                }
-            }
-            if self.location.is_none() {
-                if let Event::Key(k) = &event {
-                    if k.kind == KeyEventKind::Press && k.modifiers == KeyModifiers::ALT {
-                        match k.code {
-                            KeyCode::Char('s') => {
-                                if self.terminal_panel.interactive() {
-                                    if crate::choose(
-                                        "Close interactive shell? Running jobs may be interrupted",
-                                        &["Cancel".into(), "Close shell".into()],
-                                    )? == Some(1)
-                                    {
-                                        self.terminal_panel.close_shell();
-                                        model.reload()?;
-                                        self.pane_switched = true;
-                                        self.preview_key = None;
-                                    }
-                                } else {
-                                    if full_h < 16 {
-                                        return Err(io::Error::other(
-                                            "terminal panel needs at least 16 rows",
-                                        ));
-                                    }
-                                    if crate::choose("Interactive shell uses OS permissions, outside file journal",&["Cancel".into(),"Start Bash PTY".into()])?==Some(1){
-                                        self.prefs.terminal_visible=true;
-                                        let (_,_,width,rows)=self.terminal_rect(full_h,self.layout(w,full_h-self.panel_rows(full_h)));
-                                        self.terminal_panel.start_shell(&model.directory,width,rows.saturating_sub(3))?;
-                                        self.side_focus=false;
-                                    }
-                                }
-                                return Ok(None);
-                            }
-                            KeyCode::Char('h') => {
-                                self.prefs.terminal_visible = !self.prefs.terminal_visible;
-                                self.terminal_panel.focused = false;
-                                return Ok(None);
-                            }
-                            KeyCode::Char('t') => {
-                                self.prefs.terminal_visible = true;
-                                if self.panel_rows(full_h) == 0 {
-                                    return Err(io::Error::other(
-                                        "terminal panel needs at least 16 rows",
-                                    ));
-                                }
-                                self.terminal_panel.focused = !self.terminal_panel.focused;
-                                self.side_focus = false;
-                                return Ok(None);
-                            }
-                            _ => (),
-                        }
-                    }
-                    if self.terminal_panel.focused {
-                        self.terminal_panel.input(*k, &model.directory)?;
-                        return Ok(None);
-                    }
-                }
-                if let Event::Mouse(mouse) = &event {
-                    if terminal_rows > 0
-                        && mouse.column >= terminal_left
-                        && mouse.column < terminal_left + terminal_width
-                        && mouse.row >= terminal_top
-                        && mouse.row < terminal_top + terminal_rows
-                    {
-                        match mouse.kind {
-                            MouseEventKind::Down(MouseButton::Left)
-                                if mouse.row == terminal_top
-                                    && mouse.column < terminal_left + 6 =>
-                            {
-                                self.prefs.terminal_visible = false;
-                                self.terminal_panel.focused = false;
-                            }
-                            MouseEventKind::Down(MouseButton::Left) => {
-                                self.terminal_panel.focused = true;
-                                self.side_focus = false;
-                            }
-                            MouseEventKind::ScrollUp => self.terminal_panel.scroll(true),
-                            MouseEventKind::ScrollDown => self.terminal_panel.scroll(false),
-                            _ => (),
-                        }
-                        return Ok(None);
-                    }
-                    if self.terminal_panel.focused && matches!(mouse.kind, MouseEventKind::Down(_))
-                    {
-                        self.terminal_panel.focused = false;
-                    }
-                }
-            }
+        if self.handle_terminal_input(&event, model, w, full_h, l)? {
+            return Ok(None);
         }
-        if let Some(input) = &mut self.location {
-            match &event {
-                Event::Key(k) if matches!(k.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
-                    match k.code {
-                        KeyCode::Esc => self.location = None,
-                        KeyCode::Char('l' | 'c') if k.modifiers == KeyModifiers::CONTROL => {
-                            self.location = None
-                        }
-                        KeyCode::Char('a') if k.modifiers == KeyModifiers::CONTROL => input.clear(),
-                        KeyCode::Backspace => {
-                            input.pop();
-                        }
-                        KeyCode::Enter => {
-                            if input.is_empty() {
-                                return Ok(None);
-                            }
-                            let path = if input == "~" || input.starts_with("~/") {
-                                crate::platform::home_dir()
-                                    .ok_or_else(|| io::Error::other("home unavailable"))?
-                                    .join(input.strip_prefix("~/").unwrap_or(""))
-                            } else {
-                                model.directory.join(input.as_str())
-                            };
-                            model.go(path.canonicalize()?)?;
-                            self.location = None;
-                            self.preview_key = None;
-                        }
-                        KeyCode::Char(c)
-                            if !c.is_control()
-                                && !k
-                                    .modifiers
-                                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-                                && input.len() + c.len_utf8() <= 4096 =>
-                        {
-                            input.push(c)
-                        }
-                        _ => (),
-                    }
-                }
-                Event::Mouse(mouse)
-                    if mouse.row == 1
-                        && mouse.kind == MouseEventKind::Down(MouseButton::Left)
-                        && toolbar_hit(l.width, mouse.column) == Some(0) =>
-                {
-                    self.location = None
-                }
-                _ => (),
-            }
+        if self.handle_location_input(&event, model, l)? {
             return Ok(None);
         }
         if let Event::Mouse(mouse) = &event {
@@ -645,295 +449,536 @@ impl State {
         if self.expanded_input(&event, model, l)? {
             return Ok(None);
         }
-        if let Event::Mouse(mouse) = &mut event {
-            if mouse.kind == MouseEventKind::Down(MouseButton::Left) && mouse.row == 0 {
-                if let Some((i, _)) = MENUS.iter().enumerate().find(|(_, (name, x))| {
-                    mouse.column >= *x && mouse.column < *x + name.len() as u16
-                }) {
-                    self.side_focus = false;
-                    let Some(selected) = self.menu(Some(i), writable)? else {
-                        return Ok(None);
-                    };
-                    return self.input(selected, model, false, writable);
-                }
-                return Ok(None);
-            }
-            if self.dual {
-                let width = w.saturating_sub(1);
-                if h < 8 || mouse.row < 3 || mouse.row >= h - 3 || mouse.column >= width {
-                    return Ok(None);
-                }
-                if width >= 54 {
-                    let split = dual_split(width, self.prefs.dual_percent);
-                    if mouse.column == split {
-                        return Ok(None);
-                    }
-                    let right = mouse.column > split;
-                    if right != self.active_right {
-                        if matches!(
-                            mouse.kind,
-                            MouseEventKind::Down(MouseButton::Left | MouseButton::Right)
-                        ) {
-                            // Focus first; never dispatch an action against rows that
-                            // may change when the inactive pane is refreshed.
-                            self.switch_pane(model)?;
-                        }
-                        return Ok(None);
-                    }
-                }
-                if mouse.row == 3 {
-                    return Ok(None);
-                }
-                let index = model.top + usize::from(mouse.row - 4);
-                match mouse.kind {
-                    MouseEventKind::ScrollUp => model.shift(-1),
-                    MouseEventKind::ScrollDown => model.shift(1),
-                    MouseEventKind::Down(MouseButton::Left | MouseButton::Right)
-                        if index < model.entries.len() =>
-                    {
-                        model.selected = index;
-                        if mouse.kind == MouseEventKind::Down(MouseButton::Right)
-                            && mouse.modifiers == KeyModifiers::NONE
-                        {
-                            return self.context_menu(writable);
-                        }
-                        if writable
-                            && mouse.kind == MouseEventKind::Down(MouseButton::Left)
-                            && mouse.modifiers == KeyModifiers::CONTROL
-                        {
-                            return Ok(Some(Event::Key(KeyEvent::new(
-                                KeyCode::Char(' '),
-                                KeyModifiers::NONE,
-                            ))));
-                        }
-                    }
-                    _ => (),
-                }
-                return Ok(None);
-            }
-            if l.sidebar > 0
-                && mouse.column < l.sidebar
-                && mouse.row >= 4
-                && h >= 8
-                && mouse.row < full_h - 3
+        match event {
+            Event::Mouse(mouse) => self.handle_mouse_input(mouse, model, full_h, l, writable),
+            Event::Key(key) => self.handle_key_input(key, model, l, writable),
+            other => Ok(Some(other)),
+        }
+    }
+
+    #[cfg(feature = "native-ops")]
+    fn handle_terminal_input(
+        &mut self,
+        event: &Event,
+        model: &mut Model,
+        w: u16,
+        full_h: u16,
+        l: Layout,
+    ) -> io::Result<bool> {
+        let (terminal_left, terminal_top, terminal_width, terminal_rows) =
+            self.terminal_rect(full_h, l);
+        if self.panel_rows(full_h) == 0 {
+            self.terminal_panel.focused = false;
+        }
+        if let Event::Mouse(mouse) = event {
+            if self.location.is_none()
+                && mouse.row == 0
+                && l.width >= 83
+                && (78..83).contains(&mouse.column)
+                && mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                && mouse.modifiers == KeyModifiers::NONE
             {
-                self.side_focus = true;
-                match mouse.kind {
-                    MouseEventKind::ScrollUp => self.move_side(false),
-                    MouseEventKind::ScrollDown => self.move_side(true),
-                    MouseEventKind::Down(MouseButton::Left) => {
-                        let i = self.side_top + usize::from(mouse.row - 4);
-                        if self.places.get(i).is_some_and(|p| p.1.is_some()) {
-                            self.side_cursor = i;
-                            self.open_side(model)?;
-                        }
-                    }
-                    _ => (),
-                }
-                return Ok(None);
-            }
-            if l.file_row(mouse.column, mouse.row).is_some() {
+                self.terminal_panel.focused = false;
+                self.expanded_tree = None;
                 self.side_focus = false;
-                let cells = Cells::new(l.end() - l.first(), l.capacity(), self.view, self.zoom);
+                crate::git_ui::show(&model.directory, self.prefs.companions[2])?;
+                model.reload()?;
+                self.pane_switched = true;
+                self.preview_key = None;
+                return Ok(true);
+            }
+            if matches!(self.dragging, Some(Divider::Terminal)) {
                 match mouse.kind {
-                    MouseEventKind::ScrollUp => model.shift(-(cells.columns as isize)),
-                    MouseEventKind::ScrollDown => model.shift(cells.columns as isize),
-                    MouseEventKind::Down(MouseButton::Left | MouseButton::Right) => {
-                        if let Some(offset) =
-                            cells.hit(mouse.column - l.first(), usize::from(mouse.row - 4))
-                        {
-                            let index = model.top + offset;
-                            if index < model.entries.len() {
-                                model.selected = index;
-                                if mouse.kind == MouseEventKind::Down(MouseButton::Right)
-                                    && mouse.modifiers == KeyModifiers::NONE
+                    MouseEventKind::Drag(MouseButton::Left) => self.resize_drag(
+                        Divider::Terminal,
+                        mouse.column,
+                        l.width,
+                        mouse.row,
+                        full_h,
+                    ),
+                    MouseEventKind::Up(MouseButton::Left) => {
+                        self.resize_drag(
+                            Divider::Terminal,
+                            mouse.column,
+                            l.width,
+                            mouse.row,
+                            full_h,
+                        );
+                        self.dragging = None;
+                    }
+                    _ => self.dragging = None,
+                }
+                return Ok(true);
+            }
+            if self.location.is_none()
+                && mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                && mouse.modifiers == KeyModifiers::NONE
+            {
+                if mouse.row == 0 && l.width >= 75 && mouse.column >= 63 && mouse.column < 75 {
+                    self.prefs.terminal_visible = !self.prefs.terminal_visible;
+                    self.terminal_panel.focused = false;
+                    return Ok(true);
+                }
+                if terminal_rows > 0
+                    && mouse.row == terminal_top
+                    && terminal_width >= 48
+                    && mouse.column >= l.width - 8
+                    && mouse.column < l.width
+                {
+                    self.dragging = Some(Divider::Terminal);
+                    return Ok(true);
+                }
+            }
+        }
+        if self.location.is_none() {
+            if let Event::Key(k) = event {
+                if k.kind == KeyEventKind::Press && k.modifiers == KeyModifiers::ALT {
+                    match k.code {
+                        KeyCode::Char('s') => {
+                            if self.terminal_panel.interactive() {
+                                if crate::choose(
+                                    "Close interactive shell? Running jobs may be interrupted",
+                                    &["Cancel".into(), "Close shell".into()],
+                                )? == Some(1)
                                 {
-                                    return self.context_menu(writable);
+                                    self.terminal_panel.close_shell();
+                                    model.reload()?;
+                                    self.pane_switched = true;
+                                    self.preview_key = None;
                                 }
-                                if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
-                                    if writable && mouse.modifiers == KeyModifiers::CONTROL {
-                                        return Ok(Some(Event::Key(KeyEvent::new(
-                                            KeyCode::Char(' '),
-                                            KeyModifiers::NONE,
-                                        ))));
-                                    }
-                                    if mouse.modifiers == KeyModifiers::NONE
-                                        && self.view == View::Tree
-                                        && mouse.column < l.first() + 4
-                                    {
-                                        self.expand_current(model)?;
-                                    }
+                            } else {
+                                if full_h < 16 {
+                                    return Err(io::Error::other(
+                                        "terminal panel needs at least 16 rows",
+                                    ));
+                                }
+                                if crate::choose("Interactive shell uses OS permissions, outside file journal",&["Cancel".into(),"Start Bash PTY".into()])?==Some(1){
+                                    self.prefs.terminal_visible=true;
+                                    let (_,_,width,rows)=self.terminal_rect(full_h,self.layout(w,full_h-self.panel_rows(full_h)));
+                                    self.terminal_panel.start_shell(&model.directory,width,rows.saturating_sub(3))?;
+                                    self.side_focus=false;
                                 }
                             }
+                            return Ok(true);
                         }
+                        KeyCode::Char('h') => {
+                            self.prefs.terminal_visible = !self.prefs.terminal_visible;
+                            self.terminal_panel.focused = false;
+                            return Ok(true);
+                        }
+                        KeyCode::Char('t') => {
+                            self.prefs.terminal_visible = true;
+                            if self.panel_rows(full_h) == 0 {
+                                return Err(io::Error::other(
+                                    "terminal panel needs at least 16 rows",
+                                ));
+                            }
+                            self.terminal_panel.focused = !self.terminal_panel.focused;
+                            self.side_focus = false;
+                            return Ok(true);
+                        }
+                        _ => (),
                     }
-                    _ => (),
                 }
-                return Ok(None);
+                if self.terminal_panel.focused {
+                    self.terminal_panel.input(*k, &model.directory)?;
+                    return Ok(true);
+                }
             }
-            return Ok(None);
+            if let Event::Mouse(mouse) = event {
+                if terminal_rows > 0
+                    && mouse.column >= terminal_left
+                    && mouse.column < terminal_left + terminal_width
+                    && mouse.row >= terminal_top
+                    && mouse.row < terminal_top + terminal_rows
+                {
+                    match mouse.kind {
+                        MouseEventKind::Down(MouseButton::Left)
+                            if mouse.row == terminal_top
+                                && mouse.column < terminal_left + 6 =>
+                        {
+                            self.prefs.terminal_visible = false;
+                            self.terminal_panel.focused = false;
+                        }
+                        MouseEventKind::Down(MouseButton::Left) => {
+                            self.terminal_panel.focused = true;
+                            self.side_focus = false;
+                        }
+                        MouseEventKind::ScrollUp => self.terminal_panel.scroll(true),
+                        MouseEventKind::ScrollDown => self.terminal_panel.scroll(false),
+                        _ => (),
+                    }
+                    return Ok(true);
+                }
+                if self.terminal_panel.focused && matches!(mouse.kind, MouseEventKind::Down(_)) {
+                    self.terminal_panel.focused = false;
+                }
+            }
         }
-        if let Event::Key(key) = event {
-            if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
-                return Ok(None);
-            }
-            let code = key.code;
-            // Modified keys must never accidentally dispatch a plain destructive shortcut.
-            if key.modifiers.contains(KeyModifiers::CONTROL) {
-                let mapped = match code {
-                    KeyCode::Char('q') => Some(KeyCode::Char('q')),
-                    KeyCode::Char('c') if writable => Some(KeyCode::Char('c')),
-                    KeyCode::Char('x') if writable => Some(KeyCode::Char('x')),
-                    KeyCode::Char('v') if writable => Some(KeyCode::Char('v')),
-                    KeyCode::Char('a') if writable => Some(KeyCode::Char('a')),
-                    KeyCode::Char('z') if writable => Some(KeyCode::Char('u')),
-                    KeyCode::Char('f') => Some(KeyCode::Char('/')),
-                    KeyCode::Char('l') if cfg!(feature = "native-ops") => Some(KeyCode::Char('g')),
-                    KeyCode::Char('c') | KeyCode::Char('p') => {
-                        self.side_focus = false;
-                        return Ok(Some(Event::Key(key)));
+        Ok(false)
+    }
+
+    fn handle_location_input(
+        &mut self,
+        event: &Event,
+        model: &mut Model,
+        l: Layout,
+    ) -> io::Result<bool> {
+        if let Some(input) = &mut self.location {
+            match event {
+                Event::Key(k) if matches!(k.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
+                    match k.code {
+                        KeyCode::Esc => self.location = None,
+                        KeyCode::Char('l' | 'c') if k.modifiers == KeyModifiers::CONTROL => {
+                            self.location = None
+                        }
+                        KeyCode::Char('a') if k.modifiers == KeyModifiers::CONTROL => input.clear(),
+                        KeyCode::Backspace => {
+                            input.pop();
+                        }
+                        KeyCode::Enter => {
+                            if input.is_empty() {
+                                return Ok(true);
+                            }
+                            let path = if input == "~" || input.starts_with("~/") {
+                                crate::platform::home_dir()
+                                    .ok_or_else(|| io::Error::other("home unavailable"))?
+                                    .join(input.strip_prefix("~/").unwrap_or(""))
+                            } else {
+                                model.directory.join(input.as_str())
+                            };
+                            model.go(path.canonicalize()?)?;
+                            self.location = None;
+                            self.preview_key = None;
+                        }
+                        KeyCode::Char(c)
+                            if !c.is_control()
+                                && !k
+                                    .modifiers
+                                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                                && input.len() + c.len_utf8() <= 4096 =>
+                        {
+                            input.push(c)
+                        }
+                        _ => (),
                     }
-                    _ => None,
-                };
-                if let Some(code) = mapped {
-                    self.side_focus = false;
-                    return Ok(Some(Event::Key(KeyEvent::new(code, KeyModifiers::NONE))));
                 }
-                return Ok(None);
+                Event::Mouse(mouse)
+                    if mouse.row == 1
+                        && mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                        && toolbar_hit(l.width, mouse.column) == Some(0) =>
+                {
+                    self.location = None
+                }
+                _ => (),
             }
-            if key.modifiers.contains(KeyModifiers::ALT) {
-                let mapped = match code {
-                    KeyCode::Left => Some(KeyCode::Char('[')),
-                    KeyCode::Right => Some(KeyCode::Char(']')),
-                    _ => None,
-                };
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    fn handle_mouse_input(
+        &mut self,
+        mouse: MouseEvent,
+        model: &mut Model,
+        full_h: u16,
+        l: Layout,
+        writable: bool,
+    ) -> io::Result<Option<Event>> {
+        let h = l.height;
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left) && mouse.row == 0 {
+            if let Some((i, _)) = MENUS.iter().enumerate().find(|(_, (name, x))| {
+                mouse.column >= *x && mouse.column < *x + name.len() as u16
+            }) {
                 self.side_focus = false;
-                return Ok(mapped.map(|code| Event::Key(KeyEvent::new(code, KeyModifiers::NONE))));
-            }
-            if code == KeyCode::F(10) {
-                self.side_focus = false;
-                let Some(selected) = self.menu(None, writable)? else {
+                let Some(selected) = self.menu(Some(i), writable)? else {
                     return Ok(None);
                 };
                 return self.input(selected, model, false, writable);
             }
-            if code == KeyCode::F(8) && key.modifiers == KeyModifiers::NONE {
-                if key.kind == KeyEventKind::Press {
-                    self.toggle_dual(model)?;
-                }
+            return Ok(None);
+        }
+        if self.dual {
+            let width = l.width;
+            if h < 8 || mouse.row < 3 || mouse.row >= h - 3 || mouse.column >= width {
                 return Ok(None);
             }
-            if code == KeyCode::F(8) && key.modifiers == KeyModifiers::SHIFT {
-                self.side_focus = false;
-                if cfg!(feature = "native-ops") {
-                    return Ok(Some(Event::Key(KeyEvent::new(
-                        KeyCode::F(8),
-                        KeyModifiers::NONE,
-                    ))));
+            if width >= 54 {
+                let split = dual_split(width, self.prefs.dual_percent);
+                if mouse.column == split {
+                    return Ok(None);
                 }
-                return Ok(None);
-            }
-            if code == KeyCode::Tab || code == KeyCode::BackTab {
-                if self.dual {
-                    if key.kind == KeyEventKind::Press {
+                let right = mouse.column > split;
+                if right != self.active_right {
+                    if matches!(
+                        mouse.kind,
+                        MouseEventKind::Down(MouseButton::Left | MouseButton::Right)
+                    ) {
+                        // Focus first; never dispatch an action against rows that
+                        // may change when the inactive pane is refreshed.
                         self.switch_pane(model)?;
                     }
-                } else {
-                    self.side_focus = l.sidebar > 0 && !self.side_focus;
+                    return Ok(None);
                 }
+            }
+            if mouse.row == 3 {
                 return Ok(None);
             }
-            if code == KeyCode::F(9) {
-                if self.dual {
-                    self.dual = false;
-                    self.preview_enabled = true;
-                } else {
-                    self.preview_enabled = !self.preview_enabled;
+            let index = model.top + usize::from(mouse.row - 4);
+            match mouse.kind {
+                MouseEventKind::ScrollUp => model.shift(-1),
+                MouseEventKind::ScrollDown => model.shift(1),
+                MouseEventKind::Down(MouseButton::Left | MouseButton::Right)
+                    if index < model.entries.len() =>
+                {
+                    model.selected = index;
+                    if mouse.kind == MouseEventKind::Down(MouseButton::Right)
+                        && mouse.modifiers == KeyModifiers::NONE
+                    {
+                        return self.context_menu(writable);
+                    }
+                    if writable
+                        && mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                        && mouse.modifiers == KeyModifiers::CONTROL
+                    {
+                        return Ok(Some(Event::Key(KeyEvent::new(
+                            KeyCode::Char(' '),
+                            KeyModifiers::NONE,
+                        ))));
+                    }
                 }
-                self.preview_key = None;
-                return Ok(None);
+                _ => (),
             }
-            if code == KeyCode::F(5) {
-                self.preview_key = None;
-                self.refresh_places();
-            }
-            if self.side_focus {
-                match code {
-                    KeyCode::Up => self.move_side(false),
-                    KeyCode::Down => self.move_side(true),
-                    KeyCode::Enter | KeyCode::Right => self.open_side(model)?,
-                    KeyCode::Esc | KeyCode::Left => self.side_focus = false,
-                    KeyCode::Char('q') => return Ok(Some(Event::Key(key))),
-                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        return Ok(Some(Event::Key(key)))
+            return Ok(None);
+        }
+        if l.sidebar > 0
+            && mouse.column < l.sidebar
+            && mouse.row >= 4
+            && h >= 8
+            && mouse.row < full_h - 3
+        {
+            self.side_focus = true;
+            match mouse.kind {
+                MouseEventKind::ScrollUp => self.move_side(false),
+                MouseEventKind::ScrollDown => self.move_side(true),
+                MouseEventKind::Down(MouseButton::Left) => {
+                    let i = self.side_top + usize::from(mouse.row - 4);
+                    if self.places.get(i).is_some_and(|p| p.1.is_some()) {
+                        self.side_cursor = i;
+                        self.open_side(model)?;
                     }
-                    _ => (),
                 }
-                return Ok(None);
+                _ => (),
             }
-            if key.modifiers == KeyModifiers::NONE && code == KeyCode::Char('b') {
-                if !self.bookmarks.contains(&model.directory) && self.bookmarks.len() < 64 {
-                    self.bookmarks.push(model.directory.clone());
-                    self.refresh_places();
+            return Ok(None);
+        }
+        if l.file_row(mouse.column, mouse.row).is_some() {
+            self.side_focus = false;
+            let cells = Cells::new(l.end() - l.first(), l.capacity(), self.view, self.zoom);
+            match mouse.kind {
+                MouseEventKind::ScrollUp => model.shift(-(cells.columns as isize)),
+                MouseEventKind::ScrollDown => model.shift(cells.columns as isize),
+                MouseEventKind::Down(MouseButton::Left | MouseButton::Right) => {
+                    if let Some(offset) =
+                        cells.hit(mouse.column - l.first(), usize::from(mouse.row - 4))
+                    {
+                        let index = model.top + offset;
+                        if index < model.entries.len() {
+                            model.selected = index;
+                            if mouse.kind == MouseEventKind::Down(MouseButton::Right)
+                                && mouse.modifiers == KeyModifiers::NONE
+                            {
+                                return self.context_menu(writable);
+                            }
+                            if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+                                if writable && mouse.modifiers == KeyModifiers::CONTROL {
+                                    return Ok(Some(Event::Key(KeyEvent::new(
+                                        KeyCode::Char(' '),
+                                        KeyModifiers::NONE,
+                                    ))));
+                                }
+                                if mouse.modifiers == KeyModifiers::NONE
+                                    && self.view == View::Tree
+                                    && mouse.column < l.first() + 4
+                                {
+                                    self.expand_current(model)?;
+                                }
+                            }
+                        }
+                    }
                 }
-                return Ok(None);
+                _ => (),
             }
-            if code == KeyCode::Char('B') {
-                let labels: Vec<_> = self
-                    .bookmarks
-                    .iter()
-                    .map(|p| display_name(p.as_os_str()))
-                    .collect();
-                if let Some(i) = crate::choose("Session bookmarks / Saved locations", &labels)? {
-                    model.go(self.bookmarks[i].clone())?;
+            return Ok(None);
+        }
+        Ok(None)
+    }
+
+    fn handle_key_input(
+        &mut self,
+        key: KeyEvent,
+        model: &mut Model,
+        l: Layout,
+        writable: bool,
+    ) -> io::Result<Option<Event>> {
+        if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+            return Ok(None);
+        }
+        let code = key.code;
+        // Modified keys must never accidentally dispatch a plain destructive shortcut.
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            let mapped = match code {
+                KeyCode::Char('q') => Some(KeyCode::Char('q')),
+                KeyCode::Char('c') if writable => Some(KeyCode::Char('c')),
+                KeyCode::Char('x') if writable => Some(KeyCode::Char('x')),
+                KeyCode::Char('v') if writable => Some(KeyCode::Char('v')),
+                KeyCode::Char('a') if writable => Some(KeyCode::Char('a')),
+                KeyCode::Char('z') if writable => Some(KeyCode::Char('u')),
+                KeyCode::Char('f') => Some(KeyCode::Char('/')),
+                KeyCode::Char('l') if cfg!(feature = "native-ops") => Some(KeyCode::Char('g')),
+                KeyCode::Char('c') | KeyCode::Char('p') => {
+                    self.side_focus = false;
+                    return Ok(Some(Event::Key(key)));
                 }
-                return Ok(None);
-            }
-            if !self.dual && key.modifiers == KeyModifiers::NONE {
-                let cells = Cells::new(l.end() - l.first(), l.capacity(), self.view, self.zoom);
-                match code {
-                    KeyCode::Right if self.view == View::Tree => {
-                        self.expand_current(model)?;
-                        return Ok(None);
-                    }
-                    KeyCode::Up if self.view == View::Grid => {
-                        model.shift(-(cells.columns as isize));
-                        return Ok(None);
-                    }
-                    KeyCode::Down if self.view == View::Grid => {
-                        model.shift(cells.columns as isize);
-                        return Ok(None);
-                    }
-                    KeyCode::Left if self.view == View::Grid => {
-                        model.shift(-1);
-                        return Ok(None);
-                    }
-                    KeyCode::Right if self.view == View::Grid => {
-                        model.shift(1);
-                        return Ok(None);
-                    }
-                    KeyCode::PageUp => {
-                        model.shift(-(cells.capacity() as isize));
-                        return Ok(None);
-                    }
-                    KeyCode::PageDown => {
-                        model.shift(cells.capacity() as isize);
-                        return Ok(None);
-                    }
-                    _ => (),
-                }
-            }
-            let replacement = match code {
-                KeyCode::F(4) if writable => Some(KeyCode::F(6)),
-                KeyCode::Backspace => Some(KeyCode::Left),
-                KeyCode::Null => return Ok(None),
                 _ => None,
             };
-            if let Some(code) = replacement {
+            if let Some(code) = mapped {
+                self.side_focus = false;
                 return Ok(Some(Event::Key(KeyEvent::new(code, KeyModifiers::NONE))));
             }
-            return Ok(Some(Event::Key(key)));
+            return Ok(None);
         }
-        Ok(Some(event))
+        if key.modifiers.contains(KeyModifiers::ALT) {
+            let mapped = match code {
+                KeyCode::Left => Some(KeyCode::Char('[')),
+                KeyCode::Right => Some(KeyCode::Char(']')),
+                _ => None,
+            };
+            self.side_focus = false;
+            return Ok(mapped.map(|code| Event::Key(KeyEvent::new(code, KeyModifiers::NONE))));
+        }
+        if code == KeyCode::F(10) {
+            self.side_focus = false;
+            let Some(selected) = self.menu(None, writable)? else {
+                return Ok(None);
+            };
+            return self.input(selected, model, false, writable);
+        }
+        if code == KeyCode::F(8) && key.modifiers == KeyModifiers::NONE {
+            if key.kind == KeyEventKind::Press {
+                self.toggle_dual(model)?;
+            }
+            return Ok(None);
+        }
+        if code == KeyCode::F(8) && key.modifiers == KeyModifiers::SHIFT {
+            self.side_focus = false;
+            if cfg!(feature = "native-ops") {
+                return Ok(Some(Event::Key(KeyEvent::new(
+                    KeyCode::F(8),
+                    KeyModifiers::NONE,
+                ))));
+            }
+            return Ok(None);
+        }
+        if code == KeyCode::Tab || code == KeyCode::BackTab {
+            if self.dual {
+                if key.kind == KeyEventKind::Press {
+                    self.switch_pane(model)?;
+                }
+            } else {
+                self.side_focus = l.sidebar > 0 && !self.side_focus;
+            }
+            return Ok(None);
+        }
+        if code == KeyCode::F(9) {
+            if self.dual {
+                self.dual = false;
+                self.preview_enabled = true;
+            } else {
+                self.preview_enabled = !self.preview_enabled;
+            }
+            self.preview_key = None;
+            return Ok(None);
+        }
+        if code == KeyCode::F(5) {
+            self.preview_key = None;
+            self.refresh_places();
+        }
+        if self.side_focus {
+            match code {
+                KeyCode::Up => self.move_side(false),
+                KeyCode::Down => self.move_side(true),
+                KeyCode::Enter | KeyCode::Right => self.open_side(model)?,
+                KeyCode::Esc | KeyCode::Left => self.side_focus = false,
+                KeyCode::Char('q') => return Ok(Some(Event::Key(key))),
+                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    return Ok(Some(Event::Key(key)))
+                }
+                _ => (),
+            }
+            return Ok(None);
+        }
+        if key.modifiers == KeyModifiers::NONE && code == KeyCode::Char('b') {
+            if !self.bookmarks.contains(&model.directory) && self.bookmarks.len() < 64 {
+                self.bookmarks.push(model.directory.clone());
+                self.refresh_places();
+            }
+            return Ok(None);
+        }
+        if code == KeyCode::Char('B') {
+            let labels: Vec<_> = self
+                .bookmarks
+                .iter()
+                .map(|p| display_name(p.as_os_str()))
+                .collect();
+            if let Some(i) = crate::choose("Session bookmarks / Saved locations", &labels)? {
+                model.go(self.bookmarks[i].clone())?;
+            }
+            return Ok(None);
+        }
+        if !self.dual && key.modifiers == KeyModifiers::NONE {
+            let cells = Cells::new(l.end() - l.first(), l.capacity(), self.view, self.zoom);
+            match code {
+                KeyCode::Right if self.view == View::Tree => {
+                    self.expand_current(model)?;
+                    return Ok(None);
+                }
+                KeyCode::Up if self.view == View::Grid => {
+                    model.shift(-(cells.columns as isize));
+                    return Ok(None);
+                }
+                KeyCode::Down if self.view == View::Grid => {
+                    model.shift(cells.columns as isize);
+                    return Ok(None);
+                }
+                KeyCode::Left if self.view == View::Grid => {
+                    model.shift(-1);
+                    return Ok(None);
+                }
+                KeyCode::Right if self.view == View::Grid => {
+                    model.shift(1);
+                    return Ok(None);
+                }
+                KeyCode::PageUp => {
+                    model.shift(-(cells.capacity() as isize));
+                    return Ok(None);
+                }
+                KeyCode::PageDown => {
+                    model.shift(cells.capacity() as isize);
+                    return Ok(None);
+                }
+                _ => (),
+            }
+        }
+        let replacement = match code {
+            KeyCode::F(4) if writable => Some(KeyCode::F(6)),
+            KeyCode::Backspace => Some(KeyCode::Left),
+            KeyCode::Null => return Ok(None),
+            _ => None,
+        };
+        if let Some(code) = replacement {
+            return Ok(Some(Event::Key(KeyEvent::new(code, KeyModifiers::NONE))));
+        }
+        Ok(Some(Event::Key(key)))
     }
 }

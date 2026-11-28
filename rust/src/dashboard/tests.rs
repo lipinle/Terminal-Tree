@@ -16,7 +16,10 @@ fn breadcrumb_and_sort_targets() {
     assert_eq!(breadcrumb_hit(p, 0, 80), Some(PathBuf::from("/")));
     assert_eq!(breadcrumb_hit(p, 4, 80), Some(PathBuf::from("/home")));
     assert_eq!(breadcrumb_hit(p, 9, 80), None);
-    assert_eq!(breadcrumb_hit(p, 11, 80), Some(PathBuf::from("/home/日本語")));
+    assert_eq!(
+        breadcrumb_hit(p, 11, 80),
+        Some(PathBuf::from("/home/日本語"))
+    );
     assert_eq!(breadcrumb_hit(p, 11, 12), None);
     assert_eq!(list_sort_hit(40, 60, true), Order::Size);
     assert_eq!(list_sort_hit(55, 60, true), Order::Type);
@@ -24,7 +27,10 @@ fn breadcrumb_and_sort_targets() {
     assert_eq!(list_sort_hit(84, 100, true), Order::Date);
     assert_eq!(list_sort_hit(72, 100, true), Order::Type);
     assert_eq!(list_sort_hit(60, 100, true), Order::Size);
-    assert_eq!(modified_utc(Some(std::time::UNIX_EPOCH)), "1970-01-01 00:00");
+    assert_eq!(
+        modified_utc(Some(std::time::UNIX_EPOCH)),
+        "1970-01-01 00:00"
+    );
     assert_eq!(
         modified_utc(Some(
             std::time::UNIX_EPOCH + std::time::Duration::from_secs(951782400)

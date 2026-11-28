@@ -3,9 +3,7 @@ use super::file_rows::{
     breadcrumb, entry_type, human_size, list_heading, modified_utc, pad_cell, row_metadata,
     row_text, table_columns, RowPresentation,
 };
-use super::geometry::dual_split;
-#[cfg(feature = "native-ops")]
-use super::geometry::Layout;
+use super::geometry::{dual_split, Layout};
 use super::markdown::PreviewStyle;
 use super::view::{draw_toolbar, Cells, View};
 use super::{DrawStatus, State};
@@ -493,6 +491,127 @@ impl State {
         } else {
             model.viewport(cells.capacity())
         };
+        self.draw_sidebar(&mut out, model, full_h, l)?;
+        self.draw_preview_rows(&mut out, l, cap)?;
+        self.draw_file_rows(&mut out, model, l, cells, start..end, &marked)?;
+        let safety = if self.expanded_tree.is_some() {
+            "Tree inspection"
+        } else if writable {
+            "Scoped"
+        } else {
+            "Read-only"
+        };
+        let disk = if self.prefs.status_details {
+            self.disk_status(&model.directory)
+        } else {
+            String::new()
+        };
+        let status = if self.prefs.status_details {
+            format!("Clipboard: {clipboard} files | Tasks: {} | Safety: {safety} | {} | {} View | Zoom {} | {disk}",self.task_label(),model.entries.len(),self.view.name(),self.zoom)
+        } else {
+            format!(
+                "Safety: {safety} | {} View | Zoom {}",
+                self.view.name(),
+                self.zoom
+            )
+        };
+        let detail = if self.expanded_tree.is_some() {
+            "Expanded tree: Right expand / Left collapse / Enter open / Esc back".to_owned()
+        } else if searching || !model.query.is_empty() {
+            format!(
+                "Search: {} | {message}",
+                display_name(std::ffi::OsStr::new(&model.query))
+            )
+        } else {
+            format!(
+                "[{} / {mode}] Icons: {} | {message}",
+                crate::edition::NAME,
+                self.icons.name()
+            )
+        };
+        queue!(
+            out,
+            MoveTo(0, full_h - 3),
+            Print(crate::clip(&status, usize::from(l.width))),
+            MoveTo(0, full_h - 2),
+            Print(crate::clip(&detail, usize::from(l.width))),
+            MoveTo(0, full_h - 1),
+            Print(crate::clip(
+                if searching {
+                    "Filter: type text | Enter accept | Esc cancel"
+                } else if writable {
+                    "F1 Help  F2 Rename  F3 Preview  F8 Dual  Ctrl+T Tab  Ctrl+K Commands"
+                } else {
+                    "F1 Help  F3 Preview  F8 Dual  Ctrl+T Tab  Ctrl+K Commands  q Exit"
+                },
+                usize::from(l.width)
+            ))
+        )?;
+        #[cfg(feature = "native-ops")]
+        self.draw_terminal(&mut out, full_h, l, model)?;
+        queue!(out, ResetColor)?;
+        #[cfg(feature = "native-ops")]
+        if l.preview == 0
+            || !self.visual_bitmap
+            || self.visual_frame.is_none()
+            || !self.graphics_placed
+        {
+            self.graphics_slot.clear()?;
+            self.graphics_placed = false;
+        }
+        self.frame_cache
+            .present(out, w, full_h, self.prefs.background)?;
+        #[cfg(feature = "native-ops")]
+        if l.preview > 0
+            && self.visual_bitmap
+            && !self.graphics_placed
+            && self.graphics_focused
+            && cap > 2
+        {
+            if let Some(frame) = &self.visual_frame {
+                let area = (l.preview, (cap - 2).min(u16::MAX as usize) as u16);
+                let (cols, rows) = if crate::x11_overlay::requested() {
+                    area
+                } else {
+                    crate::native_graphics::fit(frame, area.0, area.1)
+                };
+                match self.graphics_slot.show(
+                    frame,
+                    l.end() + 1 + (l.preview - cols) / 2,
+                    6,
+                    cols,
+                    rows,
+                ) {
+                    Ok(()) => self.graphics_placed = true,
+                    Err(_) if crate::x11_overlay::requested() => {
+                        self.graphics_failed = true;
+                        self.visual_bitmap = false;
+                        self.visual_frame = None;
+                        self.preview_key = None;
+                        self.preview_lines =
+                            vec!["X11 placement unavailable; using Unicode".into()];
+                        // Queue the fallback now so the idle event loop will poll it.
+                        let e = if let Some(tree) = &self.expanded_tree {
+                            tree.rows().get(tree.selected()).map(|r| r.entry.clone())
+                        } else {
+                            model.entries.get(model.selected).cloned()
+                        };
+                        self.preview(e.as_ref(), l.preview, cap);
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn draw_sidebar(
+        &mut self,
+        out: &mut impl Write,
+        model: &Model,
+        full_h: u16,
+        l: Layout,
+    ) -> io::Result<()> {
         let side_cap = usize::from(full_h.saturating_sub(7)).max(1);
         if self.side_cursor < self.side_top {
             self.side_top = self.side_cursor;
@@ -549,6 +668,10 @@ impl State {
                 queue!(out, MoveTo(l.sidebar, y), Print("│"))?;
             }
         }
+        Ok(())
+    }
+
+    fn draw_preview_rows(&self, out: &mut impl Write, l: Layout, cap: usize) -> io::Result<()> {
         for row in 0..cap {
             let y = row as u16 + 4;
             if l.preview > 0 {
@@ -607,7 +730,21 @@ impl State {
                 }
             }
         }
-        for index in start..end {
+        Ok(())
+    }
+
+    fn draw_file_rows(
+        &self,
+        out: &mut impl Write,
+        model: &Model,
+        l: Layout,
+        cells: Cells,
+        range: std::ops::Range<usize>,
+        marked: &impl Fn(&std::path::Path) -> bool,
+    ) -> io::Result<()> {
+        let h = l.height;
+        let start = range.start;
+        for index in range {
             let offset = index - start;
             let x = l.first() + (offset % cells.columns) as u16 * cells.width;
             let y = 4 + ((offset / cells.columns) * cells.stride) as u16;
@@ -728,114 +865,6 @@ impl State {
                 SetForegroundColor(self.prefs.foreground),
                 SetBackgroundColor(self.prefs.background)
             )?;
-        }
-        let safety = if self.expanded_tree.is_some() {
-            "Tree inspection"
-        } else if writable {
-            "Scoped"
-        } else {
-            "Read-only"
-        };
-        let disk = if self.prefs.status_details {
-            self.disk_status(&model.directory)
-        } else {
-            String::new()
-        };
-        let status = if self.prefs.status_details {
-            format!("Clipboard: {clipboard} files | Tasks: {} | Safety: {safety} | {} | {} View | Zoom {} | {disk}",self.task_label(),model.entries.len(),self.view.name(),self.zoom)
-        } else {
-            format!(
-                "Safety: {safety} | {} View | Zoom {}",
-                self.view.name(),
-                self.zoom
-            )
-        };
-        let detail = if self.expanded_tree.is_some() {
-            "Expanded tree: Right expand / Left collapse / Enter open / Esc back".to_owned()
-        } else if searching || !model.query.is_empty() {
-            format!(
-                "Search: {} | {message}",
-                display_name(std::ffi::OsStr::new(&model.query))
-            )
-        } else {
-            format!(
-                "[{} / {mode}] Icons: {} | {message}",
-                crate::edition::NAME,
-                self.icons.name()
-            )
-        };
-        queue!(
-            out,
-            MoveTo(0, full_h - 3),
-            Print(crate::clip(&status, usize::from(l.width))),
-            MoveTo(0, full_h - 2),
-            Print(crate::clip(&detail, usize::from(l.width))),
-            MoveTo(0, full_h - 1),
-            Print(crate::clip(
-                if searching {
-                    "Filter: type text | Enter accept | Esc cancel"
-                } else if writable {
-                    "F1 Help  F2 Rename  F3 Preview  F8 Dual  Ctrl+T Tab  Ctrl+K Commands"
-                } else {
-                    "F1 Help  F3 Preview  F8 Dual  Ctrl+T Tab  Ctrl+K Commands  q Exit"
-                },
-                usize::from(l.width)
-            ))
-        )?;
-        #[cfg(feature = "native-ops")]
-        self.draw_terminal(&mut out, full_h, l, model)?;
-        queue!(out, ResetColor)?;
-        #[cfg(feature = "native-ops")]
-        if l.preview == 0
-            || !self.visual_bitmap
-            || self.visual_frame.is_none()
-            || !self.graphics_placed
-        {
-            self.graphics_slot.clear()?;
-            self.graphics_placed = false;
-        }
-        self.frame_cache
-            .present(out, w, full_h, self.prefs.background)?;
-        #[cfg(feature = "native-ops")]
-        if l.preview > 0
-            && self.visual_bitmap
-            && !self.graphics_placed
-            && self.graphics_focused
-            && cap > 2
-        {
-            if let Some(frame) = &self.visual_frame {
-                let area = (l.preview, (cap - 2).min(u16::MAX as usize) as u16);
-                let (cols, rows) = if crate::x11_overlay::requested() {
-                    area
-                } else {
-                    crate::native_graphics::fit(frame, area.0, area.1)
-                };
-                match self.graphics_slot.show(
-                    frame,
-                    l.end() + 1 + (l.preview - cols) / 2,
-                    6,
-                    cols,
-                    rows,
-                ) {
-                    Ok(()) => self.graphics_placed = true,
-                    Err(_) if crate::x11_overlay::requested() => {
-                        self.graphics_failed = true;
-                        self.visual_bitmap = false;
-                        self.visual_frame = None;
-                        self.preview_key = None;
-                        self.preview_lines =
-                            vec!["X11 placement unavailable; using Unicode".into()];
-                        // Queue the fallback now so the idle event loop will poll it.
-                        let e = if let Some(tree) = &self.expanded_tree {
-                            tree.rows().get(tree.selected()).map(|r| r.entry.clone())
-                        } else {
-                            model.entries.get(model.selected).cloned()
-                        };
-                        self.preview(e.as_ref(), l.preview, cap);
-                    }
-                    Err(e) => return Err(e),
-                }
-            }
         }
         Ok(())
     }
