@@ -45,6 +45,10 @@ def main(binary):
             step(b"\x1b[<0;1;2M", b"Depth: 2 | Rows: 3 | Selected: 1")
             step(b"\x1b[<2;1;3M", b"Depth: 2 | Rows: 3 | Selected: 2")
             step(b"\x1b[<0;1;24M", b"Depth: 2 | Rows: 3 | Selected: 2")
+            step(b"i", b"Observed size:")
+            step(b"\x1b", b"Depth: 2 | Rows: 3 | Selected: 2")
+            step(b"\x1bOP", b"Tree help")
+            step(b"q", b"Depth: 2 | Rows: 3 | Selected: 2")
             step(b"d", b"Read-only tree. File mutations disabled.")
             os.write(master, b"q")
             assert process.wait(timeout=8) == 0
