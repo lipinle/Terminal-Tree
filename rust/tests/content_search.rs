@@ -56,13 +56,25 @@ fn searches_nested_utf8_and_reports_omissions() {
     symlink(f.0.join("folder/hit"), f.0.join("link")).unwrap();
     let cancel = AtomicBool::new(false);
     let report = text(&f.0, "needle", false, limits(), &cancel).unwrap();
-    assert_eq!(report.matches, vec![f.0.join("folder/hit").canonicalize().unwrap()]);
+    assert_eq!(
+        report.matches,
+        vec![f.0.join("folder/hit").canonicalize().unwrap()]
+    );
     assert_eq!(report.files_read, 4);
     assert_eq!(report.skipped_binary, 2);
     assert_eq!(report.skipped_large, 1);
     assert_eq!(report.skipped_nonregular, 1);
-    assert_eq!(text(&f.0, "needle", true, limits(), &cancel).unwrap().matches.len(), 2);
-    assert_eq!(fs::read(f.0.join("folder/hit")).unwrap(), "ไทย needle".as_bytes());
+    assert_eq!(
+        text(&f.0, "needle", true, limits(), &cancel)
+            .unwrap()
+            .matches
+            .len(),
+        2
+    );
+    assert_eq!(
+        fs::read(f.0.join("folder/hit")).unwrap(),
+        "ไทย needle".as_bytes()
+    );
 }
 
 #[test]
@@ -84,7 +96,9 @@ fn cancellation_and_invalid_queries_fail() {
     let f = Fixture::new();
     let cancel = AtomicBool::new(true);
     assert_eq!(
-        text(&f.0, "needle", false, limits(), &cancel).unwrap_err().kind(),
+        text(&f.0, "needle", false, limits(), &cancel)
+            .unwrap_err()
+            .kind(),
         std::io::ErrorKind::Interrupted
     );
     cancel.store(false, Ordering::Relaxed);

@@ -143,7 +143,9 @@ pub fn load(path: &Path) -> io::Result<Bookmarks> {
         return Err(invalid("invalid bookmark snapshot file"));
     }
     let mut bytes = Vec::new();
-    (&file).take((MAX_BYTES + 1) as u64).read_to_end(&mut bytes)?;
+    (&file)
+        .take((MAX_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)?;
     let after = file.metadata()?;
     if bytes.len() as u64 != before.len()
         || after.len() != before.len()

@@ -61,7 +61,10 @@ fn save_and_load_never_replace_existing_destination() {
     assert_eq!(snapshot::load(&path).unwrap().paths(), marks.paths());
     assert!(snapshot::save_new(&path, &Bookmarks::default()).is_err());
     assert_eq!(fs::read(&path).unwrap(), old);
-    assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
 }
 
 #[test]

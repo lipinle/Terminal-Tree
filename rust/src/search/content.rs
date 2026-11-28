@@ -119,9 +119,7 @@ pub fn text(
         }
         let read_cap = (limits.file_bytes + 1).min(remaining);
         let mut bytes = Vec::new();
-        (&file)
-            .take(read_cap as u64)
-            .read_to_end(&mut bytes)?;
+        (&file).take(read_cap as u64).read_to_end(&mut bytes)?;
         report.bytes_read += bytes.len();
         check_cancel(cancel)?;
         check_directory(&root, parent)?;
