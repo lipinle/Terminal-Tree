@@ -211,11 +211,7 @@ fn page(title: &str, lines: &[String]) -> io::Result<()> {
 }
 
 // True means Ctrl+C requested leaving the enclosing navigator.
-fn page_with_interrupt(
-    title: &str,
-    lines: &[String],
-    interrupt_exits: bool,
-) -> io::Result<bool> {
+fn page_with_interrupt(title: &str, lines: &[String], interrupt_exits: bool) -> io::Result<bool> {
     let mut top = 0usize;
     loop {
         let (w, h) = terminal::size()?;

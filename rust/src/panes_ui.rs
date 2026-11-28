@@ -392,10 +392,14 @@ fn show_preview(model: &TreeModel, code: KeyCode) -> io::Result<bool> {
                 }));
                 ("Archive listing (read-only)", lines)
             }
-            KeyCode::F(8) => ("File preview", preview::read_lines(path, preview::Mode::Hex)?),
-            KeyCode::Char('p') | KeyCode::F(3) => {
-                ("File preview", preview::read_lines(path, preview::Mode::Auto)?)
-            }
+            KeyCode::F(8) => (
+                "File preview",
+                preview::read_lines(path, preview::Mode::Hex)?,
+            ),
+            KeyCode::Char('p') | KeyCode::F(3) => (
+                "File preview",
+                preview::read_lines(path, preview::Mode::Auto)?,
+            ),
             _ => return Err(io::Error::other("unsupported preview action")),
         };
         crate::page_with_interrupt(title, &lines, true)
