@@ -270,6 +270,11 @@ impl Workspace {
     pub fn marked_count(&self) -> usize {
         self.marks.len()
     }
+    pub fn observe_pane(&mut self, model: &Model) {
+        // Selection marks belong to the active pane, not the clipboard.
+        self.clear_marks();
+        self.observe(model);
+    }
     pub fn observe(&mut self, model: &Model) {
         if self.mark_directory != model.directory {
             self.marks.clear();

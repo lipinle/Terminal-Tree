@@ -60,6 +60,10 @@ pub struct State {
     preview_enabled: bool,
     preview_key: Option<PreviewKey>,
     preview_lines: Vec<String>,
+    dual: bool,
+    active_right: bool,
+    other: Option<Model>,
+    pane_switched: bool,
 }
 
 impl State {
@@ -68,6 +72,7 @@ impl State {
             places: Vec::new(), bookmarks: Vec::new(), trash,
             side_focus: false, side_cursor: 0, side_top: 0, preview_enabled: true,
             preview_key: None, preview_lines: Vec::new(),
+            dual: false, active_right: false, other: None, pane_switched: false,
         };
         state.refresh_places();
         state
@@ -159,10 +164,98 @@ impl State {
         };
     }
 
+    fn toggle_dual(&mut self, model: &Model) -> io::Result<()> {
+        if !self.dual && self.other.is_none() {
+            let mut other = Model::new(model.directory.clone())?;
+            other.set_view(model.hidden, model.order, model.kind_filter, String::new())?;
+            self.other = Some(other);
+        }
+        self.dual = !self.dual;
+        self.side_focus = false;
+        self.preview_key = None;
+        Ok(())
+    }
+
+    fn switch_pane(&mut self, model: &mut Model) -> io::Result<()> {
+        let other = self.other.as_mut().ok_or_else(|| io::Error::other("second pane unavailable"))?;
+        // Refresh the incoming pane before making its rows actionable.
+        // A failed refresh leaves the active model and selection unchanged.
+        other.reload()?;
+        std::mem::swap(model, other);
+        self.active_right = !self.active_right;
+        self.pane_switched = true;
+        self.preview_key = None;
+        Ok(())
+    }
+
+    pub fn take_pane_switch(&mut self) -> bool {
+        std::mem::take(&mut self.pane_switched)
+    }
+
+    fn draw_dual(
+        &mut self,
+        model: &mut Model,
+        message: &str,
+        searching: bool,
+        writable: bool,
+        personal: bool,
+        clipboard: usize,
+        marked: &impl Fn(&std::path::Path) -> bool,
+    ) -> io::Result<()> {
+        let (w, h) = terminal::size()?;
+        let width = w.saturating_sub(1);
+        let mut out = io::stdout().lock();
+        queue!(out, MoveTo(0, 0), Clear(ClearType::All),
+            SetForegroundColor(Color::Cyan),
+            Print(super::clip("Terminal Tree  File  Edit  View  Go  Tools  Settings", usize::from(width))),
+            ResetColor)?;
+        if h < 8 { return out.flush(); }
+        let side = if self.active_right { "Right" } else { "Left" };
+        let mode = if personal { "Personal" } else if writable { "Workspace" } else { "Read-only" };
+        let header = format!("Dual Pane | Active: {side} | [{} / {mode}]", super::edition::NAME);
+        queue!(out, MoveTo(0, 1), Print(super::clip(&header, usize::from(width))),
+            MoveTo(0, 2), Print("─".repeat(usize::from(width))))?;
+        let cap = usize::from(h - 7);
+        if width >= 54 {
+            let split = width / 2;
+            let other = self.other.as_mut().ok_or_else(|| io::Error::other("second pane unavailable"))?;
+            if self.active_right {
+                draw_column(&mut out, other, "Left", false, 0, split, cap, marked)?;
+                draw_column(&mut out, model, "Right", true, split + 1, width - split - 1, cap, marked)?;
+            } else {
+                draw_column(&mut out, model, "Left", true, 0, split, cap, marked)?;
+                draw_column(&mut out, other, "Right", false, split + 1, width - split - 1, cap, marked)?;
+            }
+            for row in 3..h - 3 {
+                queue!(out, MoveTo(split, row), Print("│"))?;
+            }
+        } else {
+            draw_column(&mut out, model, side, true, 0, width, cap, marked)?;
+        }
+        let safety = if writable { "Scoped" } else { "Read-only" };
+        let status = format!("Clipboard: {clipboard} files | Tasks: idle | Safety: {safety} | {} entries", model.entries.len());
+        let detail = if searching || !model.query.is_empty() {
+            format!("Filter: {} | {message}", display_name(std::ffi::OsStr::new(&model.query)))
+        } else { message.to_owned() };
+        queue!(out, MoveTo(0, h - 3), Print(super::clip(&status, usize::from(width))),
+            MoveTo(0, h - 2), Print(super::clip(&detail, usize::from(width))),
+            MoveTo(0, h - 1), Print(super::clip(if searching {
+                "Filter: type text | Enter accept | Esc cancel"
+            } else if writable {
+                "F8 Single  Tab Switch  Ctrl+C/X/V Transfer  F4 Actions  F10 Menu"
+            } else {
+                "F8 Single  Tab Switch  F10 Menu  Ctrl+F Filter  q Exit"
+            }, usize::from(width))))?;
+        out.flush()
+    }
+
     pub fn draw(
         &mut self, model: &mut Model, message: &str, searching: bool,
         writable: bool, personal: bool, clipboard: usize, marked: impl Fn(&std::path::Path) -> bool,
     ) -> io::Result<()> {
+        if self.dual {
+            return self.draw_dual(model, message, searching, writable, personal, clipboard, &marked);
+        }
         let (w,h) = terminal::size()?;
         let l = Layout::new(w,h,self.preview_enabled);
         if l.sidebar == 0 { self.side_focus = false; }
@@ -233,9 +326,9 @@ impl State {
             MoveTo(0,h-1), Print(super::clip(if searching {
                 "Filter: type text | Enter accept | Esc cancel"
             } else if writable {
-                "F1 Help  F2 Rename  F3 Preview  F4 Actions  F10 Menu  Ctrl+C/X/V  F12 Clipboard"
+                "F1 Help  F2 Rename  F3 Preview  F4 Actions  F8 Dual  F10 Menu  Ctrl+C/X/V"
             } else {
-                "F1 Help  F3 Preview  F10 Menu  Tab Focus  / Filter  Ctrl+P Tools  q Exit"
+                "F1 Help  F3 Preview  F8 Dual  F10 Menu  Tab Focus  Ctrl+F Filter  q Exit"
             },usize::from(l.width))))?;
         out.flush()
     }
@@ -253,11 +346,14 @@ impl State {
             0 => vec![("Open",KeyCode::Enter,plain),("Properties",KeyCode::Char('i'),plain),("Exit",KeyCode::Char('q'),plain)],
             1 if writable => vec![("Copy (Ctrl+C)",KeyCode::Char('c'),plain),("Cut (Ctrl+X)",KeyCode::Char('x'),plain),("Paste (Ctrl+V)",KeyCode::Char('v'),plain),("View clipboard",KeyCode::F(12),plain),("Rename",KeyCode::F(2),plain),("New folder",KeyCode::Char('n'),plain),("New file",KeyCode::Char('t'),plain),("Trash",KeyCode::Delete,plain),("Undo",KeyCode::Char('u'),plain)],
             1 => vec![("Select a scoped workspace to enable file operations",KeyCode::Null,plain)],
-            2 => vec![("Toggle live preview",KeyCode::F(9),plain),("Open preview",KeyCode::F(3),plain),("Hidden files",KeyCode::Char('h'),plain),("Sort",KeyCode::Char('s'),plain),("Refresh",KeyCode::F(5),plain),("Filter",KeyCode::Char('/'),plain)],
+            2 => vec![("Toggle dual pane (F8)",KeyCode::F(8),plain),("Toggle live preview",KeyCode::F(9),plain),("Open preview",KeyCode::F(3),plain),("Hidden files",KeyCode::Char('h'),plain),("Sort",KeyCode::Char('s'),plain),("Refresh",KeyCode::F(5),plain),("Filter",KeyCode::Char('/'),plain)],
             3 => vec![("Parent",KeyCode::Left,plain),("Back",KeyCode::Char('['),plain),("Forward",KeyCode::Char(']'),plain),("Locations",KeyCode::Char('m'),plain),("Bookmark current directory",KeyCode::Char('b'),plain),("Bookmarks",KeyCode::Char('B'),plain)],
             4 => vec![("Companion tools",KeyCode::Char('p'),KeyModifiers::CONTROL),("Help",KeyCode::F(1),plain)],
             _ => vec![("Toggle live preview",KeyCode::F(9),plain),("Hidden files",KeyCode::Char('h'),plain),("Sort",KeyCode::Char('s'),plain)],
         };
+        if category == 2 && cfg!(feature = "native-ops") {
+            commands.push(("Hex preview (Shift+F8)", KeyCode::F(8), KeyModifiers::SHIFT));
+        }
         if category == 3 && cfg!(feature = "native-ops") {
             commands.insert(0,("Go to path",KeyCode::Char('g'),plain));
         }
@@ -310,6 +406,43 @@ impl State {
                     self.side_focus = false;
                     let Some(selected) = self.menu(Some(i),writable)? else { return Ok(None); };
                     return self.input(selected,model,false,writable);
+                }
+                return Ok(None);
+            }
+            if self.dual {
+                let width = w.saturating_sub(1);
+                if h < 8 || mouse.row < 3 || mouse.row >= h - 3 || mouse.column >= width {
+                    return Ok(None);
+                }
+                if width >= 54 {
+                    let split = width / 2;
+                    if mouse.column == split { return Ok(None); }
+                    let right = mouse.column > split;
+                    if right != self.active_right {
+                        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left | MouseButton::Right)) {
+                            // Focus first; never dispatch an action against rows that
+                            // may change when the inactive pane is refreshed.
+                            self.switch_pane(model)?;
+                        }
+                        return Ok(None);
+                    }
+                }
+                if mouse.row == 3 { return Ok(None); }
+                let index = model.top + usize::from(mouse.row - 4);
+                match mouse.kind {
+                    MouseEventKind::ScrollUp => model.shift(-1),
+                    MouseEventKind::ScrollDown => model.shift(1),
+                    MouseEventKind::Down(MouseButton::Left | MouseButton::Right) if index < model.entries.len() => {
+                        model.selected = index;
+                        if mouse.kind == MouseEventKind::Down(MouseButton::Right) && mouse.modifiers == KeyModifiers::NONE {
+                            return self.context_menu(writable);
+                        }
+                        if writable && mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                            && mouse.modifiers == KeyModifiers::CONTROL {
+                            return Ok(Some(Event::Key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE))));
+                        }
+                    }
+                    _ => (),
                 }
                 return Ok(None);
             }
@@ -388,12 +521,28 @@ impl State {
                 let Some(selected) = self.menu(None,writable)? else { return Ok(None); };
                 return self.input(selected,model,false,writable);
             }
+            if code == KeyCode::F(8) && key.modifiers == KeyModifiers::NONE {
+                if key.kind == KeyEventKind::Press { self.toggle_dual(model)?; }
+                return Ok(None);
+            }
+            if code == KeyCode::F(8) && key.modifiers == KeyModifiers::SHIFT {
+                self.side_focus = false;
+                if cfg!(feature = "native-ops") {
+                    return Ok(Some(Event::Key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE))));
+                }
+                return Ok(None);
+            }
             if code == KeyCode::Tab || code == KeyCode::BackTab {
-                self.side_focus = l.sidebar > 0 && !self.side_focus;
+                if self.dual {
+                    if key.kind == KeyEventKind::Press { self.switch_pane(model)?; }
+                } else {
+                    self.side_focus = l.sidebar > 0 && !self.side_focus;
+                }
                 return Ok(None);
             }
             if code == KeyCode::F(9) {
-                self.preview_enabled = !self.preview_enabled;
+                if self.dual { self.dual = false; self.preview_enabled = true; }
+                else { self.preview_enabled = !self.preview_enabled; }
                 self.preview_key = None;
                 return Ok(None);
             }
@@ -433,6 +582,34 @@ impl State {
         }
         Ok(Some(event))
     }
+}
+
+fn draw_column(
+    out: &mut impl Write,
+    model: &mut Model,
+    label: &str,
+    active: bool,
+    x: u16,
+    width: u16,
+    cap: usize,
+    marked: &impl Fn(&std::path::Path) -> bool,
+) -> io::Result<()> {
+    let path = display_name(model.directory.as_os_str());
+    let header = format!("{label}{} | {path}", if active { " *" } else { "" });
+    queue!(out, MoveTo(x, 3), SetForegroundColor(if active { Color::Cyan } else { Color::Grey }),
+        Print(super::clip(&header, usize::from(width))), ResetColor)?;
+    let (start, end) = model.viewport(cap);
+    for (row, index) in (start..end).enumerate() {
+        let entry = &model.entries[index];
+        let (glyph, color) = super::icon(entry.directory, entry.symlink);
+        let text = format!("{} {} {}", if active && marked(&entry.path) { "[x]" } else { "   " }, glyph, entry.name);
+        queue!(out, MoveTo(x, row as u16 + 4))?;
+        if active && index == model.selected {
+            queue!(out, SetBackgroundColor(Color::DarkGrey))?;
+        }
+        queue!(out, SetForegroundColor(color), Print(super::clip(&text, usize::from(width))), ResetColor)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
