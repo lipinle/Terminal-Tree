@@ -15,7 +15,11 @@ const MAX_COMPRESSED_BYTES: usize = MAX_ARCHIVE_BYTES + 1024 * 1024;
 // options. A nonzero exit, truncated input or output limit returns no bytes.
 fn gzip_filter(input: &[u8], decompress: bool, limit: usize) -> io::Result<Vec<u8>> {
     let mut child = Command::new("/usr/bin/gzip")
-        .args(if decompress { ["-d", "-c"] } else { ["-n", "-c"] })
+        .args(if decompress {
+            ["-d", "-c"]
+        } else {
+            ["-n", "-c"]
+        })
         .env_clear()
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

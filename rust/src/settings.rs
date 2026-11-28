@@ -130,16 +130,23 @@ impl Store {
         if v["version"].as_u64() != Some(1) {
             return Err(error("unsupported pane settings version"));
         }
-        let theme = v["theme"].as_str().and_then(Theme::parse)
+        let theme = v["theme"]
+            .as_str()
+            .and_then(Theme::parse)
             .ok_or_else(|| error("invalid pane theme"))?;
-        let keys = v["keys"].as_str().ok_or_else(|| error("invalid pane keys"))?;
-        let keymap = Keymap::from_spec(keys)
-            .map_err(|_| error("invalid pane navigation keymap"))?;
+        let keys = v["keys"]
+            .as_str()
+            .ok_or_else(|| error("invalid pane keys"))?;
+        let keymap =
+            Keymap::from_spec(keys).map_err(|_| error("invalid pane navigation keymap"))?;
         Ok((theme, keymap))
     }
 
     pub fn load_panes(&self) -> io::Result<Option<(Theme, Keymap)>> {
-        self.read_named(PANE_NAME)?.as_ref().map(Self::decode_panes).transpose()
+        self.read_named(PANE_NAME)?
+            .as_ref()
+            .map(Self::decode_panes)
+            .transpose()
     }
 
     pub fn save_panes(&self, theme: Theme, keymap: &Keymap) -> io::Result<()> {
@@ -190,7 +197,9 @@ mod tests {
         std::fs::DirBuilder::new().mode(0o700).create(&dir).unwrap();
         struct Cleanup(PathBuf);
         impl Drop for Cleanup {
-            fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
         }
         let _cleanup = Cleanup(dir.clone());
         let store = Store::new(&dir).unwrap();
@@ -210,7 +219,8 @@ mod tests {
         assert!(!dir.join("unoccupied").exists());
         assert!(Store::decode_panes(&serde_json::json!({
             "version":1,"theme":"dark","keys":"up=down"
-        })).is_err());
+        }))
+        .is_err());
     }
 
     #[test]

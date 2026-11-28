@@ -4,8 +4,8 @@ use super::{
     create_dir_at, dir_id, fd_path, no_conflict, open_dir, reject_mounts, require, unique,
     Destination, Engine,
 };
-use crate::archive::{list, portable_layout_preview, Kind};
 use crate::archive::native::read_archive_bytes;
+use crate::archive::{list, portable_layout_preview, Kind};
 use rustix::fs::{self as rx, AtFlags, Mode, OFlags, RenameFlags};
 use std::collections::BTreeMap;
 use std::ffi::OsStr;

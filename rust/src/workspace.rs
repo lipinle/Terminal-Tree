@@ -518,10 +518,17 @@ impl Workspace {
                 };
                 let allow_time_rounding = policy == 1;
                 if !confirm(
-                    if allow_time_rounding { "Retain original; allow mtime rounding" }
-                    else { "Cross-device move: keep original in private retention" },
+                    if allow_time_rounding {
+                        "Retain original; allow mtime rounding"
+                    } else {
+                        "Cross-device move: keep original in private retention"
+                    },
                     &[review.path(), target.path()],
-                    if allow_time_rounding { "round-time" } else { "yes" },
+                    if allow_time_rounding {
+                        "round-time"
+                    } else {
+                        "yes"
+                    },
                 )? {
                     return Ok("Cancelled".into());
                 }
@@ -542,7 +549,10 @@ impl Workspace {
                 super::page(
                     "Cross-device move: original retained",
                     &wrap(
-                        &format!("Original preserved at {}. Do not delete until independently verified.", path_text(&retained)),
+                        &format!(
+                            "Original preserved at {}. Do not delete until independently verified.",
+                            path_text(&retained)
+                        ),
                         usize::from(width).saturating_sub(1).max(1),
                     ),
                 )?;
@@ -761,7 +771,8 @@ impl Workspace {
                 }
                 let published = self.selected(model)?;
                 self.ordinary(&published)?;
-                let Some(original) = prompt("Original absolute path from inspected journal:")? else {
+                let Some(original) = prompt("Original absolute path from inspected journal:")?
+                else {
                     return Ok("Cancelled".into());
                 };
                 let original = PathBuf::from(original);
@@ -780,15 +791,24 @@ impl Workspace {
                 let target = self.engine.destination(&output)?;
                 let review = worker::run(1, |progress| {
                     progress.item(path_text(&published), 0)?;
-                    self.engine.review_retained_recovery(&original, &published, &id, &mut |point| progress.checkpoint(point))
+                    self.engine
+                        .review_retained_recovery(&original, &published, &id, &mut |point| {
+                            progress.checkpoint(point)
+                        })
                 })?;
-                if !confirm("Recover verified retained copy to NEW path; preserve all evidence",
-                    &[&original, review.retained_path(), &published, target.path()], "recover")? {
+                if !confirm(
+                    "Recover verified retained copy to NEW path; preserve all evidence",
+                    &[&original, review.retained_path(), &published, target.path()],
+                    "recover",
+                )? {
                     return Ok("Cancelled".into());
                 }
                 worker::run(1, |progress| {
                     progress.item(path_text(review.retained_path()), 0)?;
-                    self.engine.copy_retained_recovery(&review, &target, &mut |point| progress.checkpoint(point))?;
+                    self.engine
+                        .copy_retained_recovery(&review, &target, &mut |point| {
+                            progress.checkpoint(point)
+                        })?;
                     progress.finished(1);
                     Ok(())
                 })?;

@@ -332,12 +332,14 @@ fn bookmark_menu(marks: &mut Bookmarks) -> io::Result<BookmarkChoice> {
                         .map_err(|_| io::Error::other("invalid bookmark selection"))?;
                 }
                 KeyCode::Char('K') if selected > 0 => {
-                    marks.move_to(selected, selected - 1)
+                    marks
+                        .move_to(selected, selected - 1)
                         .map_err(|_| io::Error::other("invalid bookmark selection"))?;
                     selected -= 1;
                 }
                 KeyCode::Char('J') if selected + 1 < marks.paths().len() => {
-                    marks.move_to(selected, selected + 1)
+                    marks
+                        .move_to(selected, selected + 1)
                         .map_err(|_| io::Error::other("invalid bookmark selection"))?;
                     selected += 1;
                 }
@@ -366,7 +368,10 @@ fn open_location(model: &mut TreeModel, marks: &Bookmarks, index: usize) -> io::
 
 #[cfg(all(feature = "native-ops", target_os = "linux"))]
 fn find_location(model: &mut TreeModel, content: bool) -> io::Result<()> {
-    use terminal_tree::search::{content::{text, ContentLimits}, filenames, SearchLimits};
+    use terminal_tree::search::{
+        content::{text, ContentLimits},
+        filenames, SearchLimits,
+    };
 
     let label = if content {
         "Find text (case-sensitive):"
@@ -418,20 +423,28 @@ fn find_location(model: &mut TreeModel, content: bool) -> io::Result<()> {
     if paths.is_empty() {
         return crate::page(&title, &["No matching entries".into()]);
     }
-    let labels: Vec<_> = paths.iter().map(|path| display_name(path.as_os_str())).collect();
+    let labels: Vec<_> = paths
+        .iter()
+        .map(|path| display_name(path.as_os_str()))
+        .collect();
     if let Some(index) = crate::choose(&title, &labels)? {
         let path = &paths[index];
         let metadata = std::fs::symlink_metadata(path)?;
         let directory = if metadata.is_dir() && !metadata.file_type().is_symlink() {
             path.as_path()
         } else {
-            path.parent().ok_or_else(|| io::Error::other("missing result parent"))?
+            path.parent()
+                .ok_or_else(|| io::Error::other("missing result parent"))?
         };
         if !directory.starts_with(&root) || directory.canonicalize()? != directory {
             return Err(io::Error::other("search result location changed"));
         }
         let mut replacement = tree(directory)?;
-        if let Some(index) = replacement.rows().iter().position(|row| row.entry.path == *path) {
+        if let Some(index) = replacement
+            .rows()
+            .iter()
+            .position(|row| row.entry.path == *path)
+        {
             replacement.select(index);
         }
         *model = replacement;
@@ -439,7 +452,11 @@ fn find_location(model: &mut TreeModel, content: bool) -> io::Result<()> {
     Ok(())
 }
 
-fn pane_help(keymap: &Keymap, snapshot_enabled: bool, preferences_enabled: bool) -> io::Result<bool> {
+fn pane_help(
+    keymap: &Keymap,
+    snapshot_enabled: bool,
+    preferences_enabled: bool,
+) -> io::Result<bool> {
     let mut lines = vec![
         "Navigation: use the configured bindings below.".into(),
         keymap.summary(),
@@ -573,12 +590,18 @@ pub(crate) fn browse(
     }
     #[cfg(not(feature = "native-ops"))]
     if preferences.is_some() {
-        return Err(io::Error::other("pane preferences require native Linux support"));
+        return Err(io::Error::other(
+            "pane preferences require native Linux support",
+        ));
     }
     #[cfg(feature = "native-ops")]
     let store = preferences.map(super::settings::Store::new).transpose()?;
     #[cfg(feature = "native-ops")]
-    let saved = store.as_ref().map(|store| store.load_panes()).transpose()?.flatten();
+    let saved = store
+        .as_ref()
+        .map(|store| store.load_panes())
+        .transpose()?
+        .flatten();
     #[cfg(not(feature = "native-ops"))]
     let saved: Option<(Theme, Keymap)> = None;
     let (saved_theme, saved_keys) = saved.unwrap_or_default();
@@ -688,7 +711,9 @@ pub(crate) fn browse(
                                 Err(error) => Err(error),
                             }
                         } else {
-                            Err(io::Error::other("use --preferences DIR to enable explicit saves"))
+                            Err(io::Error::other(
+                                "use --preferences DIR to enable explicit saves",
+                            ))
                         }
                     }
                     KeyCode::Char('t') => {

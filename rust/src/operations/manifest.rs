@@ -40,17 +40,22 @@ impl Manifest {
         if self == actual {
             return true;
         }
-        if !allow_time_rounding || self.items.len() != 1 || actual.items.len() != 1
-            || !self.groups.is_empty() || !actual.groups.is_empty()
+        if !allow_time_rounding
+            || self.items.len() != 1
+            || actual.items.len() != 1
+            || !self.groups.is_empty()
+            || !actual.groups.is_empty()
         {
             return false;
         }
-        let (Some(source), Some(target)) =
-            (self.items.get(Path::new(".")), actual.items.get(Path::new(".")))
-        else {
+        let (Some(source), Some(target)) = (
+            self.items.get(Path::new(".")),
+            actual.items.get(Path::new(".")),
+        ) else {
             return false;
         };
-        if !matches!(&source.body, Body::File(..)) || !source.attrs.is_empty()
+        if !matches!(&source.body, Body::File(..))
+            || !source.attrs.is_empty()
             || source.mode & 0o7000 != 0
         {
             return false;
@@ -457,8 +462,13 @@ mod transfer_metadata_tests {
     #[test]
     fn timestamp_tolerance_is_narrow_and_explicit() {
         let item = Item {
-            mode: 0o100600, uid: 1000, gid: 1000, seconds: 100, nanos: 0,
-            attrs: BTreeMap::new(), body: Body::File(3, [1; 32]),
+            mode: 0o100600,
+            uid: 1000,
+            gid: 1000,
+            seconds: 100,
+            nanos: 0,
+            attrs: BTreeMap::new(),
+            body: Body::File(3, [1; 32]),
         };
         let source = Manifest {
             items: BTreeMap::from([(PathBuf::from("."), item.clone())]),

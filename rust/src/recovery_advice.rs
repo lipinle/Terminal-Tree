@@ -80,8 +80,14 @@ pub fn classify(filename: &OsStr, record: &Value) -> Advice {
         return Advice::MalformedRecord;
     };
     match record.get("operation").and_then(Value::as_str) {
-        Some("copy" | "copy-time-tolerance" | "retained-recovery-copy") if source && destination && stage => Advice::InspectTransfer,
-        Some("retained-move" | "retained-move-time-tolerance") if source && destination && stage => {
+        Some("copy" | "copy-time-tolerance" | "retained-recovery-copy")
+            if source && destination && stage =>
+        {
+            Advice::InspectTransfer
+        }
+        Some("retained-move" | "retained-move-time-tolerance")
+            if source && destination && stage =>
+        {
             Advice::InspectRetainedMove
         }
         Some("move") if source && destination && !stage => Advice::InspectTransfer,
@@ -94,9 +100,18 @@ pub fn classify(filename: &OsStr, record: &Value) -> Advice {
         }
         Some("permanent-delete") if source && !destination => Advice::InspectPurge,
         Some(
-            "copy" | "move" | "mkdir" | "create-file" | "native-trash" | "restore"
-            | "permanent-delete" | "archive-extract" | "retained-move"
-            | "copy-time-tolerance" | "retained-move-time-tolerance" | "retained-recovery-copy",
+            "copy"
+            | "move"
+            | "mkdir"
+            | "create-file"
+            | "native-trash"
+            | "restore"
+            | "permanent-delete"
+            | "archive-extract"
+            | "retained-move"
+            | "copy-time-tolerance"
+            | "retained-move-time-tolerance"
+            | "retained-recovery-copy",
         )
         | None => Advice::MalformedRecord,
         Some(_) => Advice::UnrecognizedOperation,

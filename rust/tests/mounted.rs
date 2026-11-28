@@ -40,11 +40,23 @@ fn mount_policy_and_real_enospc() {
     assert!(!moving.exists());
     assert_eq!(fs::read(&moved).unwrap(), b"retained original");
     assert_eq!(fs::read(&retained).unwrap(), b"retained original");
-    let id = retained.parent().unwrap().file_name().unwrap().to_str().unwrap()
-        .strip_prefix(".terminal-tree-copy-").unwrap();
+    let id = retained
+        .parent()
+        .unwrap()
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .strip_prefix(".terminal-tree-copy-")
+        .unwrap();
     let recovered = home.join("recovered-source");
-    let recovery = e.review_retained_recovery(&moving, &moved, id, &mut |_| Ok(())).unwrap();
-    e.copy_retained_recovery(&recovery, &e.destination(&recovered).unwrap(), &mut |_| Ok(())).unwrap();
+    let recovery = e
+        .review_retained_recovery(&moving, &moved, id, &mut |_| Ok(()))
+        .unwrap();
+    e.copy_retained_recovery(&recovery, &e.destination(&recovered).unwrap(), &mut |_| {
+        Ok(())
+    })
+    .unwrap();
     assert_eq!(fs::read(&recovered).unwrap(), b"retained original");
     assert_eq!(fs::read(&retained).unwrap(), b"retained original");
     assert_eq!(fs::read(&moved).unwrap(), b"retained original");

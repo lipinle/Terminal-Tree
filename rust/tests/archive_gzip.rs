@@ -1,10 +1,10 @@
 #![cfg(all(feature = "native-ops", target_os = "linux"))]
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 use terminal_tree::archive::native::{list_file, read_member};
 use terminal_tree::operations::Engine;
-use std::os::unix::fs::PermissionsExt;
 
 #[test]
 fn gzip_archive_cli_round_trip_and_scoped_extraction() {
@@ -34,7 +34,10 @@ fn gzip_archive_cli_round_trip_and_scoped_extraction() {
     let archive = workspace.join("data.tar.gz");
     fs::write(&archive, &result.stdout).unwrap();
     assert_eq!(list_file(&archive).unwrap()[0].name, "folder/file");
-    assert_eq!(read_member(&archive, "folder/file").unwrap(), b"hello gzip\0");
+    assert_eq!(
+        read_member(&archive, "folder/file").unwrap(),
+        b"hello gzip\0"
+    );
     let engine = Engine::new(&workspace, &journal).unwrap();
     let bytes = engine.read_archive_for_extraction(&archive).unwrap();
     let dest = workspace.join("extracted");

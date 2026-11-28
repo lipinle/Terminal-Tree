@@ -2,12 +2,12 @@
 use super::{
     attributes, dir_id, fd_path, identity, no_conflict, require, Destination, Engine, Review,
 };
+use super::{create_dir_at, manifest, manifest_with, reject_mounts, unique, Transfer};
+use std::ffi::OsStr;
 use std::fs;
 use std::io;
-use std::ffi::OsStr;
-use std::path::PathBuf;
-use super::{create_dir_at, manifest, manifest_with, reject_mounts, unique, Transfer};
 use std::os::unix::fs::MetadataExt;
+use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FileTransferObservation {
@@ -132,7 +132,11 @@ impl Engine {
         checkpoint("retained-prepare")?;
         self.log(
             &id,
-            if allow_time_rounding { "retained-move-time-tolerance" } else { "retained-move" },
+            if allow_time_rounding {
+                "retained-move-time-tolerance"
+            } else {
+                "retained-move"
+            },
             Some(&review.path),
             Some(&destination.path),
             Some(&retained),
@@ -140,12 +144,18 @@ impl Engine {
         // Reuse the independently journalled, verified, synced no-replace copy.
         // Any error up to this point leaves the original at its initial name.
         self.transfer_with_metadata_policy(
-            review, destination, Transfer::Copy, allow_time_rounding, checkpoint,
+            review,
+            destination,
+            Transfer::Copy,
+            allow_time_rounding,
+            checkpoint,
         )?;
         checkpoint("retained-verify")?;
         let target = self.review(destination.path())?;
         require(
-            review.manifest.matches_transfer(&target.manifest, allow_time_rounding),
+            review
+                .manifest
+                .matches_transfer(&target.manifest, allow_time_rounding),
             "published copy differs",
         )?;
         require(
@@ -165,8 +175,9 @@ impl Engine {
         let stage = create_dir_at(&source_parent, OsStr::new(&retention_name))?;
         reject_mounts(&retention)?;
         require(
-            dir_id(&super::open_dir(&fd_path(&source_parent).join(&retention_name))?)?
-                == dir_id(&stage)?,
+            dir_id(&super::open_dir(
+                &fd_path(&source_parent).join(&retention_name),
+            )?)? == dir_id(&stage)?,
             "retention directory replaced",
         )?;
         checkpoint("retained-before-publish")?;
@@ -180,8 +191,9 @@ impl Engine {
         )?;
         reject_mounts(&retention)?;
         require(
-            dir_id(&super::open_dir(&fd_path(&source_parent).join(&retention_name))?)?
-                == dir_id(&stage)?,
+            dir_id(&super::open_dir(
+                &fd_path(&source_parent).join(&retention_name),
+            )?)? == dir_id(&stage)?,
             "retention directory replaced",
         )?;
         self.check_journal()?;
@@ -211,8 +223,9 @@ impl Engine {
         self.check(&target)?;
         self.check_parent(&review.path, &source_parent)?;
         require(
-            dir_id(&super::open_dir(&fd_path(&source_parent).join(&retention_name))?)?
-                == dir_id(&stage)?,
+            dir_id(&super::open_dir(
+                &fd_path(&source_parent).join(&retention_name),
+            )?)? == dir_id(&stage)?,
             "retention directory replaced",
         )?;
         self.complete(&id)?;

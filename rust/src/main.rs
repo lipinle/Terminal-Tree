@@ -1183,15 +1183,23 @@ fn run() -> io::Result<()> {
                     if theme.is_some() {
                         return Err(io::Error::other("duplicate --theme"));
                     }
-                    theme = Some(args.next().and_then(|value| value.into_string().ok())
-                        .and_then(|value| terminal_tree::theme::Theme::parse(&value))
-                        .ok_or_else(|| io::Error::other("theme must be terminal, dark, light or monochrome"))?);
+                    theme = Some(
+                        args.next()
+                            .and_then(|value| value.into_string().ok())
+                            .and_then(|value| terminal_tree::theme::Theme::parse(&value))
+                            .ok_or_else(|| {
+                                io::Error::other(
+                                    "theme must be terminal, dark, light or monochrome",
+                                )
+                            })?,
+                    );
                 } else if arg == "--preferences" {
                     if preferences.is_some() {
                         return Err(io::Error::other("duplicate --preferences"));
                     }
-                    preferences = Some(path_arg(Some(args.next().ok_or_else(||
-                        io::Error::other("private existing preferences directory required"))?))?);
+                    preferences = Some(path_arg(Some(args.next().ok_or_else(|| {
+                        io::Error::other("private existing preferences directory required")
+                    })?))?);
                 } else if arg == "--bookmarks-in" || arg == "--bookmarks-out" {
                     let slot = if arg == "--bookmarks-in" {
                         &mut snapshot_in

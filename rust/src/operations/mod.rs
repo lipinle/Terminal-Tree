@@ -19,11 +19,11 @@ mod manifest;
 mod policy;
 mod retained_recovery;
 mod trash;
-pub use retained_recovery::RetainedRecovery;
 pub use cross_device::FileTransferObservation;
 use manifest::{
     copy_tree, fd_path, manifest, manifest_with, snapshot, Identity, Manifest, Snapshot,
 };
+pub use retained_recovery::RetainedRecovery;
 pub use trash::{PurgeOutcome, PurgeReview, RestoreOutcome, RestoreReview, Trash};
 
 /// A pending journal entry and the result of validating and reading it.
@@ -584,8 +584,13 @@ impl Engine {
         checkpoint("transfer-prepare")?;
         self.log(
             &id,
-            if copy && allow_time_rounding { "copy-time-tolerance" }
-            else if copy { "copy" } else { "move" },
+            if copy && allow_time_rounding {
+                "copy-time-tolerance"
+            } else if copy {
+                "copy"
+            } else {
+                "move"
+            },
             Some(&review.path),
             Some(&dst),
             if copy { Some(&stage_path) } else { None },
@@ -810,9 +815,7 @@ impl Engine {
         (&f).take(65537).read_to_end(&mut bytes)?;
         let after = f.metadata()?;
         require(
-            bytes.len() as u64 == m.len()
-                && safe(&after)
-                && identity(&after) == identity(&m),
+            bytes.len() as u64 == m.len() && safe(&after) && identity(&after) == identity(&m),
             "record changed during read",
         )?;
         let named = fs::symlink_metadata(fd_path(&self.journal).join(name))?;
@@ -820,8 +823,7 @@ impl Engine {
             safe(&named) && identity(&named) == identity(&m),
             "record replaced during read",
         )?;
-        let value: serde_json::Value =
-            serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+        let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
         require(value.is_object(), "invalid journal object")?;
         Ok(value)
     }

@@ -124,9 +124,7 @@ pub fn run<T: Send>(
     run_modal(total, "File operation in progress", false, job)
 }
 
-pub fn run_search<T: Send>(
-    job: impl FnOnce(&Progress) -> io::Result<T> + Send,
-) -> io::Result<T> {
+pub fn run_search<T: Send>(job: impl FnOnce(&Progress) -> io::Result<T> + Send) -> io::Result<T> {
     run_modal(1, "Search in progress", true, job)
 }
 
