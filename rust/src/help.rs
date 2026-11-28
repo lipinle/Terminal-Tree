@@ -65,7 +65,7 @@ const TOPICS:&[Topic]=&[
         ("u","Undo the most recent eligible move/rename in this session. Review and type yes; changed results or occupied destinations are refused."),
         ("Example: copy","Select a file (or mark several), press c, navigate to the target, press v, review paths, then type yes."),
         ("Example: move","Use x instead of c. Normal paste refuses cross-filesystem moves. Existing destinations are never overwritten."),
-        ("Actions: cross-device move","Cut one regular file, navigate to an approved target device, choose Move one file across devices in F6, review and type yes. The verified copy is published first; the original is retained privately, not deleted. Record the displayed retention path. No automatic cleanup."),
+        ("Actions: cross-device move","Cut one regular file, navigate to an approved target device, choose Move one file across devices in F6, choose strict or explicit time rounding, review and type the requested word. The verified copy is published first; the original is retained privately, not deleted. Record the displayed retention path. No automatic cleanup."),
         ("Clipboard","Copy/cut replaces the old clipboard and clears marks after successful review. A successful move or failed transfer clears the clipboard."),
         ("Batch","Each item commits separately. A failure stops the batch; already committed items remain. No automatic rollback."),
     ]},
@@ -81,7 +81,7 @@ const TOPICS:&[Topic]=&[
     Topic{title:"Review, recovery and safety",rows:&[
         ("j","Open the read-only pending journal. Inspect source, destination and staging/metadata; pending does not mean failed."),
         ("Review paths","Up / Down scroll one line; PgUp / PgDn scroll a page. Enter advances to the end, then opens the confirmation prompt."),
-        ("Confirmation","Type yes (or DELETE for permanent deletion). Enter submits, Backspace edits, Esc / Ctrl+C cancels. Anything other than the required word declines the operation."),
+        ("Confirmation","Type yes (or round-time for opt-in timestamp rounding, DELETE for permanent deletion). Enter submits, Backspace edits, Esc / Ctrl+C cancels. Anything other than the required word declines the operation."),
         ("During worker","Esc / Ctrl+C requests cancellation. It may wait for a safe checkpoint. Once commit begins, the current item must finish safely."),
         ("After interruption","Inspect j and the actual paths before retrying. Staging and pending records can remain. Recovery does not replay, delete or roll back automatically."),
         ("Undo limits","Undo is session-local and only for eligible moves/renames, not permanent deletion."),
