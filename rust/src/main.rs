@@ -1002,17 +1002,52 @@ fn run() -> io::Result<()> {
                 ))
             }
         }
+        Some("--suggest-name") => {
+            let directory = path_arg(Some(
+                args.next()
+                    .ok_or_else(|| io::Error::other("directory required"))?,
+            ))?;
+            let name = args
+                .next()
+                .ok_or_else(|| io::Error::other("requested filename required"))?;
+            if args.next().is_some() {
+                return Err(io::Error::other("unexpected name argument"));
+            }
+            #[cfg(all(feature = "native-ops", target_os = "linux"))]
+            {
+                let candidate = terminal_tree::rename_plan::native::suggest(&directory, &name)?;
+                println!("{}", display_name(&candidate));
+                Ok(())
+            }
+            #[cfg(not(all(feature = "native-ops", target_os = "linux")))]
+            {
+                let _ = (directory, name);
+                Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "name suggestion requires the native Linux build",
+                ))
+            }
+        }
         Some("--archive-layout") => {
             let path = path_arg(Some(
                 args.next()
                     .ok_or_else(|| io::Error::other("archive path required"))?,
             ))?;
+            let portable = match args.next() {
+                None => false,
+                Some(flag) if flag == "--portable" => true,
+                _ => return Err(io::Error::other("unexpected archive argument")),
+            };
             if args.next().is_some() {
                 return Err(io::Error::other("unexpected archive argument"));
             }
             #[cfg(all(feature = "native-ops", target_os = "linux"))]
             {
-                let layout = terminal_tree::archive::native::layout_file(&path)?;
+                let layout = if portable {
+                    terminal_tree::archive::native::portable_layout_file(&path)?
+                } else {
+                    terminal_tree::archive::native::layout_file(&path)?
+                };
                 let mut out = io::BufWriter::new(io::stdout().lock());
                 writeln!(
                     out,
@@ -1031,7 +1066,7 @@ fn run() -> io::Result<()> {
             }
             #[cfg(not(all(feature = "native-ops", target_os = "linux")))]
             {
-                let _ = path;
+                let _ = (path, portable);
                 Err(io::Error::new(
                     io::ErrorKind::Unsupported,
                     "archive layout requires the native Linux build",
@@ -1226,7 +1261,7 @@ fn run() -> io::Result<()> {
             Ok(())
         }
         _ => {
-            eprintln!("Experimental read-only Rust port\nUsage: terminal-tree --list [-a] [PATH] | --browse [PATH] | --tree [PATH] | --panes [LEFT] [RIGHT] [--keys SPEC] [--bookmarks-in PATH] [--bookmarks-out PATH] | --find PATH QUERY [--content] [--hidden] [--depth N] | --archive-list PATH | --archive-layout PATH | --image-preview PATH | --rename-plan DIRECTORY NEEDLE REPLACEMENT NAME... | --scan-count PATH [REPEATS] | --version | --edition");
+            eprintln!("Experimental read-only Rust port\nUsage: terminal-tree --list [-a] [PATH] | --browse [PATH] | --tree [PATH] | --panes [LEFT] [RIGHT] [--keys SPEC] [--bookmarks-in PATH] [--bookmarks-out PATH] | --find PATH QUERY [--content] [--hidden] [--depth N] | --archive-list PATH | --archive-layout PATH [--portable] | --suggest-name DIRECTORY NAME | --image-preview PATH | --rename-plan DIRECTORY NEEDLE REPLACEMENT NAME... | --scan-count PATH [REPEATS] | --version | --edition");
             Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "unsupported or missing command",

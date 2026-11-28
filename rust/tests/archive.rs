@@ -213,7 +213,32 @@ fn layout_cli_includes_implicit_parents_without_writes() {
         output.stdout,
         b"Layout (read-only): 2 directories, 2 files, 5 payload bytes\ndirectory\t0\ta\ndirectory\t0\ta/b\nfile\t3\ta/b/one\nfile\t2\ta/two\n"
     );
+    let portable = Command::new(env!("CARGO_BIN_EXE_terminal-tree"))
+        .arg("--archive-layout")
+        .arg(&path)
+        .arg("--portable")
+        .output()
+        .unwrap();
+    assert!(portable.status.success());
+    assert_eq!(portable.stdout, output.stdout);
+    let aliases = root.join("aliases.tar");
+    let mut aliased = Vec::new();
+    append(&mut aliased, "A/one", b'0', b"x");
+    append(&mut aliased, "a/two", b'0', b"y");
+    finish(&mut aliased);
+    fs::write(&aliases, &aliased).unwrap();
+    assert!(run(&aliases).status.success());
+    let refused = Command::new(env!("CARGO_BIN_EXE_terminal-tree"))
+        .arg("--archive-layout")
+        .arg(&aliases)
+        .arg("--portable")
+        .output()
+        .unwrap();
+    assert!(!refused.status.success());
+    assert!(refused.stdout.is_empty());
     assert!(!root.join("a").exists());
+    assert!(!root.join("A").exists());
+    assert_eq!(fs::read(&aliases).unwrap(), aliased);
     assert_eq!(fs::read(&path).unwrap(), archive);
     symlink(&path, root.join("alias")).unwrap();
     let damaged = root.join("damaged.tar");
