@@ -62,7 +62,7 @@ impl Slot{
     pub fn overlay_expired(&mut self)->bool{if let Some(o)=&mut self.overlay{if !o.alive(){self.overlay=None;return true;}}false}
     pub fn show(&mut self,frame:&Frame,x:u16,y:u16,cols:u16,rows:u16)->io::Result<()>{
         self.clear()?;
-        if super::x11_overlay::supported(){self.overlay=Some(super::x11_overlay::Overlay::start(frame,x,y,cols,rows)?);return Ok(());}
+        if super::x11_overlay::requested(){self.overlay=Some(super::x11_overlay::Overlay::start(frame,x,y,cols,rows)?);return Ok(());}
         let mut buf=Vec::new();queue!(buf,MoveTo(x,y))?;
         encode(&mut buf,self.id,frame.width,frame.height,frame.rgb(),cols,rows)?;
         self.visible=true; // cleanup even on a partial write

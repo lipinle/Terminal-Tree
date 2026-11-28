@@ -19,24 +19,51 @@ fn is_terminal(c:&RustConnection,parent:Window)->Result<bool>{
     let p=c.get_property(false,parent,AtomEnum::WM_CLASS,AtomEnum::STRING,0,128)?.reply()?;
     Ok(p.value.split(|b|*b==0).any(|s|s.eq_ignore_ascii_case(b"gnome-terminal")||s.eq_ignore_ascii_case(b"gnome-terminal-server")||s.eq_ignore_ascii_case(b"org.gnome.Terminal")))
 }
+// WM_NORMAL_HINTS uses ICCCM's 32-bit size-hint layout. Without resize
+// increments we cannot infer the cell grid, and refuse automatic placement.
+fn grid(w:u16,h:u16,cols:u16,rows:u16,hints:&[u32])->Result<(u16,u16,u16,u16)>{
+    if hints.len()<11||hints[0]&(1<<6)==0||cols==0||rows==0{return Err("terminal resize increments unavailable".into());}
+    let (cw,ch)=(hints[9],hints[10]);
+    if !(4..=64).contains(&cw)||!(8..=128).contains(&ch){return Err("invalid terminal cell size".into());}
+    let ew=u32::from(w).checked_sub(u32::from(cols)*cw).ok_or("grid wider than client")?;
+    let eh=u32::from(h).checked_sub(u32::from(rows)*ch).ok_or("grid taller than client")?;
+    if ew>128||eh>256{return Err("ambiguous terminal padding".into());}
+    // We don't know how padding is divided across the sides. Restrict the
+    // image to the intersection of all possible positions of the requested
+    // cell rectangle. This trades a little area for safer placement.
+    Ok((ew as u16,eh as u16,cw as u16,ch as u16))
+}
+fn probe(cols:u16,rows:u16,pinned:Option<Window>)->Result<()>{
+    let (c,s)=x11rb::connect(None)?;
+    let root=c.setup().roots[s].root;
+    let parent=active(&c,root,atom(&c,b"_NET_ACTIVE_WINDOW")?)?.ok_or("no active window")?;
+    if pinned.is_some_and(|id|id!=parent)||parent==root||!is_terminal(&c,parent)?{return Err("active window is not the selected GNOME Terminal client".into());}
+    let g=c.get_geometry(parent)?.reply()?;
+    if g.root!=root||!matches!(g.depth,24|32)||c.get_window_attributes(parent)?.reply()?.map_state!=MapState::VIEWABLE{return Err("unsupported terminal client".into());}
+    let prop=c.get_property(false,parent,AtomEnum::WM_NORMAL_HINTS,AtomEnum::WM_SIZE_HINTS,0,18)?.reply()?;
+    let hints:Vec<_>=prop.value32().ok_or("invalid size hints")?.collect();
+    let (ew,eh,cw,ch)=grid(g.width,g.height,cols,rows,&hints)?;
+    println!("{parent} {ew} {eh} {cw} {ch} {} {}",g.width,g.height);
+    Ok(())
+}
 fn fits(rect:Rect,w:u16,h:u16)->bool{
     rect.w>0&&rect.h>0&&u32::from(rect.x)+u32::from(rect.w)<=u32::from(w)&&u32::from(rect.y)+u32::from(rect.h)<=u32::from(h)&&rect.x<=i16::MAX as u16&&rect.y<=i16::MAX as u16
 }
 fn make(c:&RustConnection,root:Window,parent:Window,rect:Rect,w:u16,h:u16,rgb:&[u8])->Result<Window>{
     let g=c.get_geometry(parent)?.reply()?;
     let a=c.get_window_attributes(parent)?.reply()?;
-    if g.root!=root||g.depth!=24||!fits(rect,g.width,g.height)||a.map_state!=MapState::VIEWABLE{return Err("unsupported or changed target geometry".into());}
+    if g.root!=root||!matches!(g.depth,24|32)||!fits(rect,g.width,g.height)||a.map_state!=MapState::VIEWABLE{return Err("unsupported or changed target geometry".into());}
     let screen=c.setup().roots.iter().find(|s|s.root==root).ok_or("screen not found")?;
     let visual=screen.allowed_depths.iter().flat_map(|d|&d.visuals).find(|v|v.visual_id==a.visual).ok_or("visual not found")?;
     if visual.class!=VisualClass::TRUE_COLOR||visual.red_mask!=0xff0000||visual.green_mask!=0x00ff00||visual.blue_mask!=0x0000ff{return Err("unsupported X11 visual".into());}
-    if !c.setup().pixmap_formats.iter().any(|f|f.depth==24&&f.bits_per_pixel==32&&f.scanline_pad==32){return Err("unsupported X11 pixel format".into());}
+    if !c.setup().pixmap_formats.iter().any(|f|f.depth==g.depth&&f.bits_per_pixel==32&&f.scanline_pad==32){return Err("unsupported X11 pixel format".into());}
     if rgb.len()!=usize::from(w)*usize::from(h)*3||w==0||h==0||w>1024||h>1024||rect.w!=w||rect.h!=h{return Err("invalid pixel frame".into());}
     let version=c.shape_query_version()?.reply()?;
     if (version.major_version,version.minor_version)<(1,1){return Err("X Shape input transparency unavailable".into());}
     let win=c.generate_id()?;
     let pix=c.generate_id()?;
     let gc=c.generate_id()?;
-    c.create_pixmap(24,pix,parent,w,h)?.check()?;
+    c.create_pixmap(g.depth,pix,parent,w,h)?.check()?;
     c.create_gc(gc,pix,&CreateGCAux::new())?.check()?;
     let stride=usize::from(w)*4;
     let rows_per=(60*1024/stride).max(1);
@@ -45,9 +72,10 @@ fn make(c:&RustConnection,root:Window,parent:Window,rect:Rect,w:u16,h:u16,rgb:&[
         let rows=rows_per.min(usize::from(h)-y);
         let mut data=Vec::with_capacity(rows*stride);
         for p in rgb[y*usize::from(w)*3..(y+rows)*usize::from(w)*3].chunks_exact(3){
-            if little{data.extend([p[2],p[1],p[0],0]);}else{data.extend([0,p[0],p[1],p[2]]);}
+            let alpha=if g.depth==32{255}else{0};
+            if little{data.extend([p[2],p[1],p[0],alpha]);}else{data.extend([alpha,p[0],p[1],p[2]]);}
         }
-        c.put_image(ImageFormat::Z_PIXMAP,pix,gc,w,rows as u16,0,y as i16,0,24,&data)?.check()?;
+        c.put_image(ImageFormat::Z_PIXMAP,pix,gc,w,rows as u16,0,y as i16,0,g.depth,&data)?.check()?;
     }
     c.create_window(COPY_DEPTH_FROM_PARENT,win,parent,rect.x as i16,rect.y as i16,w,h,0,WindowClass::INPUT_OUTPUT,COPY_FROM_PARENT,&CreateWindowAux::new().background_pixmap(pix))?.check()?;
     // Empty input region: mouse events go through to the terminal.
@@ -60,7 +88,11 @@ fn make(c:&RustConnection,root:Window,parent:Window,rect:Rect,w:u16,h:u16,rgb:&[
 }
 fn run()->Result<()>{
     let a:Vec<_>=std::env::args().skip(1).collect();
-    if a.len()!=5{return Err("usage: tt-x11-overlay WINDOW_ID X Y WIDTH HEIGHT < RGB stream".into());}
+    if a.first().map(String::as_str)==Some("--probe"){
+        if !matches!(a.len(),3|4){return Err("usage: tt-x11-overlay --probe COLS ROWS [WINDOW_ID]".into());}
+        return probe(a[1].parse()?,a[2].parse()?,a.get(3).map(|s|parse_window(s)).transpose()?);
+    }
+    if !matches!(a.len(),5|7){return Err("usage: tt-x11-overlay WINDOW_ID X Y WIDTH HEIGHT [CLIENT_W CLIENT_H] < RGB stream".into());}
     let parent=parse_window(&a[0])?;
     let rect=Rect{x:a[1].parse()?,y:a[2].parse()?,w:a[3].parse()?,h:a[4].parse()?};
     if !(1..=1024).contains(&rect.w)||!(1..=1024).contains(&rect.h){return Err("invalid dimensions".into());}
@@ -72,6 +104,7 @@ fn run()->Result<()>{
     if parent==root||!is_terminal(&c,parent)?||active(&c,root,active_atom)?!=Some(parent){return Err("target must be the active GNOME Terminal client".into());}
     let g=c.get_geometry(parent)?.reply()?;
     let initial=(g.width,g.height);
+    if a.len()==7&&initial!=(a[5].parse()?,a[6].parse()?){return Err("client resized after calibration".into());}
     let win=make(&c,root,parent,rect,rect.w,rect.h,&rgb)?;
     io::stdout().write_all(b"OK\n")?;io::stdout().flush()?;
     // A socket owned by the core remains open while this image is needed.
@@ -90,6 +123,13 @@ fn main(){if let Err(e)=run(){eprintln!("x11 overlay: {e}");std::process::exit(1
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[test]fn grid_inference(){
+        let mut hints=[0;18];hints[0]=1<<6;hints[9]=10;hints[10]=20;
+        assert_eq!(grid(804,530,80,25,&hints).unwrap(),(4,30,10,20));
+        assert!(grid(799,530,80,25,&hints).is_err());
+        assert!(grid(1000,530,80,25,&hints).is_err());
+        hints[0]=0;assert!(grid(804,530,80,25,&hints).is_err());
+    }
     #[test]fn bounds(){assert!(fits(Rect{x:10,y:10,w:20,h:20},30,30));assert!(!fits(Rect{x:65535,y:0,w:10,h:10},65535,50));}
     #[test]#[ignore]fn xvfb_click_through(){
         let (c,s)=x11rb::connect(None).unwrap();let root=c.setup().roots[s].root;

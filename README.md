@@ -118,7 +118,7 @@ The live image/PDF panel queues the latest selection after a 120 ms debounce. At
 
 ### Experimental GNOME Terminal / X11 overlay
 
-Optional [X11 helper](x11-overlay/README.md) adds high-resolution bitmap previews to an explicitly selected GNOME Terminal client. Manual geometry calibration and a dedicated single-tab X11 window are required; this is not automatic VTE detection or Wayland support. See the helper instructions for setup. No change to the core dependency graph or the existing add-on architecture.
+Optional [X11 helper](x11-overlay/README.md) adds high-resolution bitmap previews to an explicitly selected GNOME Terminal client. Start with TT_GRAPHICS=x11 in a dedicated active single-tab GNOME Terminal window; the helper infers a conservative grid from X11 resize hints and pins the client. Missing or ambiguous hints fall back to Unicode; exact manual geometry remains optional. No Wayland support. See the helper instructions for setup. No change to the core dependency graph or the existing add-on architecture.
 
 ## Navigation and search
 

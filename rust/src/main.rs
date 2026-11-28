@@ -113,14 +113,14 @@ impl Terminal {
         let guard = Self;
         execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture, Hide)?;
         #[cfg(feature = "native-ops")]
-        if x11_overlay::supported(){execute!(io::stdout(),crossterm::event::EnableFocusChange)?;}
+        if x11_overlay::requested(){let _=x11_overlay::supported();execute!(io::stdout(),crossterm::event::EnableFocusChange)?;}
         Ok(guard)
     }
 }
 impl Drop for Terminal {
     fn drop(&mut self) {
         #[cfg(feature = "native-ops")]
-        if x11_overlay::supported(){let _=execute!(io::stdout(),crossterm::event::DisableFocusChange);}
+        if x11_overlay::requested(){let _=execute!(io::stdout(),crossterm::event::DisableFocusChange);}
         let _ = execute!(
             io::stdout(),
             ResetColor,

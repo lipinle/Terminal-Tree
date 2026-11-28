@@ -30,6 +30,10 @@ pub fn show(prefs:&mut super::app_settings::Preferences,last:Option<&str>)->io::
             queue!(out,MoveTo(0,5),SetForegroundColor(prefs.accent),Print(super::clip(&format!("Selected: {} — {}",NAMES[selected.min(3)],DESCRIPTIONS[selected.min(3)]),width)),ResetColor)?;
             queue!(out,MoveTo(0,6),Print(super::clip(if selected==4{"Installation help (Enter opens)"}else{DETAILS[selected.min(3)]},width)))?;
         }
+        if h>8{
+            let x11=if !super::x11_overlay::installed(){"Not installed"}else if !super::x11_overlay::requested(){"Installed / start with TT_GRAPHICS=x11"}else if super::x11_overlay::supported(){"Installed / calibrated"}else{"Calibration unavailable / Unicode fallback"};
+            queue!(out,MoveTo(0,7),Print(super::clip(&format!("X11 Overlay: {x11}"),width)))?;
+        }
         if h>9{
             queue!(out,MoveTo(0,8),Print(super::clip(&format!("Last run: {}",last.unwrap_or("None")),width)))?;
         }
@@ -61,6 +65,9 @@ pub fn show(prefs:&mut super::app_settings::Preferences,last:Option<&str>)->io::
                 "cargo +stable build --release --manifest-path visual-preview/Cargo.toml".into(),
                 "sudo install -m 755 visual-preview/target/release/tt-visual-preview /usr/local/bin/tt-visual-preview".into(),
                 "Enable Visual Preview and select an image/PDF.".into(),
+                "X11: cargo +stable build --release --manifest-path x11-overlay/Cargo.toml".into(),
+                "sudo install -m 755 x11-overlay/target/release/tt-x11-overlay /usr/local/bin/tt-x11-overlay".into(),
+                "Open a dedicated GNOME Terminal on X11; start with TT_GRAPHICS=x11.".into(),
                 "No add-on is installed or updated automatically.".into(),
             ])?,
             _=>(),

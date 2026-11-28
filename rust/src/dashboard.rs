@@ -439,7 +439,7 @@ impl State {
         if cfg!(feature = "native-ops") && self.prefs.terminal_visible && h>=16 {percent(h,self.prefs.terminal_percent).clamp(5,h-9)} else {0}
     }
     #[cfg(feature = "native-ops")]
-    pub fn needs_poll(&self)->bool {self.terminal_panel.running()||self.preview_worker.busy()||(super::x11_overlay::supported()&&self.graphics_placed)}
+    pub fn needs_poll(&self)->bool {self.terminal_panel.running()||self.preview_worker.busy()||(super::x11_overlay::requested()&&self.graphics_placed)}
     #[cfg(feature = "native-ops")]
     pub fn tick_terminal(&mut self)->io::Result<bool> {
         let finished=self.terminal_panel.tick()?;
@@ -1327,10 +1327,11 @@ impl State {
         #[cfg(feature = "native-ops")]
         if l.preview>0 && self.visual_bitmap && !self.graphics_placed && self.graphics_focused && cap>2 {
             if let Some(frame)=&self.visual_frame{
-                let (cols,rows)=super::native_graphics::fit(frame,l.preview,(cap-2).min(u16::MAX as usize) as u16);
+                let area=(l.preview,(cap-2).min(u16::MAX as usize) as u16);
+                let (cols,rows)=if super::x11_overlay::requested(){area}else{super::native_graphics::fit(frame,area.0,area.1)};
                 match self.graphics_slot.show(frame,l.end()+1+(l.preview-cols)/2,6,cols,rows){
                     Ok(())=>self.graphics_placed=true,
-                    Err(_) if super::x11_overlay::supported()=>{
+                    Err(_) if super::x11_overlay::requested()=>{
                         self.graphics_failed=true;self.visual_bitmap=false;self.visual_frame=None;
                         self.preview_key=None;self.preview_lines=vec!["X11 placement unavailable; using Unicode".into()];
                         // Queue the fallback now so the idle event loop will poll it.
@@ -1440,10 +1441,10 @@ impl State {
     /// the existing navigator so the original review and write engine is used.
     pub fn input(&mut self, mut event: Event, model: &mut Model, searching: bool, writable: bool) -> io::Result<Option<Event>> {
         #[cfg(feature = "native-ops")]
-        if super::x11_overlay::supported(){match &event {
+        if super::x11_overlay::requested(){match &event {
             Event::FocusLost=>{self.graphics_slot.clear()?;self.graphics_placed=false;self.graphics_focused=false;return Ok(None);},
-            Event::FocusGained=>{self.graphics_focused=true;self.graphics_placed=false;return Ok(None);},
-            Event::Resize(_,_)=>{self.graphics_focused=true;self.graphics_failed=false;},
+            Event::FocusGained=>{super::x11_overlay::refresh();self.graphics_focused=true;self.graphics_placed=false;self.graphics_failed=false;self.preview_key=None;return Ok(None);},
+            Event::Resize(_,_)=>{super::x11_overlay::refresh();self.graphics_focused=true;self.graphics_failed=false;self.preview_key=None;},
             Event::Key(_)|Event::Mouse(_)=>{self.graphics_focused=true;},_=>(),
         }}
         // Modal actions can repaint the physical screen. Plain navigation and
