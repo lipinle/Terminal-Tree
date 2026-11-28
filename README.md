@@ -64,6 +64,12 @@ Add-ons lists installed/enabled/idle status for eza, 7-Zip and Git. Toggle each 
 
 For persistence on native Linux, create a private directory with `mkdir -m 700 ~/.config/terminal-tree` (if its parent already exists), or provide an existing owned mode-0700 directory through `TT_APP_CONFIG_DIR`. Settings > Save application preferences writes a separate bounded settings file atomically; it does not change shell settings or safety policy. Without an approved directory, preferences are session-only. Save can explicitly create the final private configuration directory under an existing owned, non-group/world-writable parent; it does not create missing ancestors or change existing permissions. Application preferences now include hidden-file visibility, sort order and lossless native bookmark paths. Settings > Manage bookmarks supports reordering and removal. Once saved, enable Autosave on normal exit to persist subsequent changes; no background writes or automatic recovery after a crash. Ctrl+K opens a searchable Command Palette using the same menu actions; write actions are excluded in read-only mode. Existing Ctrl+P remains the companion tools menu.
 
+### Tabs, panel sizing and shortcuts
+
+Ctrl+T opens a tab at the current location, Ctrl+W closes the active tab (the last tab stays open), and Ctrl+Tab / Ctrl+Shift+Tab switch tabs where the terminal forwards these keys. Click a tab or [+] on the tab strip. Up to eight tabs preserve independent locations, filters, history and dual-pane models in the session; inactive tabs refresh before selection. Clipboard remains shared, and marks clear on tab changes. Tabs are not restored after exiting.
+
+Drag the vertical dividers to resize Sidebar, Preview or Dual Pane. Sizes are bounded and saved with application preferences. Settings > Display resets panel sizes. Settings > Navigation shortcuts lets you swap nine navigation bindings, without remapping file mutations, confirmation keys or cancellation. Menu actions use canonical shortcuts independently of these physical navigation bindings.
+
 ## Navigation and search
 
 Use the installed executable (examples below assume it is on your PATH), or substitute its full path.

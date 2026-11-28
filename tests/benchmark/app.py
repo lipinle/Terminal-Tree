@@ -78,6 +78,8 @@ def main(binary):
             (b"\x0b", b"Command Palette"),
             (b"tree view", b"Search: tree view | 1 actions"),
             (b"\r", b"Tree View"),
+            (b"\x14", b"[2 "),
+            (b"\x17", b"[1 "),
         ])
         session(binary, ["--app", str(root)], root, b"Files *", [], width=45)
         config = root / ".config"

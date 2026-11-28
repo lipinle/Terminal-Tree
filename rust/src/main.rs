@@ -465,6 +465,7 @@ fn browse_with_layout(
         let mut event = event::read()?;
         if let Some(ui) = &mut dashboard {
             let previous = model.directory.clone();
+            let event = ui.remap_input(event, searching);
             let input = ui.input(event, &mut model, searching, writable);
             let switched = ui.take_pane_switch();
             #[cfg(feature = "native-ops")]

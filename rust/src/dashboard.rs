@@ -134,6 +134,21 @@ impl Layout {
     }
 }
 
+const NAV_KEYS: [KeyCode;9]=[KeyCode::Up,KeyCode::Down,KeyCode::PageUp,KeyCode::PageDown,KeyCode::Home,KeyCode::End,KeyCode::Right,KeyCode::Left,KeyCode::F(5)];
+const NAV_LABELS: [&str;9]=["Up","Down","Page up","Page down","First","Last","Expand / right","Collapse / left","Refresh"];
+#[derive(Clone,Copy)]
+enum Divider { Sidebar, Preview, Dual }
+
+struct Tab {
+    model: Model,
+    other: Option<Model>,
+    dual: bool,
+    active_right: bool,
+}
+
+fn percent(width:u16, ratio:u16)->u16 { (u32::from(width)*u32::from(ratio)/100) as u16 }
+fn dual_split(width:u16, ratio:u16)->u16 { percent(width,ratio).clamp(16,width.saturating_sub(17).max(16)) }
+
 type Place = (String, Option<PathBuf>);
 type PreviewKey = (PathBuf, u64, Option<SystemTime>);
 
@@ -155,6 +170,9 @@ pub struct State {
     zoom: usize,
     location: Option<String>,
     expanded_tree: Option<TreeModel>,
+    tabs: Vec<Option<Tab>>,
+    active_tab: usize,
+    dragging: Option<Divider>,
     icons: super::file_icons::Style,
     prefs: super::app_settings::Preferences,
     #[cfg(feature = "native-ops")]
@@ -173,6 +191,7 @@ impl State {
             preview_key: None, preview_lines: Vec::new(),
             dual: false, active_right: false, other: None, pane_switched: false,
             view: View::Tree, zoom: 1, location: None, expanded_tree: None,
+            tabs: vec![None], active_tab: 0, dragging: None,
             icons: super::file_icons::Style::from_environment(),
             prefs: Default::default(),
             #[cfg(feature = "native-ops")]
@@ -281,7 +300,123 @@ impl State {
     fn layout(&self, w: u16, h: u16) -> Layout {
         let mut layout = Layout::new(w,h,self.preview_enabled);
         if !self.prefs.sidebar { layout.sidebar = 0; }
+        else if layout.sidebar > 0 { layout.sidebar=self.prefs.sidebar_width.min(layout.width/3); }
+        if layout.preview>0 { layout.preview=percent(layout.width,self.prefs.preview_percent); }
         layout
+    }
+
+    fn key_settings(&mut self)->io::Result<()> {
+        loop {
+            let mut labels:Vec<_>=NAV_LABELS.iter().enumerate().map(|(i,name)|format!("{name}: {:?}",NAV_KEYS[self.prefs.navigation[i]])).collect();
+            labels.push("Reset navigation shortcuts".into());
+            let Some(action)=super::choose("Settings / Navigation shortcuts",&labels)? else {return Ok(());};
+            if action==9 {self.prefs.navigation=[0,1,2,3,4,5,6,7,8];continue;}
+            let keys:Vec<_>=NAV_KEYS.iter().map(|key|format!("{key:?}")).collect();
+            if let Some(key)=super::choose("Select key (swaps existing navigation binding)",&keys)? {
+                if let Some(other)=self.prefs.navigation.iter().position(|&n|n==key) {
+                    self.prefs.navigation.swap(action,other);
+                }
+            }
+        }
+    }
+
+    pub fn remap_input(&self,mut event:Event,searching:bool)->Event {
+        if !searching && self.location.is_none() {
+            if let Event::Key(key)=&mut event {
+                if key.modifiers==KeyModifiers::NONE {
+                    if let Some(index)=NAV_KEYS.iter().position(|&code|code==key.code) {
+                        if let Some(action)=self.prefs.navigation.iter().position(|&n|n==index) {
+                            key.code=NAV_KEYS[action];
+                        }
+                    }
+                }
+            }
+        }
+        event
+    }
+
+    fn tab_slots(&self,width:u16)->(usize,u16,usize) {
+        // Keep the active tab visible even on a compact terminal.
+        let cell=18u16.min(width.saturating_sub(4).max(4));
+        let count=usize::from(width.saturating_sub(4)/cell).max(1).min(self.tabs.len());
+        let first=self.active_tab.saturating_sub(count-1).min(self.tabs.len()-count);
+        (first,cell,count)
+    }
+
+    fn draw_tabs(&self,out:&mut impl Write,model:&Model,width:u16)->io::Result<()> {
+        if width<8 {return Ok(());}
+        let (first,cell,count)=self.tab_slots(width);
+        for (slot,index) in (first..first+count).enumerate() {
+            let path=if index==self.active_tab { &model.directory } else if let Some(tab)=&self.tabs[index] { &tab.model.directory } else {continue};
+            let name=path.file_name().map(display_name).unwrap_or_else(||display_name(path.as_os_str()));
+            let label=format!("[{} {}]",index+1,name);
+            queue!(out,MoveTo(slot as u16*cell,2))?;
+            if index==self.active_tab {queue!(out,SetBackgroundColor(self.prefs.selection),SetForegroundColor(self.prefs.accent))?;}
+            queue!(out,Print(super::clip(&label,usize::from(cell.saturating_sub(1)))),SetForegroundColor(self.prefs.foreground),SetBackgroundColor(self.prefs.background))?;
+        }
+        if count as u16*cell+3<=width {
+            queue!(out,MoveTo(count as u16*cell,2),Print("[+]"))?;
+        }
+        Ok(())
+    }
+
+    fn clear_tab_transients(&mut self) {
+        self.side_focus=false;
+        self.expanded_tree=None;
+        self.location=None;
+        self.preview_key=None;
+        self.dragging=None;
+        self.pane_switched=true;
+    }
+
+    fn park(&mut self,model:&mut Model,mut incoming:Tab)->Tab {
+        std::mem::swap(model,&mut incoming.model);
+        std::mem::swap(&mut self.other,&mut incoming.other);
+        std::mem::swap(&mut self.dual,&mut incoming.dual);
+        std::mem::swap(&mut self.active_right,&mut incoming.active_right);
+        self.clear_tab_transients();
+        incoming
+    }
+
+    fn new_tab(&mut self,model:&mut Model)->io::Result<()> {
+        if self.tabs.len()>=8 {return Err(io::Error::other("maximum eight tabs"));}
+        let mut next=Model::new(model.directory.clone())?;
+        next.set_view(model.hidden,model.order,model.kind_filter,String::new())?;
+        let parked=self.park(model,Tab{model:next,other:None,dual:false,active_right:false});
+        self.tabs[self.active_tab]=Some(parked);
+        self.tabs.push(None);
+        self.active_tab=self.tabs.len()-1;
+        Ok(())
+    }
+
+    fn switch_tab(&mut self,model:&mut Model,index:usize)->io::Result<()> {
+        if index==self.active_tab || index>=self.tabs.len() {return Ok(());}
+        let tab=self.tabs[index].as_mut().ok_or_else(||io::Error::other("tab unavailable"))?;
+        tab.model.reload()?;
+        let incoming=self.tabs[index].take().ok_or_else(||io::Error::other("tab unavailable"))?;
+        let parked=self.park(model,incoming);
+        self.tabs[self.active_tab]=Some(parked);
+        self.active_tab=index;
+        Ok(())
+    }
+
+    fn close_tab(&mut self,model:&mut Model)->io::Result<()> {
+        if self.tabs.len()==1 {return Ok(());}
+        let previous=self.active_tab;
+        let next=if previous>0 {previous-1}else{1};
+        self.switch_tab(model,next)?;
+        self.tabs.remove(previous);
+        if previous<self.active_tab {self.active_tab-=1;}
+        Ok(())
+    }
+
+    fn resize_drag(&mut self,divider:Divider,x:u16,width:u16) {
+        let ratio=if width==0 {50}else{(u32::from(x.min(width))*100/u32::from(width)) as u16};
+        match divider {
+            Divider::Sidebar=>self.prefs.sidebar_width=x.clamp(12,48),
+            Divider::Preview=>self.prefs.preview_percent=(100-ratio).clamp(18,45),
+            Divider::Dual=>self.prefs.dual_percent=ratio.clamp(25,75),
+        }
     }
 
     fn appearance(&mut self) -> io::Result<()> {
@@ -343,6 +478,7 @@ impl State {
                 format!("Hidden files: {}",model.hidden),
                 format!("Layout zoom: {}",self.zoom),
                 format!("File view: {}",self.view.name()),
+                "Reset panel sizes".into(),
             ];
             match super::choose("Settings / Display (Enter toggles)",&labels)? {
                 None=>return Ok(()),
@@ -354,7 +490,8 @@ impl State {
                 Some(5)=>self.prefs.status_details=!self.prefs.status_details,
                 Some(6)=>{model.set_view(!model.hidden,model.order,model.kind_filter,model.query.clone())?; self.pane_switched=true; self.expanded_tree=None;},
                 Some(7)=>self.zoom=self.zoom%3+1,
-                _=>self.choose_view(match self.view {View::Tree=>View::Grid,View::Grid=>View::List,View::List=>View::Tree}),
+                Some(8)=>self.choose_view(match self.view {View::Tree=>View::Grid,View::Grid=>View::List,View::List=>View::Tree}),
+                _=>{self.prefs.sidebar_width=19;self.prefs.preview_percent=33;self.prefs.dual_percent=50;},
             }
         }
     }
@@ -421,6 +558,7 @@ impl State {
                 "Save application preferences".into(),
                 format!("Autosave on normal exit: {}",self.prefs.autosave),
                 "Manage bookmarks".into(),
+                "Navigation shortcuts".into(),
                 "Reset application preferences (session)".into(),
             ];
             match super::choose("Settings Center",&labels)? {
@@ -450,6 +588,7 @@ impl State {
                     super::page("Autosave",&["Session only on portable builds.".into()])?;
                 }
                 Some(6)=>self.manage_bookmarks()?,
+                Some(7)=>self.key_settings()?,
                 _=>{
                     let labels=["Cancel".into(),"Reset all application display and companion options".into()];
                     if super::choose("Reset preferences?",&labels)?==Some(1) {
@@ -736,11 +875,11 @@ impl State {
         let side = if self.active_right { "Right" } else { "Left" };
         let mode = if personal { "Personal" } else if writable { "Workspace" } else { "Read-only" };
         let header = format!("Dual Pane | Active: {side} | [{} / {mode}]", super::edition::NAME);
-        queue!(out, MoveTo(0, 1), Print(super::clip(&header, usize::from(width))),
-            MoveTo(0, 2), Print("─".repeat(usize::from(width))))?;
+        queue!(out, MoveTo(0, 1), Print(super::clip(&header, usize::from(width))))?;
+        self.draw_tabs(&mut out,model,width)?;
         let cap = usize::from(h - 7);
         if width >= 54 {
-            let split = width / 2;
+            let split = dual_split(width,self.prefs.dual_percent);
             let other = self.other.as_mut().ok_or_else(|| io::Error::other("second pane unavailable"))?;
             if self.active_right {
                 draw_column(&mut out, other, "Left", false, 0, split, cap, marked, self.icons, &self.prefs)?;
@@ -795,7 +934,7 @@ impl State {
             breadcrumb(&model.directory)
         };
         queue!(out, MoveTo(0,1), Print(super::clip(&path,usize::from(path_width))))?;
-        queue!(out, MoveTo(0,2), Print("─".repeat(usize::from(l.width))))?;
+        self.draw_tabs(&mut out,model,l.width)?;
         if l.sidebar > 0 {
             queue!(out, MoveTo(0,3), SetForegroundColor(self.prefs.accent),
                 Print(if self.side_focus { "Places *" } else { "Places" }), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
@@ -881,9 +1020,9 @@ impl State {
             MoveTo(0,h-1), Print(super::clip(if searching {
                 "Filter: type text | Enter accept | Esc cancel"
             } else if writable {
-                "F1 Help  F2 Rename  F3 Preview  F4 Actions  F8 Dual  F10 Menu  Ctrl+K Commands"
+                "F1 Help  F2 Rename  F3 Preview  F8 Dual  Ctrl+T Tab  Ctrl+K Commands"
             } else {
-                "F1 Help  F3 Preview  F8 Dual  F10 Menu  Ctrl+K Commands  q Exit"
+                "F1 Help  F3 Preview  F8 Dual  Ctrl+T Tab  Ctrl+K Commands  q Exit"
             },usize::from(l.width))))?;
         queue!(out,ResetColor)?;
         out.flush()
@@ -913,7 +1052,7 @@ impl State {
     fn commands(&self,category:usize,writable:bool)->Vec<(&'static str,KeyCode,KeyModifiers)> {
         let plain=KeyModifiers::NONE;
         let mut commands = match category {
-            0 => vec![("Open",KeyCode::Enter,plain),("Properties",KeyCode::Char('i'),plain),("Exit",KeyCode::Char('q'),plain)],
+            0 => vec![("New tab (Ctrl+T)",KeyCode::Char('t'),KeyModifiers::CONTROL),("Close tab (Ctrl+W)",KeyCode::Char('w'),KeyModifiers::CONTROL),("Next tab (Ctrl+Tab)",KeyCode::Tab,KeyModifiers::CONTROL),("Open",KeyCode::Enter,plain),("Properties",KeyCode::Char('i'),plain),("Exit",KeyCode::Char('q'),plain)],
             1 if writable => vec![("Copy (Ctrl+C)",KeyCode::Char('c'),plain),("Cut (Ctrl+X)",KeyCode::Char('x'),plain),("Paste (Ctrl+V)",KeyCode::Char('v'),plain),("View clipboard",KeyCode::F(12),plain),("Rename",KeyCode::F(2),plain),("New folder",KeyCode::Char('n'),plain),("New file",KeyCode::Char('t'),plain),("Trash",KeyCode::Delete,plain),("Undo",KeyCode::Char('u'),plain)],
             1 => vec![("Select a scoped workspace to enable file operations",KeyCode::Null,plain)],
             2 => vec![("Tree view (Ctrl+3)",KeyCode::Char('3'),KeyModifiers::CONTROL),("Grid view (Ctrl+1)",KeyCode::Char('1'),KeyModifiers::CONTROL),("List view (Ctrl+2)",KeyCode::Char('2'),KeyModifiers::CONTROL),("Toggle dual pane (F8)",KeyCode::F(8),plain),("Toggle live preview",KeyCode::F(9),plain),("Open preview",KeyCode::F(3),plain),("Hidden files",KeyCode::Char('h'),plain),("Sort",KeyCode::Char('s'),plain),("Refresh",KeyCode::F(5),plain),("Filter",KeyCode::Char('/'),plain)],
@@ -1079,6 +1218,46 @@ impl State {
                 }
             }
         }
+        if let Event::Key(k)=&event {
+            if k.kind==KeyEventKind::Press && k.modifiers.contains(KeyModifiers::CONTROL) {
+                match k.code {
+                    KeyCode::Char('t') if k.modifiers==KeyModifiers::CONTROL=>{self.new_tab(model)?;return Ok(None);}
+                    KeyCode::Char('w') if k.modifiers==KeyModifiers::CONTROL=>{self.close_tab(model)?;return Ok(None);}
+                    KeyCode::Tab|KeyCode::BackTab=>{
+                        let n=self.tabs.len();
+                        let index=if k.modifiers.contains(KeyModifiers::SHIFT)||k.code==KeyCode::BackTab {(self.active_tab+n-1)%n}else{(self.active_tab+1)%n};
+                        self.switch_tab(model,index)?;return Ok(None);
+                    }
+                    _=>(),
+                }
+            }
+        }
+        if let Event::Mouse(mouse)=&event {
+            if let Some(divider)=self.dragging {
+                match mouse.kind {
+                    MouseEventKind::Drag(MouseButton::Left)=>self.resize_drag(divider,mouse.column,l.width),
+                    MouseEventKind::Up(MouseButton::Left)=>{self.resize_drag(divider,mouse.column,l.width);self.dragging=None;},
+                    _=>self.dragging=None,
+                }
+                return Ok(None);
+            }
+            if mouse.kind==MouseEventKind::Down(MouseButton::Left) && mouse.modifiers==KeyModifiers::NONE {
+                if mouse.row==2 && l.width>=8 {
+                    let (first,cell,count)=self.tab_slots(l.width);
+                    let slot=usize::from(mouse.column/cell);
+                    if slot<count {self.switch_tab(model,first+slot)?;}
+                    else if mouse.column>=count as u16*cell&&mouse.column<count as u16*cell+3 {self.new_tab(model)?;}
+                    return Ok(None);
+                }
+                if h>=8 && mouse.row>=3&&mouse.row<h-3 {
+                    self.dragging=if self.dual {
+                        (l.width>=54&&mouse.column==dual_split(l.width,self.prefs.dual_percent)).then_some(Divider::Dual)
+                    } else if l.sidebar>0&&mouse.column==l.sidebar {Some(Divider::Sidebar)}
+                    else if l.preview>0&&mouse.column==l.end(){Some(Divider::Preview)}else{None};
+                    if self.dragging.is_some(){return Ok(None);}
+                }
+            }
+        }
         if self.expanded_input(&event, model, l)? { return Ok(None); }
         if let Event::Mouse(mouse) = &mut event {
             if mouse.kind == MouseEventKind::Down(MouseButton::Left) && mouse.row == 0 {
@@ -1095,7 +1274,7 @@ impl State {
                     return Ok(None);
                 }
                 if width >= 54 {
-                    let split = width / 2;
+                    let split = dual_split(width,self.prefs.dual_percent);
                     if mouse.column == split { return Ok(None); }
                     let right = mouse.column > split;
                     if right != self.active_right {

@@ -23,7 +23,11 @@ pub fn choose(labels: &[String]) -> io::Result<Option<usize>> {
     let mut selected = 0usize;
     let mut top = 0usize;
     loop {
-        let rows: Vec<_> = labels.iter().enumerate().filter(|(_, label)| matches(label, &query)).collect();
+        let needle = query.trim().to_ascii_lowercase();
+        let direct = labels.iter().any(|label| label.to_ascii_lowercase().contains(&needle));
+        let rows: Vec<_> = labels.iter().enumerate().filter(|(_, label)| {
+            if direct { label.to_ascii_lowercase().contains(&needle) } else { matches(label, &query) }
+        }).collect();
         selected = selected.min(rows.len().saturating_sub(1));
         let (w,h) = terminal::size()?;
         let width = usize::from(w.saturating_sub(1));

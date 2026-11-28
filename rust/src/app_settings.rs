@@ -19,6 +19,10 @@ pub struct Preferences {
     pub companions: [bool; 3],
     pub custom: BTreeMap<String, String>,
     pub autosave: bool,
+    pub sidebar_width: u16,
+    pub preview_percent: u16,
+    pub dual_percent: u16,
+    pub navigation: [usize; 9],
 }
 
 impl Default for Preferences {
@@ -28,6 +32,8 @@ impl Default for Preferences {
             selection: Color::DarkGrey, sidebar: true, toolbar: true,
             show_icons: true, file_colors: true, status_details: true,
             companions: [true; 3], custom: BTreeMap::new(), autosave: false,
+            sidebar_width: 19, preview_percent: 33, dual_percent: 50,
+            navigation: [0,1,2,3,4,5,6,7,8],
         }
     }
 }
@@ -103,7 +109,9 @@ impl Preferences {
             "sidebar":self.sidebar, "toolbar":self.toolbar, "show_icons":self.show_icons,
             "file_colors":self.file_colors, "status_details":self.status_details,
             "companions":self.companions, "custom":self.custom, "autosave":self.autosave, "icons":icons.name(), "preview":preview,
-            "view":view, "zoom":zoom
+            "view":view, "zoom":zoom, "sidebar_width":self.sidebar_width,
+            "preview_percent":self.preview_percent, "dual_percent":self.dual_percent,
+            "navigation":self.navigation
         })
     }
 
@@ -120,7 +128,29 @@ impl Preferences {
         };
         let view = v["view"].as_str().filter(|s| matches!(*s,"Tree"|"Grid"|"List")).ok_or_else(|| io::Error::other("invalid view"))?;
         let zoom = v["zoom"].as_u64().filter(|n| (1..=3).contains(n)).ok_or_else(|| io::Error::other("invalid zoom"))? as usize;
+        let bounded = |key: &str, default: u16, min: u16, max: u16| -> io::Result<u16> {
+            match v.get(key) {
+                None => Ok(default),
+                Some(value) => value.as_u64().filter(|n| (u64::from(min)..=u64::from(max)).contains(n))
+                    .map(|n| n as u16).ok_or_else(||io::Error::other("invalid panel size")),
+            }
+        };
+        let mut navigation=[0,1,2,3,4,5,6,7,8];
+        if let Some(value)=v.get("navigation") {
+            let entries=value.as_array().filter(|a|a.len()==9).ok_or_else(||io::Error::other("invalid navigation map"))?;
+            let mut seen=[false;9];
+            for (i,entry) in entries.iter().enumerate() {
+                let n=entry.as_u64().filter(|n|*n<9).ok_or_else(||io::Error::other("invalid navigation key"))? as usize;
+                if seen[n] { return Err(io::Error::other("duplicate navigation key")); }
+                seen[n]=true;
+                navigation[i]=n;
+            }
+        }
         Ok((Self {
+            sidebar_width:bounded("sidebar_width",19,12,48)?,
+            preview_percent:bounded("preview_percent",33,18,45)?,
+            dual_percent:bounded("dual_percent",50,25,75)?,
+            navigation,
             foreground:color("foreground")?, background:color("background")?,
             accent:color("accent")?, selection:color("selection")?,
             sidebar:boolean("sidebar")?, toolbar:boolean("toolbar")?, show_icons:boolean("show_icons")?,
@@ -180,5 +210,11 @@ mod tests {
         assert!(parse_pack(&serde_json::json!({".rs":"R"})).is_err());
         assert!(parse_pack(&serde_json::json!({"rs":"four"})).is_err());
         assert!(parse_color("#12zz34").is_err());
+        let mut broken=value.clone();
+        broken["navigation"]=serde_json::json!([0,0,2,3,4,5,6,7,8]);
+        assert!(Preferences::decode(&broken).is_err());
+        broken=value;
+        broken["preview_percent"]=serde_json::json!(99);
+        assert!(Preferences::decode(&broken).is_err());
     }
 }
