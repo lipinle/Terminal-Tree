@@ -602,9 +602,10 @@ pub(crate) fn browse(
         .map(|store| store.load_panes())
         .transpose()?
         .flatten();
-    #[cfg(not(feature = "native-ops"))]
-    let saved: Option<(Theme, Keymap)> = None;
+    #[cfg(feature = "native-ops")]
     let (saved_theme, saved_keys) = saved.unwrap_or_default();
+    #[cfg(not(feature = "native-ops"))]
+    let (saved_theme, saved_keys) = (Theme::default(), Keymap::default());
     let keymap = keymap.unwrap_or(saved_keys);
     let mut theme = theme.unwrap_or(saved_theme);
     let mut marks = load_session(snapshot_in, snapshot_out)?;
