@@ -120,6 +120,10 @@ The live image/PDF panel queues the latest selection after a 120 ms debounce. At
 
 Optional [X11 helper](x11-overlay/README.md) adds high-resolution bitmap previews to an explicitly selected GNOME Terminal client. Start with TT_GRAPHICS=x11 in a dedicated active single-tab GNOME Terminal window; the helper infers a conservative grid from X11 resize hints and pins the client. Missing or ambiguous hints fall back to Unicode; exact manual geometry remains optional. No Wayland support. See the helper instructions for setup. No change to the core dependency graph or the existing add-on architecture.
 
+### Desktop-inspired dashboard
+
+The default dashboard uses a dark neutral palette with blue selection, full-width tree/list selection, neutral file names with colored icons, and distinct Places icons. Tree and List share responsive Name/Size/Type columns; wide panes also show Modified (UTC). Metadata is read without following symlinks for visible rows only; sorting remains the existing model. The wide toolbar has Back/Forward/Parent buttons, tabs have clickable close controls, and wide Preview headers expose Auto/Info/Hex/Expand. Terminal defaults and light colors remain available in Appearance. This remains a terminal-cell interface, not a GTK desktop window; exact font and widget rendering depend on the host terminal. Existing scoped write paths and expanded-tree read-only inspection are unchanged.
+
 ## Navigation and search
 
 Use the installed executable (examples below assume it is on your PATH), or substitute its full path.

@@ -102,7 +102,12 @@ fn breadcrumb_hit(path:&std::path::Path,column:u16,width:u16)->Option<PathBuf> {
 }
 fn list_sort_hit(column:u16,width:u16,details:bool)->terminal_tree::Order {
     use terminal_tree::Order;
-    if details&&width>=48 {
+    if details&&width>=82 {
+        if column>=width-17 {Order::Date}
+        else if column>=width-30 {Order::Type}
+        else if column>=width-41 {Order::Size}
+        else{Order::Name}
+    }else if details&&width>=48 {
         if column>=width-11 {Order::Type}
         else if column>=width-22 {Order::Size}
         else{Order::Name}
@@ -112,9 +117,9 @@ fn list_sort_hit(column:u16,width:u16,details:bool)->terminal_tree::Order {
 fn list_heading(order:terminal_tree::Order,focused:bool,width:u16,details:bool)->String{
     use terminal_tree::Order;
     let name=if focused{"Files * / Name"}else{"Files / Name"};
-    list_columns(&format!("{name}{}",if order==Order::Name{" ↑"}else{""}),
+    table_columns(&format!("{name}{}",if order==Order::Name{" ↑"}else{""}),
         if order==Order::Size{"Size ↑"}else{"Size"},
-        if order==Order::Type{"Type ↑"}else{"Type"},width,details)
+        if order==Order::Type{"Type ↑"}else{"Type"},if order==Order::Date{"Modified ↓ UTC"}else{"Modified (UTC)"},width,details)
 }
 #[derive(Clone,Copy,Default,Debug,PartialEq,Eq)]
 enum PreviewStyle {#[default] Plain,Heading,Code,Quote}
@@ -180,13 +185,42 @@ fn list_columns(name:&str, size:&str, kind:&str,width:u16,details:bool)->String 
         format!("{} {:>12}",pad_cell(name,w-13),size)
     } else {super::clip(name,w)}
 }
+fn table_columns(name:&str,size:&str,kind:&str,date:&str,width:u16,details:bool)->String{
+    let w=usize::from(width);
+    if details&&w>=82{
+        format!("{} {} {} {}",pad_cell(name,w-42),pad_cell(size,10),pad_cell(kind,12),pad_cell(date,17))
+    }else{list_columns(name,size,kind,width,details)}
+}
+fn modified_utc(time:Option<std::time::SystemTime>)->String{
+    let Some(secs)=time.and_then(|t|t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d|d.as_secs()) else{return "—".into();};
+    if secs>253402300799{return "—".into();}
+    // Gregorian civil date from Unix day count (UTC), with no locale or
+    // timezone dependency and no invocation of external programs.
+    let z=(secs/86400) as i64+719468;
+    let era=z/146097;let doe=z-era*146097;
+    let yoe=(doe-doe/1460+doe/36524-doe/146096)/365;
+    let y=yoe+era*400;let doy=doe-(365*yoe+yoe/4-yoe/100);
+    let mp=(5*doy+2)/153;let day=doy-(153*mp+2)/5+1;
+    let month=mp+if mp<10{3}else{-9};let year=y+i64::from(month<=2);
+    format!("{year:04}-{month:02}-{day:02} {:02}:{:02}",secs/3600%24,secs/60%60)
+}
+fn row_metadata(entry:&Entry)->(Option<u64>,Option<std::time::SystemTime>){
+    // Only visible rows, no symlink following, no authority from these values.
+    match std::fs::symlink_metadata(&entry.path){
+        Ok(m)=>(Some(m.len()),m.modified().ok()),
+        Err(_)=>(None,None),
+    }
+}
 fn row_text(entry: &Entry, index: usize, count: usize, view: View, glyph: &str, marked: bool, width: u16,details:bool) -> String {
     let mark = if marked { "[x]" } else { "   " };
-    match view {
-        View::Tree => format!("{} {mark} {glyph} {}", if index + 1 == count { "└──" } else { "├──" }, entry.name),
-        View::List => list_columns(&format!("{mark} {glyph} {}",entry.name),&if entry.directory{"<DIR>".into()}else{human_size(entry.size)},&entry_type(entry),width,details),
-        _ => format!("{mark} {glyph} {}", entry.name),
-    }
+    let name=match view {
+        View::Tree => format!("{} {mark} {glyph} {}",if index+1==count{"└──"}else{"├──"},entry.name),
+        _=>format!("{mark} {glyph} {}",entry.name),
+    };
+    if view==View::List||(view==View::Tree&&width>=48){
+        let (size,time)=row_metadata(entry);
+        table_columns(&name,&if entry.directory{"—".into()}else{size.map(human_size).unwrap_or_else(||"—".into())},&entry_type(entry),&modified_utc(time),width,details)
+    }else{name}
 }
 
 const MENUS: [(&str, u16); 7] = [
@@ -544,7 +578,9 @@ impl State {
             let label=format!("[{} {}]",index+1,name);
             queue!(out,MoveTo(slot as u16*cell,2))?;
             if index==self.active_tab {queue!(out,SetBackgroundColor(self.prefs.selection),SetForegroundColor(self.prefs.accent))?;}
-            queue!(out,Print(super::clip(&label,usize::from(cell.saturating_sub(1)))),SetForegroundColor(self.prefs.foreground),SetBackgroundColor(self.prefs.background))?;
+            if cell>=12&&self.tabs.len()>1{
+                queue!(out,Print(pad_cell(&label,usize::from(cell-3))),Print(" ×"),SetForegroundColor(self.prefs.foreground),SetBackgroundColor(self.prefs.background))?;
+            }else{queue!(out,Print(super::clip(&label,usize::from(cell.saturating_sub(1)))),SetForegroundColor(self.prefs.foreground),SetBackgroundColor(self.prefs.background))?;}
         }
         if count as u16*cell+3<=width {
             queue!(out,MoveTo(count as u16*cell,2),Print("[+]"))?;
@@ -623,15 +659,14 @@ impl State {
             match super::choose("Settings / Appearance", &labels)? {
                 None => return Ok(()),
                 Some(0) => {
-                    let defaults = super::app_settings::Preferences::default();
                     (self.prefs.foreground,self.prefs.background,self.prefs.accent,self.prefs.selection) =
-                        (defaults.foreground,defaults.background,defaults.accent,defaults.selection);
+                        (Color::Reset,Color::Reset,Color::Cyan,Color::DarkGrey);
                 }
                 Some(1) => {
                     self.prefs.foreground=Color::Rgb{r:230,g:230,b:230};
-                    self.prefs.background=Color::Rgb{r:36,g:36,b:36};
-                    self.prefs.accent=Color::Rgb{r:100,g:190,b:245};
-                    self.prefs.selection=Color::Rgb{r:60,g:85,b:110};
+                    self.prefs.background=Color::Rgb{r:24,g:25,b:27};
+                    self.prefs.accent=Color::Rgb{r:94,g:169,b:250};
+                    self.prefs.selection=Color::Rgb{r:31,g:70,b:115};
                 }
                 Some(2) => {
                     self.prefs.foreground=Color::Rgb{r:25,g:25,b:25};
@@ -868,7 +903,7 @@ impl State {
     }
 
     fn preview(&mut self, entry: Option<&Entry>, width:u16, rows:usize) {
-        let key = entry.map(|e| (e.path.clone(), e.size, e.modified));
+        let key = entry.map(|e| {let (size,modified)=row_metadata(e);(e.path.clone(),size.unwrap_or(e.size),modified)});
         if key!=self.preview_key {self.preview_scroll=0;}
         #[cfg(feature = "native-ops")]
         {
@@ -1199,16 +1234,19 @@ impl State {
         } else {
             breadcrumb(&model.directory)
         };
-        queue!(out, MoveTo(0,1), Print(super::clip(&path,usize::from(path_width))))?;
+        let nav=if self.location.is_none()&&path_width>=52{12}else{0};
+        if nav>0{queue!(out,MoveTo(0,1),SetForegroundColor(self.prefs.accent),Print("[←] [→] [↑] "),SetForegroundColor(self.prefs.foreground))?;}
+        queue!(out, MoveTo(nav,1), Print(super::clip(&path,usize::from(path_width.saturating_sub(nav)))))?;
         self.draw_tabs(&mut out,model,l.width)?;
         if l.sidebar > 0 {
             queue!(out, MoveTo(0,3), SetForegroundColor(self.prefs.accent),
                 Print(if self.side_focus { "Places *" } else { "Places" }), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
         }
         queue!(out, MoveTo(l.first(),3), SetForegroundColor(self.prefs.accent),
-            Print(if self.view==View::List {list_heading(model.order,!self.side_focus,l.end()-l.first(),self.prefs.list_details)}else if self.side_focus {"Files".into()}else{"Files *".into()}), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
+            Print(if self.view==View::List||(self.view==View::Tree&&l.end()-l.first()>=48) {list_heading(model.order,!self.side_focus,l.end()-l.first(),self.prefs.list_details)}else if self.side_focus {"Files".into()}else{"Files *".into()}), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
         if l.preview > 0 {
             queue!(out, MoveTo(l.end()+1,3), SetForegroundColor(self.prefs.accent), Print(super::clip(match self.preview_mode {1=>"Preview [Info]",2=>"Preview [Hex]",_=>"Preview [Auto]"},usize::from(l.preview))), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
+            if l.preview>=46{queue!(out,MoveTo(l.end()+17,3),SetForegroundColor(self.prefs.foreground),Print("[Auto] [Info] [Hex] [↗]"))?;}
             let entry = if let Some(tree) = &self.expanded_tree {
                 tree.rows().get(tree.selected()).map(|r| r.entry.clone())
             } else { model.entries.get(model.selected).cloned() };
@@ -1233,14 +1271,15 @@ impl State {
                 if let Some((label,path)) = self.places.get(self.side_top+row) {
                     queue!(out, MoveTo(0,y))?;
                     if path.is_none() { queue!(out, SetForegroundColor(self.prefs.accent))?; }
-                    else if self.side_focus && self.side_top+row == self.side_cursor {
+                    else if (self.side_focus && self.side_top+row == self.side_cursor)||path.as_ref()==Some(&model.directory) {
                         queue!(out, SetBackgroundColor(self.prefs.selection))?;
                     }
                     let text = if let Some(path) = path {
-                        let (glyph, _) = self.prefs.icon(path, true, false, self.icons);
+                        let (builtin, _) = self.prefs.icon(path, true, false, self.icons);
+                        let glyph=if self.prefs.show_icons&&self.icons==super::file_icons::Style::Unicode{match label.as_str(){"Home"=>"⌂","Desktop"=>"▣","Documents"=>"▤","Downloads"=>"↓","Pictures"=>"▧","Music"=>"♫","Videos"=>"▶","Trash"=>"♲","File System"=>"▥",_=>builtin}}else{builtin};
                         format!(" {glyph} {label}")
                     } else { label.clone() };
-                    queue!(out, Print(super::clip(&text,usize::from(l.sidebar))), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
+                    queue!(out, Print(pad_cell(&text,usize::from(l.sidebar))), SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
                 }
                 queue!(out, MoveTo(l.sidebar,y), Print("│"))?;
             }
@@ -1285,7 +1324,7 @@ impl State {
             let (glyph,color) = self.prefs.icon(&e.path,e.directory,e.symlink,self.icons);
             queue!(out, MoveTo(x,y))?;
             if selected { queue!(out, SetBackgroundColor(self.prefs.selection))?; }
-            queue!(out, SetForegroundColor(color))?;
+            queue!(out, SetForegroundColor(if selected||self.view!=View::Grid{self.prefs.foreground}else{color}))?;
             if self.view == View::Grid {
                 let mark = if marked(&e.path) { "[x] " } else { "" };
                 queue!(out, Print(super::clip(&format!("{mark}{glyph}"),usize::from(cells.width))))?;
@@ -1294,10 +1333,21 @@ impl State {
                 }
             } else {
                 let text = if let Some(depth) = tree_depth {
-                    format!("{}{} {glyph} {}", "  ".repeat(depth-1),
-                        if expanded { "−" } else if e.directory && !e.symlink { "+" } else { "·" }, e.name)
+                    let name=format!("{}{} {glyph} {}", "  ".repeat(depth-1),
+                        if expanded { "▾" } else if e.directory && !e.symlink { "▸" } else { "·" }, e.name);
+                    if cells.width>=48 {
+                        let (size,time)=row_metadata(e);
+                        table_columns(&name,&if e.directory{"—".into()}else{size.map(human_size).unwrap_or_else(||"—".into())},&entry_type(e),&modified_utc(time),cells.width,self.prefs.list_details)
+                    }else{name}
                 } else { row_text(e,index,model.entries.len(),self.view,glyph,marked(&e.path),cells.width,self.prefs.list_details) };
-                queue!(out, Print(super::clip(&text,usize::from(cells.width))))?;
+                let label=if selected{pad_cell(&text,usize::from(cells.width))}else{super::clip(&text,usize::from(cells.width))};
+                queue!(out, Print(label))?;
+                // Color just the icon, keeping names and metadata neutral.
+                use unicode_width::UnicodeWidthStr;
+                let prefix=if let Some(depth)=tree_depth{2*(depth-1)+2}else if self.view==View::Tree{8}else{4};
+                if !glyph.is_empty()&&prefix+glyph.width()<=usize::from(cells.width){
+                    queue!(out,MoveTo(x+prefix as u16,y),SetForegroundColor(color),Print(glyph))?;
+                }
             }
             queue!(out, SetForegroundColor(self.prefs.foreground), SetBackgroundColor(self.prefs.background))?;
         }
@@ -1567,7 +1617,12 @@ impl State {
             if !self.dual && mouse.row == 1 && mouse.kind == MouseEventKind::Down(MouseButton::Left) && mouse.modifiers==KeyModifiers::NONE {
                 let path_width=if self.prefs.toolbar{toolbar_start(l.width).unwrap_or(l.width)}else{l.width};
                 if mouse.column<path_width {
-                    if let Some(target)=breadcrumb_hit(&model.directory,mouse.column,path_width){
+                    let nav=if path_width.saturating_sub(1)>=52{12}else{0};
+                    if mouse.column<nav {
+                        let key=match mouse.column/4{0=>KeyCode::Char('['),1=>KeyCode::Char(']'),_=>KeyCode::Left};
+                        return Ok(Some(Event::Key(KeyEvent::new(key,KeyModifiers::NONE))));
+                    }
+                    if let Some(target)=breadcrumb_hit(&model.directory,mouse.column-nav,path_width.saturating_sub(nav)){
                         if target!=model.directory {model.go(target)?;self.clear_tab_transients();}
                     }
                     return Ok(None);
@@ -1678,7 +1733,13 @@ impl State {
                 if mouse.row==2 && l.width>=8 {
                     let (first,cell,count)=self.tab_slots(l.width);
                     let slot=usize::from(mouse.column/cell);
-                    if slot<count {self.switch_tab(model,first+slot)?;}
+                    if slot<count {
+                        let index=first+slot;
+                        if cell>=12&&self.tabs.len()>1&&mouse.column%cell>=cell-3 {
+                            if index==self.active_tab{self.close_tab(model)?;}
+                            else{self.tabs.remove(index);if index<self.active_tab{self.active_tab-=1;}}
+                        }else{self.switch_tab(model,index)?;}
+                    }
                     else if mouse.column>=count as u16*cell&&mouse.column<count as u16*cell+3 {self.new_tab(model)?;}
                     return Ok(None);
                 }
@@ -1691,7 +1752,7 @@ impl State {
                 }
             }
         }
-        if !self.dual && self.view==View::List {
+        if !self.dual && self.expanded_tree.is_none() && (self.view==View::List||(self.view==View::Tree&&l.end()-l.first()>=48)) {
             if let Event::Mouse(mouse)=&event {
                 if h>=8 && mouse.row==3 && (l.first()..l.end()).contains(&mouse.column) && mouse.kind==MouseEventKind::Down(MouseButton::Left)&&mouse.modifiers==KeyModifiers::NONE {
                     let order=list_sort_hit(mouse.column-l.first(),l.end()-l.first(),self.prefs.list_details);
@@ -1712,7 +1773,12 @@ impl State {
             if let Event::Mouse(mouse)=&event {
                 if mouse.column>l.end() && mouse.column<l.width && mouse.row>=3 && mouse.row<h-3 {
                     if mouse.row==3 && mouse.kind==MouseEventKind::Down(MouseButton::Left) && mouse.modifiers==KeyModifiers::NONE {
-                        self.preview_mode=(self.preview_mode+1)%3;
+                        let pos=mouse.column.saturating_sub(l.end()+1);
+                        if l.preview>=46&&pos>=37 {
+                            #[cfg(feature = "native-ops")]
+                            return self.input(Event::Key(KeyEvent::new(KeyCode::Char('v'),KeyModifiers::ALT)),model,searching,writable);
+                        }
+                        self.preview_mode=if l.preview>=46&&(16..37).contains(&pos){((pos-16)/7).min(2) as u8}else{(self.preview_mode+1)%3};
                         self.preview_key=None;self.preview_scroll=0;
                         return Ok(None);
                     }
@@ -1987,6 +2053,11 @@ mod tests {
         assert_eq!(list_sort_hit(40,60,true),Order::Size);
         assert_eq!(list_sort_hit(55,60,true),Order::Type);
         assert_eq!(list_sort_hit(32,40,false),Order::Size);
+        assert_eq!(list_sort_hit(84,100,true),Order::Date);
+        assert_eq!(list_sort_hit(72,100,true),Order::Type);
+        assert_eq!(list_sort_hit(60,100,true),Order::Size);
+        assert_eq!(modified_utc(Some(std::time::UNIX_EPOCH)),"1970-01-01 00:00");
+        assert_eq!(modified_utc(Some(std::time::UNIX_EPOCH+std::time::Duration::from_secs(951782400))),"2000-02-29 00:00");
     }
     #[cfg(feature = "native-ops")]
     #[test]
@@ -2007,6 +2078,7 @@ mod tests {
         for width in 0..150 {
             let text=list_columns("ภาษาไทย long name.txt","1.0 MiB","txt",width,true);
             assert!(text.width()<=usize::from(width));
+            assert!(table_columns("ภาษาไทย name","1.0 MiB","Rust","2026-11-28 12:00",width,true).width()<=usize::from(width));
         }
     }
     #[test]

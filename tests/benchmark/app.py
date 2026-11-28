@@ -104,6 +104,10 @@ def main(binary):
             (b"\x1b[B\r", b"Terminal / Bash |"),
         ])
         session(binary, ["--app", str(root)], root, b"Files *", [], width=45)
+        session(binary, ["--app", str(root)], root, b"Modified (UTC)", [
+            (b"\x14",b"[2 "),
+            (b"\x1b[<0;34;3M",b"[1 "),
+        ],width=190)
         config = root / ".config"
         config.mkdir(mode=0o700)
         session(binary, ["--app", str(root)], root, b"Tree View", [

@@ -32,8 +32,8 @@ pub struct Preferences {
 impl Default for Preferences {
     fn default() -> Self {
         Self {
-            foreground: Color::Reset, background: Color::Reset, accent: Color::Cyan,
-            selection: Color::DarkGrey, sidebar: true, toolbar: true,
+            foreground: Color::Rgb{r:235,g:235,b:235}, background: Color::Rgb{r:24,g:25,b:27}, accent: Color::Rgb{r:94,g:169,b:250},
+            selection: Color::Rgb{r:31,g:70,b:115}, sidebar: true, toolbar: true,
             show_icons: true, file_colors: true, status_details: true,
             companions: [true; 3], visual_preview: false, list_details: true, custom: BTreeMap::new(), autosave: false, terminal_visible: true, terminal_percent: 28,
             sidebar_width: 19, preview_percent: 33, dual_percent: 50,
