@@ -277,13 +277,7 @@ mod tests {
             Keymap::from_spec("up=down").unwrap_err(),
             BindingError::Conflict
         );
-        for invalid in [
-            "",
-            "up",
-            "up=up,up=up",
-            "unknown=up",
-            "up=up,",
-        ] {
+        for invalid in ["", "up", "up=up,up=up", "unknown=up", "up=up,"] {
             assert_eq!(
                 Keymap::from_spec(invalid).unwrap_err(),
                 BindingError::InvalidSpecification

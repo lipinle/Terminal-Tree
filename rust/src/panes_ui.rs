@@ -303,7 +303,10 @@ fn bookmark_menu(marks: &mut Bookmarks) -> io::Result<BookmarkChoice> {
             queue!(
                 out,
                 MoveTo(0, height - 1),
-                Print(clip("Up/Down | Enter open | x remove bookmark | Esc back", limit))
+                Print(clip(
+                    "Up/Down | Enter open | x remove bookmark | Esc back",
+                    limit
+                ))
             )?;
         }
         out.flush()?;
