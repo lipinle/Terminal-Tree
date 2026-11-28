@@ -155,6 +155,7 @@ pub struct State {
     zoom: usize,
     location: Option<String>,
     expanded_tree: Option<TreeModel>,
+    icons: super::file_icons::Style,
 }
 
 impl State {
@@ -165,6 +166,7 @@ impl State {
             preview_key: None, preview_lines: Vec::new(),
             dual: false, active_right: false, other: None, pane_switched: false,
             view: View::Tree, zoom: 1, location: None, expanded_tree: None,
+            icons: super::file_icons::Style::from_environment(),
         };
         state.refresh_places();
         state
@@ -254,6 +256,19 @@ impl State {
                 vec![e.name.clone(), format!("{} bytes", e.size), "Content preview requires native Linux".into()]
             }
         };
+    }
+
+    fn choose_icons(&mut self) -> io::Result<()> {
+        use super::file_icons::Style;
+        let labels = [
+            "Unicode — standard terminal characters".into(),
+            "Seti — requires a compatible Nerd Font".into(),
+            "ASCII — maximum compatibility".into(),
+        ];
+        if let Some(index) = super::choose("Icon style", &labels)? {
+            self.icons = [Style::Unicode, Style::Seti, Style::Ascii][index];
+        }
+        Ok(())
     }
 
     fn choose_view(&mut self, view: View) {
@@ -421,17 +436,17 @@ impl State {
             let split = width / 2;
             let other = self.other.as_mut().ok_or_else(|| io::Error::other("second pane unavailable"))?;
             if self.active_right {
-                draw_column(&mut out, other, "Left", false, 0, split, cap, marked)?;
-                draw_column(&mut out, model, "Right", true, split + 1, width - split - 1, cap, marked)?;
+                draw_column(&mut out, other, "Left", false, 0, split, cap, marked, self.icons)?;
+                draw_column(&mut out, model, "Right", true, split + 1, width - split - 1, cap, marked, self.icons)?;
             } else {
-                draw_column(&mut out, model, "Left", true, 0, split, cap, marked)?;
-                draw_column(&mut out, other, "Right", false, split + 1, width - split - 1, cap, marked)?;
+                draw_column(&mut out, model, "Left", true, 0, split, cap, marked, self.icons)?;
+                draw_column(&mut out, other, "Right", false, split + 1, width - split - 1, cap, marked, self.icons)?;
             }
             for row in 3..h - 3 {
                 queue!(out, MoveTo(split, row), Print("│"))?;
             }
         } else {
-            draw_column(&mut out, model, side, true, 0, width, cap, marked)?;
+            draw_column(&mut out, model, side, true, 0, width, cap, marked, self.icons)?;
         }
         let safety = if writable { "Scoped" } else { "Read-only" };
         let status = format!("Clipboard: {clipboard} files | Tasks: idle | Safety: {safety} | {} entries", model.entries.len());
@@ -503,7 +518,10 @@ impl State {
                     else if self.side_focus && self.side_top+row == self.side_cursor {
                         queue!(out, SetBackgroundColor(Color::DarkGrey))?;
                     }
-                    let text = if path.is_some() { format!("  {label}") } else { label.clone() };
+                    let text = if let Some(path) = path {
+                        let (glyph, _) = super::file_icons::icon(path, true, false, self.icons);
+                        format!(" {glyph} {label}")
+                    } else { label.clone() };
                     queue!(out, Print(super::clip(&text,usize::from(l.sidebar))), ResetColor)?;
                 }
                 queue!(out, MoveTo(l.sidebar,y), Print("│"))?;
@@ -524,21 +542,20 @@ impl State {
                 let row = &tree.rows()[index];
                 (&row.entry, tree.selected() == index, Some(row.depth), row.expanded)
             } else { (&model.entries[index], model.selected == index, None, false) };
-            let (glyph,color) = super::icon(e.directory,e.symlink);
+            let (glyph,color) = super::file_icons::icon(&e.path,e.directory,e.symlink,self.icons);
             queue!(out, MoveTo(x,y))?;
             if selected { queue!(out, SetBackgroundColor(Color::DarkGrey))?; }
             queue!(out, SetForegroundColor(color))?;
             if self.view == View::Grid {
-                let icon = if e.symlink { "[LINK]" } else if e.directory { "[DIR]" } else { "[FILE]" };
                 let mark = if marked(&e.path) { "[x] " } else { "" };
-                queue!(out, Print(super::clip(&format!("{mark}{icon}"),usize::from(cells.width))))?;
+                queue!(out, Print(super::clip(&format!("{mark}{glyph}"),usize::from(cells.width))))?;
                 if y+1 < h-3 {
                     queue!(out, MoveTo(x,y+1), Print(super::clip(&e.name,usize::from(cells.width))))?;
                 }
             } else {
                 let text = if let Some(depth) = tree_depth {
-                    format!("{}{} {}", "  ".repeat(depth-1),
-                        if expanded { "−" } else if e.directory && !e.symlink { "+" } else { glyph }, e.name)
+                    format!("{}{} {glyph} {}", "  ".repeat(depth-1),
+                        if expanded { "−" } else if e.directory && !e.symlink { "+" } else { "·" }, e.name)
                 } else { row_text(e,index,model.entries.len(),self.view,glyph,marked(&e.path),cells.width) };
                 queue!(out, Print(super::clip(&text,usize::from(cells.width))))?;
             }
@@ -550,7 +567,7 @@ impl State {
             "Expanded tree: Right expand / Left collapse / Enter open / Esc back".to_owned()
         } else if searching || !model.query.is_empty() {
             format!("Search: {} | {message}", display_name(std::ffi::OsStr::new(&model.query)))
-        } else { format!("[{} / {mode}] {message}",super::edition::NAME) };
+        } else { format!("[{} / {mode}] Icons: {} | {message}",super::edition::NAME,self.icons.name()) };
         queue!(out, MoveTo(0,h-3), Print(super::clip(&status,usize::from(l.width))),
             MoveTo(0,h-2), Print(super::clip(&detail,usize::from(l.width))),
             MoveTo(0,h-1), Print(super::clip(if searching {
@@ -588,7 +605,10 @@ impl State {
             commands.insert(0,("Go to path",KeyCode::Char('g'),plain));
         }
         if category == 4 && writable { commands.push(("File actions",KeyCode::F(6),plain)); commands.push(("Recovery",KeyCode::Char('j'),plain)); }
-        if category == 5 && writable { commands.push(("Save view settings",KeyCode::Char('S'),plain)); }
+        if category == 5 {
+            commands.push(("Icon style (F11)",KeyCode::F(11),plain));
+            if writable { commands.push(("Save view settings",KeyCode::Char('S'),plain)); }
+        }
         if !cfg!(feature = "native-ops") {
             commands.retain(|(_,key,mods)| *key != KeyCode::F(3) && !(*mods == KeyModifiers::CONTROL && *key == KeyCode::Char('p')));
         }
@@ -693,6 +713,12 @@ impl State {
                     KeyCode::Char('0') if !self.dual => { self.zoom = 1; return Ok(None); }
                     _ => (),
                 }
+            }
+        }
+        if let Event::Key(k) = &event {
+            if k.code == KeyCode::F(11) && k.modifiers == KeyModifiers::NONE && k.kind == KeyEventKind::Press {
+                self.choose_icons()?;
+                return Ok(None);
             }
         }
         if self.expanded_input(&event, model, l)? { return Ok(None); }
@@ -914,6 +940,7 @@ fn draw_column(
     width: u16,
     cap: usize,
     marked: &impl Fn(&std::path::Path) -> bool,
+    icons: super::file_icons::Style,
 ) -> io::Result<()> {
     let path = display_name(model.directory.as_os_str());
     let header = format!("{label}{} | {path}", if active { " *" } else { "" });
@@ -922,7 +949,7 @@ fn draw_column(
     let (start, end) = model.viewport(cap);
     for (row, index) in (start..end).enumerate() {
         let entry = &model.entries[index];
-        let (glyph, color) = super::icon(entry.directory, entry.symlink);
+        let (glyph, color) = super::file_icons::icon(&entry.path,entry.directory,entry.symlink,icons);
         let text = format!("{} {} {}", if active && marked(&entry.path) { "[x]" } else { "   " }, glyph, entry.name);
         queue!(out, MoveTo(x, row as u16 + 4))?;
         if active && index == model.selected {

@@ -42,6 +42,12 @@ def main(binary):
         root = Path(tmp)
         (root / "file.txt").write_text("preview-content-marker\n")
         session(binary, [], root, b"preview-content-marker", [
+            (b"\x1b[23~", b"Icon style"),
+            (b"\x1b[B", b"Seti"),
+            (b"\r", b"Icons: Seti"),
+            (b"\x1b[23~", b"Icon style"),
+            (b"\x1b[F", b"ASCII"),
+            (b"\r", b"Icons: ASCII"),
             (b"\x1b[<0;99;2M", b"Grid View"),
             (b"\x1b[<80;25;5M", b"Zoom 2"),
             (b"\x1b[<81;25;5M", b"Zoom 1"),

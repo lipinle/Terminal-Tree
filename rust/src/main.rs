@@ -20,6 +20,7 @@ use terminal_tree::{display_name, scan, KindFilter, Model, Order};
 use unicode_width::UnicodeWidthChar;
 mod dashboard;
 mod edition;
+mod file_icons;
 mod help;
 mod panes_ui;
 mod places;
