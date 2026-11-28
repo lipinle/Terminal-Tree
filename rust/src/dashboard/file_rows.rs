@@ -190,17 +190,46 @@ pub(super) fn modified_utc(time: Option<std::time::SystemTime>) -> String {
         secs / 60 % 60
     )
 }
-pub(super) fn row_metadata(entry: &Entry) -> (Option<u64>, Option<std::time::SystemTime>) {
-    // Only visible rows, no symlink following, no authority from these values.
-    match std::fs::symlink_metadata(&entry.path) {
-        Ok(m) => (Some(m.len()), m.modified().ok()),
-        Err(_) => (None, None),
+type RowMetadata = (Option<u64>, Option<std::time::SystemTime>);
+
+#[derive(Default)]
+pub(super) struct MetadataCache {
+    entries: std::collections::HashMap<
+        std::path::PathBuf,
+        (std::time::Instant, RowMetadata),
+    >,
+}
+
+impl MetadataCache {
+    pub(super) fn get(&mut self, entry: &Entry) -> RowMetadata {
+        if let Some((when, metadata)) = self.entries.get(&entry.path) {
+            if when.elapsed() < std::time::Duration::from_secs(2) {
+                return *metadata;
+            }
+        }
+        // Only display metadata: never use this cache for operation authorization.
+        let metadata = match std::fs::symlink_metadata(&entry.path) {
+            Ok(m) => (Some(m.len()), m.modified().ok()),
+            Err(_) => (None, None),
+        };
+        if self.entries.len() >= 512 {
+            self.entries.clear();
+        }
+        self.entries
+            .insert(entry.path.clone(), (std::time::Instant::now(), metadata));
+        metadata
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.entries.clear();
     }
 }
+
 pub(super) struct RowPresentation {
     pub(super) view: View,
     pub(super) width: u16,
     pub(super) details: bool,
+    pub(super) metadata: RowMetadata,
 }
 
 pub(super) fn row_text(
@@ -215,6 +244,7 @@ pub(super) fn row_text(
         view,
         width,
         details,
+        metadata,
     } = presentation;
     let mark = if marked { "[x]" } else { "   " };
     let name = match view {
@@ -230,7 +260,7 @@ pub(super) fn row_text(
         _ => format!("{mark} {glyph} {}", entry.name),
     };
     if view == View::List || (view == View::Tree && width >= 48) {
-        let (size, time) = row_metadata(entry);
+        let (size, time) = metadata;
         table_columns(
             &name,
             &if entry.directory {

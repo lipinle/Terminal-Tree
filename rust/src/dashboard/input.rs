@@ -923,6 +923,7 @@ impl State {
             return Ok(None);
         }
         if code == KeyCode::F(5) {
+            self.metadata_cache.borrow_mut().clear();
             self.preview_key = None;
             self.refresh_places();
         }

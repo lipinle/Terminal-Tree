@@ -1,5 +1,5 @@
 //! Preview selection, bounded content loading and visual worker lifecycle.
-use super::file_rows::{entry_type, human_size, row_metadata};
+use super::file_rows::{entry_type, human_size};
 #[cfg(feature = "native-ops")]
 use super::markdown::markdown_preview;
 use super::State;
@@ -8,7 +8,7 @@ use terminal_tree::{display_name, Entry};
 impl State {
     pub(super) fn preview(&mut self, entry: Option<&Entry>, width: u16, rows: usize) {
         let key = entry.map(|e| {
-            let (size, modified) = row_metadata(e);
+            let (size, modified) = self.metadata_cache.borrow_mut().get(e);
             (e.path.clone(), size.unwrap_or(e.size), modified)
         });
         if key != self.preview_key {
@@ -46,6 +46,7 @@ impl State {
         #[cfg(feature = "native-ops")]
         {
             self.preview_worker.cancel();
+            self.content_worker.cancel();
             self.visual_frame = None;
             self.visual_bitmap = false;
             self.graphics_placed = false;
@@ -121,41 +122,25 @@ impl State {
             Some(e) => {
                 #[cfg(feature = "native-ops")]
                 {
-                    match terminal_tree::preview::read_lines(
-                        &e.path,
-                        if self.preview_mode == 2 {
-                            terminal_tree::preview::Mode::Hex
-                        } else {
-                            terminal_tree::preview::Mode::Auto
-                        },
-                    ) {
-                        Ok(mut lines) => {
-                            if !lines.is_empty() {
-                                lines[0] = e.name.clone();
-                            }
-                            if self.preview_mode == 0
-                                && e.path
-                                    .extension()
-                                    .and_then(|x| x.to_str())
-                                    .is_some_and(|x| {
+                    self.content_worker
+                        .request(crate::preview_worker::ContentRequest {
+                            path: e.path.clone(),
+                            name: e.name.clone(),
+                            mode: if self.preview_mode == 2 {
+                                terminal_tree::preview::Mode::Hex
+                            } else {
+                                terminal_tree::preview::Mode::Auto
+                            },
+                            markdown: self.preview_mode == 0
+                                && e.path.extension().and_then(|x| x.to_str()).is_some_and(
+                                    |x| {
                                         x.eq_ignore_ascii_case("md")
                                             || x.eq_ignore_ascii_case("markdown")
-                                    })
-                                && lines.get(1).is_some_and(|s| s != "Hex preview")
-                            {
-                                let (formatted, styles) =
-                                    markdown_preview(&lines, usize::from(width));
-                                self.preview_styles = styles;
-                                formatted
-                            } else {
-                                lines
-                            }
-                        }
-                        Err(error) => vec![
-                            e.name.clone(),
-                            display_name(std::ffi::OsStr::new(&error.to_string())),
-                        ],
-                    }
+                                    },
+                                ),
+                            width: usize::from(width),
+                        });
+                    vec![e.name.clone(), "Loading content preview...".into()]
                 }
                 #[cfg(not(feature = "native-ops"))]
                 vec![
@@ -169,6 +154,27 @@ impl State {
 
     #[cfg(feature = "native-ops")]
     pub(super) fn poll_visual_preview(&mut self) {
+        if let Some(done) = self.content_worker.poll() {
+            self.preview_styles.clear();
+            self.preview_lines = match done.result {
+                Ok(mut lines) => {
+                    if let Some(first) = lines.first_mut() {
+                        *first = done.name;
+                    }
+                    if done.markdown && lines.get(1).is_some_and(|s| s != "Hex preview") {
+                        let (formatted, styles) = markdown_preview(&lines, done.width);
+                        self.preview_styles = styles;
+                        formatted
+                    } else {
+                        lines
+                    }
+                }
+                Err(error) => vec![
+                    done.name,
+                    display_name(std::ffi::OsStr::new(&error.to_string())),
+                ],
+            };
+        }
         if let Some(done) = self.preview_worker.poll() {
             self.visual_bitmap = done.bitmap;
             self.visual_frame = None;
@@ -201,11 +207,13 @@ impl State {
     #[cfg(feature = "native-ops")]
     pub(super) fn suspend_visual_preview(&mut self) {
         // Invalidate only if loading; cached completed previews may be reused.
-        if self.preview_worker.busy() {
+        if self.preview_worker.busy() || self.content_worker.busy() {
             self.preview_key = None;
             self.preview_lines.clear();
         }
         self.preview_worker.cancel();
         let _ = self.preview_worker.poll(); // reap completed obsolete work
+        self.content_worker.cancel();
+        let _ = self.content_worker.poll();
     }
 }

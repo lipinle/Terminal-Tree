@@ -103,6 +103,90 @@ impl Queue {
     }
 }
 
+
+pub struct ContentRequest {
+    pub path: PathBuf,
+    pub name: String,
+    pub mode: terminal_tree::preview::Mode,
+    pub markdown: bool,
+    pub width: usize,
+}
+
+pub struct ContentCompleted {
+    pub name: String,
+    pub markdown: bool,
+    pub width: usize,
+    pub result: io::Result<Vec<String>>,
+}
+
+#[derive(Default)]
+pub struct ContentQueue {
+    generation: u64,
+    pending: Option<(u64, Instant, ContentRequest)>,
+    active: Option<(u64, JoinHandle<ContentCompleted>)>,
+}
+
+impl ContentQueue {
+    pub fn busy(&self) -> bool {
+        self.pending.is_some() || self.active.is_some()
+    }
+
+    pub fn cancel(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        self.pending = None;
+    }
+
+    pub fn request(&mut self, req: ContentRequest) {
+        self.cancel();
+        self.pending = Some((self.generation, Instant::now() + DEBOUNCE, req));
+    }
+
+    // Join only finished workers. A slow filesystem must not block input.
+    pub fn poll(&mut self) -> Option<ContentCompleted> {
+        if self.active.as_ref().is_some_and(|(_, h)| h.is_finished()) {
+            let (id, handle) = self.active.take()?;
+            let result = handle.join();
+            if id == self.generation {
+                return Some(result.unwrap_or_else(|_| ContentCompleted {
+                    name: "Content preview".into(),
+                    markdown: false,
+                    width: 0,
+                    result: Err(io::Error::other("content preview worker stopped unexpectedly")),
+                }));
+            }
+        }
+        if self.active.is_none()
+            && self
+                .pending
+                .as_ref()
+                .is_some_and(|(_, at, _)| Instant::now() >= *at)
+        {
+            let (id, _, req) = self.pending.take()?;
+            let name = req.name.clone();
+            match thread::Builder::new()
+                .name("tt-content-preview".into())
+                .spawn(move || ContentCompleted {
+                    result: terminal_tree::preview::read_lines(&req.path, req.mode),
+                    name: req.name,
+                    markdown: req.markdown,
+                    width: req.width,
+                })
+            {
+                Ok(handle) => self.active = Some((id, handle)),
+                Err(error) => {
+                    return Some(ContentCompleted {
+                        name,
+                        markdown: false,
+                        width: 0,
+                        result: Err(error),
+                    })
+                }
+            }
+        }
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,6 +212,24 @@ mod tests {
         q.cancel();
         assert!(!q.busy());
     }
+    #[test]
+    fn obsolete_content_completion_cannot_publish() {
+        let mut q = ContentQueue::default();
+        let handle = thread::spawn(|| ContentCompleted {
+            name: "obsolete".into(),
+            markdown: false,
+            width: 0,
+            result: Ok(vec!["old content".into()]),
+        });
+        while !handle.is_finished() {
+            thread::yield_now();
+        }
+        q.active = Some((q.generation, handle));
+        q.cancel();
+        assert!(q.poll().is_none());
+        assert!(!q.busy());
+    }
+
     #[test]
     fn obsolete_completion_cannot_publish() {
         let mut q = Queue::default();

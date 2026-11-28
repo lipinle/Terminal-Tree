@@ -1,6 +1,6 @@
 //! Dashboard rendering and terminal status presentation.
 use super::file_rows::{
-    breadcrumb, entry_type, human_size, list_heading, modified_utc, pad_cell, row_metadata,
+    breadcrumb, entry_type, human_size, list_heading, modified_utc, pad_cell,
     row_text, table_columns, RowPresentation,
 };
 use super::geometry::{dual_split, Layout};
@@ -115,7 +115,7 @@ impl State {
             return "Bash running";
         }
         #[cfg(feature = "native-ops")]
-        if self.preview_worker.busy() {
+        if self.preview_worker.busy() || self.content_worker.busy() {
             return "Preview loading";
         }
         "idle"
@@ -811,7 +811,7 @@ impl State {
                         e.name
                     );
                     if cells.width >= 48 {
-                        let (size, time) = row_metadata(e);
+                        let (size, time) = self.metadata_cache.borrow_mut().get(e);
                         table_columns(
                             &name,
                             &if e.directory {
@@ -838,6 +838,11 @@ impl State {
                             view: self.view,
                             width: cells.width,
                             details: self.prefs.list_details,
+                            metadata: if self.view == View::List || cells.width >= 48 {
+                                self.metadata_cache.borrow_mut().get(e)
+                            } else {
+                                (None, None)
+                            },
                         },
                     )
                 };

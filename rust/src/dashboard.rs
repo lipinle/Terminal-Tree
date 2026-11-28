@@ -44,6 +44,7 @@ pub struct State {
     preview_enabled: bool,
     frame_cache: super::dashboard_frame::FrameCache,
     preview_key: Option<PreviewKey>,
+    metadata_cache: std::cell::RefCell<file_rows::MetadataCache>,
     preview_lines: Vec<String>,
     preview_scroll: usize,
     preview_styles: Vec<PreviewStyle>,
@@ -52,6 +53,8 @@ pub struct State {
     visual_frame: Option<terminal_tree::visual_preview::Frame>,
     #[cfg(feature = "native-ops")]
     preview_worker: super::preview_worker::Queue,
+    #[cfg(feature = "native-ops")]
+    content_worker: super::preview_worker::ContentQueue,
     #[cfg(feature = "native-ops")]
     visual_bitmap: bool,
     #[cfg(feature = "native-ops")]
@@ -103,6 +106,7 @@ impl State {
             preview_enabled: true,
             frame_cache: Default::default(),
             preview_key: None,
+            metadata_cache: Default::default(),
             preview_lines: Vec::new(),
             preview_scroll: 0,
             preview_styles: Vec::new(),
@@ -111,6 +115,8 @@ impl State {
             visual_frame: None,
             #[cfg(feature = "native-ops")]
             preview_worker: Default::default(),
+            #[cfg(feature = "native-ops")]
+            content_worker: Default::default(),
             #[cfg(feature = "native-ops")]
             visual_bitmap: false,
             #[cfg(feature = "native-ops")]
@@ -157,6 +163,7 @@ impl State {
     pub fn needs_poll(&self) -> bool {
         self.terminal_panel.running()
             || self.preview_worker.busy()
+            || self.content_worker.busy()
             || (super::x11_overlay::requested() && self.graphics_placed)
     }
     #[cfg(feature = "native-ops")]
