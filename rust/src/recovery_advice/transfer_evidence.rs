@@ -56,6 +56,75 @@ pub fn inspect(transaction: &str, records: &[Record<'_>]) -> Evidence {
     })
 }
 
+// Fixed, bounded ASCII evidence records for read-only inspection. This is a
+// proposed v1 encoding, not a persisted journal or a durability guarantee.
+const MAX_ENCODED_BYTES: usize = 1024;
+
+fn phase_name(phase: Phase) -> &'static str {
+    match phase {
+        Phase::Intent => "intent",
+        Phase::StageVerified => "stage-verified",
+        Phase::DestinationPublished => "destination-published",
+        Phase::SourceRetained => "source-retained",
+        Phase::RetentionVerified => "retention-verified",
+    }
+}
+
+/// Canonically encode an already structurally valid sequence. No I/O.
+pub fn encode(transaction: &str, records: &[Record<'_>]) -> Option<Vec<u8>> {
+    if inspect(transaction, records) == Evidence::Malformed {
+        return None;
+    }
+    let mut text = String::new();
+    for record in records {
+        use std::fmt::Write;
+        writeln!(
+            text,
+            "1\t{}\t{}\t{}",
+            record.transaction,
+            record.sequence,
+            phase_name(record.phase)
+        )
+        .ok()?;
+    }
+    (text.len() <= MAX_ENCODED_BYTES).then(|| text.into_bytes())
+}
+
+/// Inspect a complete sequence of canonical newline-terminated records.
+/// Reject torn final records, extra fields, unknown versions, and excess data.
+/// A structurally valid prefix is not proof of actual filesystem state.
+pub fn inspect_encoded(transaction: &str, bytes: &[u8]) -> Evidence {
+    if !id_valid(transaction) || bytes.len() > MAX_ENCODED_BYTES {
+        return Evidence::Malformed;
+    }
+    if bytes.is_empty() {
+        return Evidence::Missing;
+    }
+    if !bytes.ends_with(b"\n") {
+        return Evidence::Malformed;
+    }
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return Evidence::Malformed;
+    };
+    let mut records = Vec::new();
+    for (index, line) in text.split_terminator('\n').enumerate() {
+        let Some(&phase) = ORDER.get(index) else {
+            return Evidence::Malformed;
+        };
+        let expected = format!("1\t{transaction}\t{index}\t{}", phase_name(phase));
+        if line != expected {
+            return Evidence::Malformed;
+        }
+        records.push(Record {
+            version: 1,
+            transaction,
+            sequence: index as u32,
+            phase,
+        });
+    }
+    inspect(transaction, &records)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -85,6 +154,41 @@ mod tests {
                 Evidence::RecordedThrough(phase)
             );
         }
+    }
+
+    #[test]
+    fn canonical_encoding_round_trips_every_prefix() {
+        let all = records();
+        for count in 0..=all.len() {
+            let encoded = encode(ID, &all[..count]).unwrap();
+            assert_eq!(inspect_encoded(ID, &encoded), inspect(ID, &all[..count]));
+            if count != 0 {
+                assert_eq!(
+                    inspect_encoded(ID, &encoded[..encoded.len() - 1]),
+                    Evidence::Malformed
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn encoded_evidence_rejects_noncanonical_and_excess_records() {
+        let all = records();
+        let encoded = encode(ID, &all).unwrap();
+        let mut extra = encoded.clone();
+        extra.extend_from_slice(b"\n");
+        assert_eq!(inspect_encoded(ID, &extra), Evidence::Malformed);
+        for bad in [
+            format!("2\t{ID}\t0\tintent\n"),
+            format!("1\t{ID}\t00\tintent\n"),
+            format!("1\t{ID}\t0\tintent\textra\n"),
+            format!("1\t{ID}\t1\tstage-verified\n"),
+        ] {
+            assert_eq!(inspect_encoded(ID, bad.as_bytes()), Evidence::Malformed);
+        }
+        assert_eq!(inspect_encoded(ID, &[b'x'; 1025]), Evidence::Malformed);
+        assert_eq!(inspect_encoded(ID, &[0xff, b'\n']), Evidence::Malformed);
+        assert!(encode(ID, &all[1..]).is_none());
     }
 
     #[test]

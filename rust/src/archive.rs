@@ -246,6 +246,41 @@ pub fn layout_preview(reader: impl Read) -> io::Result<LayoutPreview> {
     })
 }
 
+/// Check a conservative portable naming profile, including implicit parents.
+/// This rejects ASCII case aliases and common Windows reserved basenames.
+/// No destination filesystem is consulted; this is not extraction authority.
+pub fn portable_layout_preview(reader: impl Read) -> io::Result<LayoutPreview> {
+    let layout = layout_preview(reader)?;
+    let mut folded = BTreeSet::new();
+    for name in layout
+        .directories
+        .iter()
+        .map(String::as_str)
+        .chain(layout.files.iter().map(|member| member.name.as_str()))
+    {
+        if name.split('/').any(reserved_component) {
+            return Err(invalid("USTAR layout contains a reserved basename"));
+        }
+        if !folded.insert(name.to_ascii_lowercase()) {
+            return Err(invalid("USTAR layout contains a case-folded collision"));
+        }
+    }
+    Ok(layout)
+}
+
+fn reserved_component(component: &str) -> bool {
+    let stem = component
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches(' ')
+        .to_ascii_uppercase();
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.len() == 4
+            && (stem.starts_with("COM") || stem.starts_with("LPT"))
+            && matches!(stem.as_bytes()[3], b'1'..=b'9'))
+}
+
 #[cfg(test)]
 mod layout_tests {
     use super::*;
@@ -275,6 +310,30 @@ mod layout_tests {
         assert_eq!(preview.files.len(), 2);
         assert_eq!(preview.files[0].name, "a/b/one");
         assert_eq!(preview.payload_bytes, 5);
+    }
+
+    #[test]
+    fn portable_layout_refuses_case_aliases_and_reserved_names() {
+        for names in [
+            ["A/one", "a/two"],
+            ["file", "FILE"],
+            ["folder/CON.txt", "safe"],
+            ["LPT1", "safe"],
+            ["aux .txt", "safe"],
+        ] {
+            let mut bytes = Vec::new();
+            for name in names {
+                append(&mut bytes, name, b"x");
+            }
+            bytes.resize(bytes.len() + 2 * BLOCK, 0);
+            assert!(layout_preview(bytes.as_slice()).is_ok());
+            assert!(portable_layout_preview(bytes.as_slice()).is_err());
+        }
+        let mut bytes = Vec::new();
+        append(&mut bytes, "folder/COM10.txt", b"x");
+        append(&mut bytes, "folder/other", b"y");
+        bytes.resize(bytes.len() + 2 * BLOCK, 0);
+        assert!(portable_layout_preview(bytes.as_slice()).is_ok());
     }
 
     #[test]
