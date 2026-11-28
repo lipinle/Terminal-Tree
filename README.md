@@ -46,6 +46,8 @@ For writes, explicitly start `terminal-tree --app-workspace ROOT JOURNAL DATA` o
 
 The application supports Ctrl+C/X/V (copy/cut/paste), Ctrl+A (mark all), Ctrl+Z (eligible undo), Ctrl+Q (exit), Alt+Left/Right (history), Backspace (parent), F12 (clipboard details) and a right-click context menu. Ctrl+C still cancels prompts and workers and exits the read-only view. In scoped application mode only, creating a new item, renaming one item and copying one item use a complete path review followed by Enter instead of typing yes. Move, Trash, batch and recovery confirmations remain unchanged, as do the underlying identity and no-overwrite checks. Legacy CLI views retain their previous behavior.
 
+Press F8 in the application to switch between the three-column view and two independent file panes. Each pane retains its directory, selection, filter and navigation history. Tab changes the active pane (which is refreshed before use); a click on the inactive pane focuses it first. Copy or cut in one pane, switch to the destination, then paste with the shared clipboard. Scoped writes use the same existing review and operation engine. Marks are cleared when changing panes; the clipboard survives. Narrow terminals show the active pane only. F9 returns to the preview layout; Shift+F8 opens the existing hex preview. Read-only mode never grants write authorization.
+
 ## Navigation and search
 
 Use the installed executable (examples below assume it is on your PATH), or substitute its full path.

@@ -66,6 +66,23 @@ def main(binary):
                 ])
         assert (work / "source").read_text() == "preserve me"
         assert (work / "new-folder").is_dir()
+        session(binary, ["--app-workspace", str(work), str(journal), str(data)],
+                root, b"Clipboard: 0 files", [
+                    (b"\x1b[19~", b"Dual Pane | Active: Left"),
+                    (b"\t", b"Dual Pane | Active: Right"),
+                    (b"\r", b"Right * | " + os.fsencode(work / "new-folder")),
+                    (b"\t", b"Dual Pane | Active: Left"),
+                    (b"\x1b[F", b"Dual Pane | Active: Left"),
+                    (b"\x03", b"Clipboard: 1 files"),
+                    (b"\t", b"Dual Pane | Active: Right"),
+                    (b"\x16", b"Review paths | Enter confirm"),
+                    (b"\r", b"Transfer completed"),
+                    (b"\x1b[19~", b"Files *"),
+                    (b"\x1b[19~", b"Dual Pane | Active: Right"),
+                    (b"\t", b"Left * | " + os.fsencode(work)),
+                ])
+        assert (work / "new-folder" / "source").read_text() == "preserve me"
+        assert (work / "source").read_text() == "preserve me"
         assert not list(journal.glob("*.pending.json"))
     print("TT_APP dashboard, preview, menus, compact layout and shared clipboard passed")
 

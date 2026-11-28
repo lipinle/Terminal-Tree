@@ -454,17 +454,21 @@ fn browse_with_layout(
         let mut event = event::read()?;
         if let Some(ui) = &mut dashboard {
             let previous = model.directory.clone();
-            match ui.input(event, &mut model, searching, writable) {
-                Ok(Some(next)) => event = next,
-                Ok(None) => {
-                    #[cfg(feature = "native-ops")]
-                    if previous != model.directory {
-                        if let Some(w) = &mut workspace { w.observe(&model); }
-                    }
-                    #[cfg(not(feature = "native-ops"))]
-                    let _ = previous;
-                    continue;
+            let input = ui.input(event, &mut model, searching, writable);
+            let switched = ui.take_pane_switch();
+            #[cfg(feature = "native-ops")]
+            if let Some(w) = &mut workspace {
+                if switched {
+                    w.observe_pane(&model);
+                } else if previous != model.directory {
+                    w.observe(&model);
                 }
+            }
+            #[cfg(not(feature = "native-ops"))]
+            let _ = (previous, switched);
+            match input {
+                Ok(Some(next)) => event = next,
+                Ok(None) => continue,
                 Err(error) => {
                     message = display_name(std::ffi::OsStr::new(&error.to_string()));
                     continue;
