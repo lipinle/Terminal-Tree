@@ -1,6 +1,6 @@
 //! Persistent Linux PTY, opt-in. Bounded partial virtual screen (TERM=dumb).
 //! Child output is display data, never forwarded as host terminal controls.
-use crossterm::event::{KeyCode,KeyEvent,KeyEventKind,KeyModifiers};
+use crossterm::{event::{KeyCode,KeyEvent,KeyEventKind,KeyModifiers},style::Color};
 use rustix::{fs::{fcntl_getfl,fcntl_setfl,OFlags},pty::{OpenptFlags,openpt,grantpt,unlockpt,ioctl_tiocgptpeer},termios::{Winsize,tcsetwinsize}};
 use std::{fs::File,io::{self,Read,Write},path::{Path,PathBuf},process::{Child,Command,Stdio}};
 const INPUT_LIMIT:usize=8192;
@@ -78,16 +78,25 @@ impl Shell {
                 KeyCode::Char(c) if !c.is_control()=>{let mut b=[0;4];bytes.extend_from_slice(c.encode_utf8(&mut b).as_bytes());}
                 KeyCode::Enter=>bytes.push(b'\r'),KeyCode::Backspace=>bytes.push(127),
                 KeyCode::Tab=>bytes.push(b'\t'),KeyCode::Esc=>bytes.push(27),
-                KeyCode::Up=>bytes.extend_from_slice(b"\x1b[A"),KeyCode::Down=>bytes.extend_from_slice(b"\x1b[B"),
-                KeyCode::Right=>bytes.extend_from_slice(b"\x1b[C"),KeyCode::Left=>bytes.extend_from_slice(b"\x1b[D"),
+                KeyCode::Up|KeyCode::Down|KeyCode::Right|KeyCode::Left=>{
+                    bytes.extend_from_slice(if self.screen.application_cursor(){b"\x1bO"}else{b"\x1b["});
+                    bytes.push(match k.code{KeyCode::Up=>b'A',KeyCode::Down=>b'B',KeyCode::Right=>b'C',_=>b'D'});
+                }
                 KeyCode::Home=>bytes.extend_from_slice(b"\x1b[H"),KeyCode::End=>bytes.extend_from_slice(b"\x1b[F"),
-                KeyCode::Delete=>bytes.extend_from_slice(b"\x1b[3~"),_=>(),
+                KeyCode::Delete=>bytes.extend_from_slice(b"\x1b[3~"),
+                KeyCode::Insert=>bytes.extend_from_slice(b"\x1b[2~"),
+                KeyCode::PageUp=>bytes.extend_from_slice(b"\x1b[5~"),KeyCode::PageDown=>bytes.extend_from_slice(b"\x1b[6~"),
+                KeyCode::F(n @ 1..=4)=>bytes.extend_from_slice(&[27,b'O',b'P'+n-1]),
+                KeyCode::F(n @ 5..=12)=>{let code=[15,17,18,19,20,21,23,24][usize::from(n-5)];bytes.extend_from_slice(format!("\x1b[{code}~").as_bytes());},
+                _=>(),
             }
         }
         if self.input.len()+bytes.len()>INPUT_LIMIT{return Err(io::Error::other("PTY input queue full"));}
         self.input.extend(bytes);
         Ok(())
     }
+    pub fn alternate(&self)->bool{self.screen.alternate()}
+    pub fn display_lines(&self,cursor:Option<(Color,Color)>)->Vec<super::shell_text::Line>{self.screen.display_lines(cursor)}
     pub fn styled_lines(&self)->Vec<super::shell_text::Line>{self.screen.lines()}
     #[cfg(test)]
     pub fn lines(&self)->Vec<String>{self.styled_lines().iter().map(|l|l.text()).collect()}
@@ -114,6 +123,19 @@ mod tests{
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         panic!("PTY did not show expected output: {:?}",shell.lines());
+    }
+    #[test]
+    fn alternate_screen_from_real_pty(){
+        let mut s=Shell::start(Path::new("/tmp"),80,12).unwrap();
+        // Real PTY child emits private modes and holds the alternate screen
+        // open until the next input line. No host escape sequence is forwarded.
+        send(&mut s,"printf 'before-alt\\n'; printf '\\033[?1049h\\033[Halt-marker'; read -r answer; printf '\\033[?1049l\\nafter-alt\\n'\n");
+        wait(&mut s,"alt-marker");
+        assert!(s.alternate());
+        assert!(!s.lines().iter().any(|l|l=="before-alt"));
+        send(&mut s,"\n");wait(&mut s,"after-alt");
+        assert!(!s.alternate());
+        assert!(s.lines().iter().any(|l|l=="before-alt"));
     }
     #[test]
     fn persistent_shell_cwd_env_and_tty(){

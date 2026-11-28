@@ -167,7 +167,7 @@ impl Panel {
     }
     pub fn input(&mut self,key:KeyEvent,directory:&Path)->io::Result<()> {
         if !matches!(key.kind,KeyEventKind::Press|KeyEventKind::Repeat) {return Ok(());}
-        if let Some(shell)=&mut self.shell{return shell.key(key);}
+        if let Some(shell)=&mut self.shell{self.scroll=0;return shell.key(key);}
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
                 KeyCode::Char('c')=>{
@@ -222,6 +222,7 @@ impl Panel {
         Ok(())
     }
     pub fn scroll(&mut self,up:bool){
+        if self.shell.as_ref().is_some_and(|s|s.alternate()){self.scroll=0;return;}
         let len=self.shell.as_ref().map_or(self.output.len(),|s|s.styled_lines().len());
         if up {self.scroll=(self.scroll+1).min(len.saturating_sub(1));}
         else {self.scroll=self.scroll.saturating_sub(1);}
@@ -235,7 +236,9 @@ impl Panel {
         let cwd=if let Some(shell)=&self.shell {format!("Started in: {} | Alt+T focus | Alt+S close",terminal_tree::display_name(shell.initial_directory().as_os_str()))}else{format!("cwd: {}",terminal_tree::display_name(directory.as_os_str()))};
         queue!(out,MoveTo(left,top+1),Print(super::clip(&cwd,width)))?;
         let live;
-        let lines=if let Some(shell)=&self.shell{live=shell.styled_lines();&live}else if let Some(job)=&self.job {
+        let alternate=self.shell.as_ref().is_some_and(|s|s.alternate());
+        let scroll=if alternate{0}else{self.scroll};
+        let lines=if let Some(shell)=&self.shell{live=shell.display_lines((self.focused&&scroll==0).then_some((crossterm::style::Color::Black,prefs.accent)));&live}else if let Some(job)=&self.job {
             let mut current=self.output.clone();
             current.push(Line::plain(format!("$ {}",visible(job.command.as_bytes()))));
             current.extend(shell_text::parse(&job.bytes));
@@ -243,13 +246,14 @@ impl Panel {
             &live
         }else{&self.output};
         let capacity=usize::from(rows.saturating_sub(3));
-        let end=lines.len().saturating_sub(self.scroll.min(lines.len()));
+        let end=lines.len().saturating_sub(scroll.min(lines.len()));
         let start=end.saturating_sub(capacity);
         for (row,line) in lines[start..end].iter().enumerate(){
             queue!(out,MoveTo(left,top+2+row as u16))?;
             line.draw(out,width,prefs.foreground,prefs.background)?;
         }
-        let prompt=if self.interactive(){"Interactive Bash (TERM=dumb) | Alt+T file manager | Alt+S close".into()}
+        let prompt=if alternate{"Alternate screen | Alt+T file manager | Alt+S close".into()}
+        else if self.interactive(){"Interactive Bash (TERM=dumb) | Alt+T file manager | Alt+S close".into()}
         else if self.running(){"Running Bash... Ctrl+C to stop".into()}
         else if self.focused{self.prompt_text(width)}
         else {"$ (click or Alt+T to type; Alt+S interactive; Alt+H hide)".into()};

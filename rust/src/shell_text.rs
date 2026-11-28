@@ -75,16 +75,21 @@ struct Cell {text:String,style:Style,wide:u8} // 0 blank, 1 normal, 2 lead, 3 co
 #[derive(Default)]
 enum Input {#[default] Ground,Escape,Csi(Vec<u8>),DiscardCsi,ControlString(bool),Utf8(Vec<u8>,usize)}
 pub fn bounds(cols:u16,rows:u16)->(u16,u16){(cols.clamp(1,MAX_COLS),rows.clamp(1,MAX_ROWS))}
+struct Primary {
+    grid:Vec<Vec<Cell>>,x:usize,y:usize,saved:(usize,usize),style:Style,
+    cursor_visible:bool,
+}
 pub struct Screen{
     cols:usize,rows:usize,grid:Vec<Vec<Cell>>,
     x:usize,y:usize,saved:(usize,usize),style:Style,input:Input,
     history:VecDeque<Line>,history_bytes:usize,
+    primary:Option<Primary>,cursor_visible:bool,application_cursor:bool,
 }
 impl Screen{
     pub fn new(cols:u16,rows:u16)->Self{
         let (cols,rows)=bounds(cols,rows);
         let (cols,rows)=(usize::from(cols),usize::from(rows));
-        Self{cols,rows,grid:vec![vec![Cell::default();cols];rows],x:0,y:0,saved:(0,0),style:Style::default(),input:Input::Ground,history:VecDeque::new(),history_bytes:0}
+        Self{cols,rows,grid:vec![vec![Cell::default();cols];rows],x:0,y:0,saved:(0,0),style:Style::default(),input:Input::Ground,history:VecDeque::new(),history_bytes:0,primary:None,cursor_visible:true,application_cursor:false}
     }
     fn line(cells:&[Cell])->Line{
         let mut line=Line::default();
@@ -107,7 +112,7 @@ impl Screen{
         self.x=0;
         if self.y+1<self.rows{self.y+=1;}
         else{
-            let row=self.grid.remove(0);self.remember(row);
+            let row=self.grid.remove(0);if self.primary.is_none(){self.remember(row);}
             self.grid.push(vec![Cell::default();self.cols]);
         }
     }
@@ -158,7 +163,37 @@ impl Screen{
         self.x+=width;
     }
     fn cursor(&mut self,x:usize,y:usize){self.x=x.min(self.cols-1);self.y=y.min(self.rows-1);}
+    pub fn alternate(&self)->bool{self.primary.is_some()}
+    pub fn application_cursor(&self)->bool{self.application_cursor}
+    fn switch_screen(&mut self,on:bool){
+        if on&&self.primary.is_none(){
+            let grid=std::mem::replace(&mut self.grid,vec![vec![Cell::default();self.cols];self.rows]);
+            self.primary=Some(Primary{grid,x:self.x,y:self.y,saved:self.saved,style:self.style,cursor_visible:self.cursor_visible});
+            self.x=0;self.y=0;self.saved=(0,0);self.style=Style::default();
+        }else if !on{
+            if let Some(p)=self.primary.take(){
+                self.grid=p.grid;self.saved=p.saved;self.style=p.style;self.cursor_visible=p.cursor_visible;
+                self.cursor(p.x,p.y);
+            }
+        }
+    }
     fn csi(&mut self,params:&[u8],cmd:u8){
+        if matches!(cmd,b'h'|b'l')&&params.first()==Some(&b'?'){
+            if let Ok(s)=std::str::from_utf8(&params[1..]){
+                for mode in s.split(';'){
+                    let on=cmd==b'h';
+                    match mode{
+                        "1"=>self.application_cursor=on,
+                        "25"=>self.cursor_visible=on,
+                        // Treat all three alternate-buffer modes as a fresh
+                        // isolated buffer; never mix alternate output into history.
+                        "47"|"1047"|"1049"=>self.switch_screen(on),
+                        _=>(),
+                    }
+                }
+            }
+            return;
+        }
         if cmd==b'm'{let _=apply(&mut self.style,params);return;}
         let Ok(s)=std::str::from_utf8(params)else{return;};
         let Some(n)=s.split(';').map(|p|if p.is_empty(){Some(0)}else{p.parse::<u16>().ok().map(usize::from)}).collect::<Option<Vec<_>>>()else{return;};
@@ -232,7 +267,7 @@ impl Screen{
     pub fn resize(&mut self,cols:u16,rows:u16){
         let (cols,rows)=bounds(cols,rows);let (cols,rows)=(usize::from(cols),usize::from(rows));
         while self.grid.len()>rows{
-            if self.y>=rows{let row=self.grid.remove(0);self.remember(row);self.y-=1;}
+            if self.y>=rows{let row=self.grid.remove(0);if self.primary.is_none(){self.remember(row);}self.y-=1;}
             else{self.grid.pop();}
         }
         for row in &mut self.grid{
@@ -240,12 +275,28 @@ impl Screen{
             if row.last().is_some_and(|c|c.wide==2){row[cols-1]=Cell::default();}
         }
         self.grid.resize_with(rows,||vec![Cell::default();cols]);
+        if let Some(p)=&mut self.primary{
+            while p.grid.len()>rows{if p.y>=rows{p.grid.remove(0);p.y-=1;}else{p.grid.pop();}}
+            for row in &mut p.grid{row.resize(cols,Cell::default());if row.last().is_some_and(|c|c.wide==2){row[cols-1]=Cell::default();}}
+            p.grid.resize_with(rows,||vec![Cell::default();cols]);
+            p.x=p.x.min(cols-1);p.y=p.y.min(rows-1);
+        }
         self.cols=cols;self.rows=rows;self.cursor(self.x,self.y);
     }
-    pub fn lines(&self)->Vec<Line>{
-        let mut lines:Vec<_>=self.history.iter().cloned().collect();
-        let last=self.grid.iter().rposition(|row|row.iter().any(|c|c.wide!=0||c.style.bg.is_some())).unwrap_or(0).max(self.y);
-        lines.extend(self.grid[..=last].iter().map(|row|Self::line(row)));
+    pub fn lines(&self)->Vec<Line>{self.display_lines(None)}
+    pub fn display_lines(&self,cursor:Option<(Color,Color)>)->Vec<Line>{
+        let mut lines:Vec<_>=if self.alternate(){Vec::new()}else{self.history.iter().cloned().collect()};
+        let last=if self.alternate(){self.rows-1}else{self.grid.iter().rposition(|row|row.iter().any(|c|c.wide!=0||c.style.bg.is_some())).unwrap_or(0).max(self.y)};
+        for (y,row) in self.grid[..=last].iter().enumerate(){
+            if let Some((fg,bg))=cursor.filter(|_|self.cursor_visible&&self.y==y){
+                let mut row=row.clone();
+                let mut x=self.x.min(self.cols-1);
+                if row[x].wide==3&&x>0{x-=1;}
+                row[x].style.fg=Some(fg);row[x].style.bg=Some(bg);
+                if row[x].wide==0{row[x].wide=1;row[x].text=" ".into();}
+                lines.push(Self::line(&row));
+            }else{lines.push(Self::line(row));}
+        }
         lines
     }
 }
@@ -294,6 +345,23 @@ pub fn parse(bytes:&[u8])->Vec<Line>{
         for _ in 0..800{s.feed(b"\nline");}
         assert!(s.history.len()<=HISTORY_ROWS);
         assert!(s.history_bytes<=HISTORY_BYTES);
+    }
+    #[test]fn alternate_isolated_and_cursor_local(){
+        let mut s=Screen::new(16,4);
+        s.feed(b"primary\x1b[?1049h\x1b[?1h\x1b[?25lALT");
+        assert!(s.alternate()&&s.application_cursor()&&!s.cursor_visible);
+        assert_eq!(s.lines().len(),4);
+        assert_eq!(s.lines()[0].text(),"ALT");
+        assert!(s.display_lines(Some((Color::Black,Color::White)))[0].spans.iter().all(|(st,_)|st.bg.is_none()));
+        s.feed(b"\n\n\n\nnew");
+        assert!(s.history.is_empty());
+        s.resize(12,3);
+        s.feed(b"\x1b[?1049l\x1b[?1l");
+        assert!(!s.alternate()&&!s.application_cursor()&&s.cursor_visible);
+        assert_eq!(s.lines()[0].text(),"primary");
+        let line=s.display_lines(Some((Color::Black,Color::White)));
+        assert!(line[0].spans.iter().any(|(st,_)|st.bg==Some(Color::White)));
+        assert_eq!(s.lines()[0].text(),"primary");
     }
     #[test]fn malformed_and_wide_text_are_bounded(){
         let lines=parse("ไทย\x1b[32m日\x1b[0mZ".as_bytes());let mut out=Vec::new();
